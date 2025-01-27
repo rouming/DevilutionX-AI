@@ -1746,6 +1746,8 @@ bool RoundWalk(Monster &monster, Direction direction, int8_t *dir)
 
 bool AiPlanPath(Monster &monster)
 {
+	if (*GetOptions().Gameplay.blindMonsters)
+		return false;
 	if (monster.type().type != MT_GOLEM) {
 		if (monster.activeForTicks == 0)
 			return false;
@@ -4114,8 +4116,10 @@ void ProcessMonsters()
 			}
 		}
 		while (true) {
-			if ((monster.flags & MFLAG_SEARCH) == 0 || !AiPlanPath(monster)) {
-				AiProc[static_cast<int8_t>(monster.ai)](monster);
+			if (!*GetOptions().Gameplay.blindMonsters) {
+				if ((monster.flags & MFLAG_SEARCH) == 0 || !AiPlanPath(monster)) {
+					AiProc[static_cast<int8_t>(monster.ai)](monster);
+				}
 			}
 
 			if (!UpdateModeStance(monster))
