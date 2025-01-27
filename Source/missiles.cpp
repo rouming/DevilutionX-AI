@@ -29,6 +29,7 @@
 #include "levels/trigs.h"
 #include "lighting.h"
 #include "monster.h"
+#include "options.h"
 #include "spells.h"
 #include "utils/is_of.hpp"
 #include "utils/str_cat.hpp"
@@ -3345,7 +3346,7 @@ void ProcessFlashBottom(Missile &missile)
 		missile._miDelFlag = true;
 		if (missile._micaster == TARGET_MONSTERS) {
 			if (!missile.IsTrap())
-				Players[missile._misource]._pInvincible = false;
+				Players[missile._misource]._pInvincible = *GetOptions().Gameplay.invinciblePlayer;
 		}
 	}
 	PutMissile(missile);
@@ -3371,7 +3372,7 @@ void ProcessFlashTop(Missile &missile)
 		missile._miDelFlag = true;
 		if (missile._micaster == TARGET_MONSTERS) {
 			if (!missile.IsTrap())
-				Players[missile._misource]._pInvincible = false;
+				Players[missile._misource]._pInvincible = *GetOptions().Gameplay.invinciblePlayer;
 		}
 	}
 	PutMissile(missile);

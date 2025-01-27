@@ -674,6 +674,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean harmlessBarrels;
 	/** @brief Disable auto-walk when pressing the secondary action */
 	OptionEntryBoolean noAutowalkOnSecondaryAction;
+	/** @brief Enable invincible player mode */
+	OptionEntryBoolean invinciblePlayer;
 };
 
 struct ControllerOptions : OptionCategoryBase {
