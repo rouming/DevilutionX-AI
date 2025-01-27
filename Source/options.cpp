@@ -916,6 +916,7 @@ GameplayOptions::GameplayOptions()
     , gameLevel("Load player into the level", OptionEntryFlags::Invisible, "", "", 0)
     , noMonsters("Disable all monsters", OptionEntryFlags::Invisible, "", "", false)
     , skipAnimation("Skip animation", OptionEntryFlags::Invisible, "", "", 0)
+    , noMonstersAutoPursuing("Disable monsters auto-pursuing", OptionEntryFlags::Invisible, "", "", 0)
 {
 }
 
@@ -967,6 +968,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&gameLevel,
 		&noMonsters,
 		&skipAnimation,
+		&noMonstersAutoPursuing,
 	};
 }
 
