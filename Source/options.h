@@ -670,6 +670,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean stepMode;
 	/** @brief Automap active on start */
 	OptionEntryBoolean automapActive;
+	/** @brief Disable explosive barrels, urns, or pods */
+	OptionEntryBoolean harmlessBarrels;
 };
 
 struct ControllerOptions : OptionCategoryBase {

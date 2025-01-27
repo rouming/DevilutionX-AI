@@ -928,6 +928,7 @@ GameplayOptions::GameplayOptions()
     , gameTicksPerStep("Game ticks per step", OptionEntryFlags::Invisible, "", "", 0)
     , stepMode("Run the game loop in step mode", OptionEntryFlags::Invisible, "", "", false)
     , automapActive("Automap active on start", OptionEntryFlags::Invisible, "", "", false)
+    , harmlessBarrels("Disable explosive barrels, urns, or pods", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -983,6 +984,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&gameTicksPerStep,
 		&stepMode,
 		&automapActive,
+		&harmlessBarrels,
 	};
 }
 

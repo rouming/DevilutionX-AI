@@ -396,14 +396,15 @@ void AddBookLever(_object_id type, WorldTileRectangle affectedArea, _speech_id m
 
 void InitRndBarrels()
 {
+	bool harmlessBarrels = *GetOptions().Gameplay.harmlessBarrels;
 	_object_id barrelId = OBJ_BARREL;
-	_object_id explosiveBarrelId = OBJ_BARRELEX;
+	_object_id explosiveBarrelId = harmlessBarrels ? OBJ_BARREL : OBJ_BARRELEX;
 	if (leveltype == DTYPE_NEST) {
 		barrelId = OBJ_POD;
-		explosiveBarrelId = OBJ_PODEX;
+		explosiveBarrelId = harmlessBarrels ? OBJ_POD : OBJ_PODEX;
 	} else if (leveltype == DTYPE_CRYPT) {
 		barrelId = OBJ_URN;
-		explosiveBarrelId = OBJ_URNEX;
+		explosiveBarrelId = harmlessBarrels ? OBJ_URN : OBJ_URNEX;
 	}
 
 	/** number of groups of barrels to generate */

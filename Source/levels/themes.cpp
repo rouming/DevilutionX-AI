@@ -379,6 +379,7 @@ void PlaceThemeMonsts(int t, int f)
  */
 void Theme_Barrel(int t)
 {
+	bool harmlessBarrels = *GetOptions().Gameplay.harmlessBarrels;
 	int barrnd[4] = { 2, 6, 4, 8 };
 	int monstrnd[4] = { 5, 7, 3, 9 };
 
@@ -386,12 +387,14 @@ void Theme_Barrel(int t)
 		for (int xp = 0; xp < MAXDUNX; xp++) {
 			if (dTransVal[xp][yp] == themes[t].ttval && IsTileNotSolid({ xp, yp })) {
 				if (FlipCoin(barrnd[leveltype - 1])) {
-					_object_id r = FlipCoin(barrnd[leveltype - 1]) ? OBJ_BARREL : OBJ_BARRELEX;
+					_object_id r = FlipCoin(barrnd[leveltype - 1]) ?
+						OBJ_BARREL : (harmlessBarrels ? OBJ_BARREL : OBJ_BARRELEX);
 					AddObject(r, { xp, yp });
 				}
 			}
 		}
 	}
+
 	PlaceThemeMonsts(t, monstrnd[leveltype - 1]);
 }
 
