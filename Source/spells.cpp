@@ -18,6 +18,7 @@
 #include "gamemenu.h"
 #include "inv.h"
 #include "missiles.h"
+#include "options.h"
 
 namespace devilution {
 
@@ -250,7 +251,7 @@ void DoResurrect(Player &player, Player &target)
 
 	ClrPlrPath(target);
 	target.destAction = ACTION_NONE;
-	target._pInvincible = false;
+	target._pInvincible = *GetOptions().Gameplay.invinciblePlayer;
 	SyncInitPlrPos(target);
 
 	int hp = 10 << 6;

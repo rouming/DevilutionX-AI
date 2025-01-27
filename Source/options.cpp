@@ -930,6 +930,7 @@ GameplayOptions::GameplayOptions()
     , automapActive("Automap active on start", OptionEntryFlags::Invisible, "", "", false)
     , harmlessBarrels("Disable explosive barrels, urns, or pods", OptionEntryFlags::Invisible, "", "", false)
     , noAutowalkOnSecondaryAction("Disable auto-walk when pressing the secondary action", OptionEntryFlags::Invisible, "", "", false)
+    , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -987,6 +988,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&automapActive,
 		&harmlessBarrels,
 		&noAutowalkOnSecondaryAction,
+		&invinciblePlayer,
 	};
 }
 

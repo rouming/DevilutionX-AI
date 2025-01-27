@@ -2482,7 +2482,7 @@ void InitPlayer(Player &player, bool firstTime)
 
 	player._pAblSpells = GetSpellBitmask(GetPlayerStartingLoadoutForClass(player._pClass).skill);
 
-	player._pInvincible = false;
+	player._pInvincible = *GetOptions().Gameplay.invinciblePlayer;
 
 	if (&player == MyPlayer) {
 		MyPlayerIsDead = false;
@@ -2896,7 +2896,7 @@ void RestartTownLvl(Player &player)
 	InitLevelChange(player);
 
 	player.setLevel(0);
-	player._pInvincible = false;
+	player._pInvincible = *GetOptions().Gameplay.invinciblePlayer;
 
 	SetPlayerHitPoints(player, 64);
 
