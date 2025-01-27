@@ -931,6 +931,7 @@ GameplayOptions::GameplayOptions()
     , harmlessBarrels("Disable explosive barrels, urns, or pods", OptionEntryFlags::Invisible, "", "", false)
     , noAutowalkOnSecondaryAction("Disable auto-walk when pressing the secondary action", OptionEntryFlags::Invisible, "", "", false)
     , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
+    , blindMonsters("Blind monsters", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -989,6 +990,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&harmlessBarrels,
 		&noAutowalkOnSecondaryAction,
 		&invinciblePlayer,
+		&blindMonsters,
 	};
 }
 

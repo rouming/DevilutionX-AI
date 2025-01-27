@@ -676,6 +676,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noAutowalkOnSecondaryAction;
 	/** @brief Enable invincible player mode */
 	OptionEntryBoolean invinciblePlayer;
+	/** @brief Enable blind monsters */
+	OptionEntryBoolean blindMonsters;
 };
 
 struct ControllerOptions : OptionCategoryBase {
