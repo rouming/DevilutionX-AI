@@ -672,6 +672,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean automapActive;
 	/** @brief Disable explosive barrels, urns, or pods */
 	OptionEntryBoolean harmlessBarrels;
+	/** @brief Disable auto-walk when pressing the secondary action */
+	OptionEntryBoolean noAutowalkOnSecondaryAction;
 };
 
 struct ControllerOptions : OptionCategoryBase {

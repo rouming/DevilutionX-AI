@@ -929,6 +929,7 @@ GameplayOptions::GameplayOptions()
     , stepMode("Run the game loop in step mode", OptionEntryFlags::Invisible, "", "", false)
     , automapActive("Automap active on start", OptionEntryFlags::Invisible, "", "", false)
     , harmlessBarrels("Disable explosive barrels, urns, or pods", OptionEntryFlags::Invisible, "", "", false)
+    , noAutowalkOnSecondaryAction("Disable auto-walk when pressing the secondary action", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -985,6 +986,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&stepMode,
 		&automapActive,
 		&harmlessBarrels,
+		&noAutowalkOnSecondaryAction,
 	};
 }
 

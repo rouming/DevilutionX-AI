@@ -2187,7 +2187,7 @@ void PerformSecondaryAction()
 	} else if (ObjectUnderCursor != nullptr) {
 		NetSendCmdLoc(MyPlayerId, true, CMD_OPOBJXY, cursPosition);
 		LastMouseButtonAction = MouseActionType::OperateObject;
-	} else {
+	} else if (!*GetOptions().Gameplay.noAutowalkOnSecondaryAction) {
 		if (pcursmissile != nullptr) {
 			MakePlrPath(myPlayer, pcursmissile->position.tile, true);
 			myPlayer.destAction = ACTION_WALK;
