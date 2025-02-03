@@ -847,6 +847,11 @@ void RunGameLoop(interface_mode uMsg)
 	unsigned run_game_iteration = 0;
 #endif
 
+	/* Start a new level on new game start if specified */
+	if (uMsg == WM_DIABNEWGAME && *GetOptions().Gameplay.gameLevel)
+		StartNewLvl(*MyPlayer, interface_mode::WM_DIABNEXTLVL,
+					*GetOptions().Gameplay.gameLevel);
+
 	while (gbRunGame) {
 
 #ifdef _DEBUG

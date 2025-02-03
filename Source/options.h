@@ -652,6 +652,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryString shareGameStateFilename;
 	/** @brief Game and player initial seed */
 	OptionEntryInt<int> gameAndPlayerSeed;
+	/** @brief Load player into the level on a new game start */
+	OptionEntryInt<int> gameLevel;
 };
 
 struct ControllerOptions : OptionCategoryBase {
