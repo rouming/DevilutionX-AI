@@ -99,6 +99,7 @@
 #include "utils/status_macros.hpp"
 #include "utils/str_cat.hpp"
 #include "utils/utf8.hpp"
+#include "utils/shared.h"
 
 #ifndef USE_SDL1
 #include "controls/touch/gamepad.h"
@@ -808,6 +809,148 @@ void GameEventHandler(const SDL_Event &event, uint16_t modState)
 		MainWndProc(event);
 		break;
 	}
+}
+
+static bool
+inject_sdl_events(uint32_t *old_keys, uint32_t new_keys)
+{
+	unsigned int sdl_type, sdl_sym;
+	SDL_Scancode sdl_scan;
+	unsigned int diff, i;
+	SDL_Event event;
+
+	bool injected = false;
+
+	diff = *old_keys ^ new_keys;
+	*old_keys = new_keys;
+
+	for (i = 0; i < sizeof(diff) * 8; i++) {
+		unsigned int bit = (1 << i);
+		if (!(diff & bit))
+			continue;
+
+		sdl_type = (new_keys & bit ? SDL_KEYDOWN : SDL_KEYUP);
+
+		if (bit == RING_ENTRY_KEY_LEFT) {
+			sdl_sym  = SDLK_LEFT;
+			sdl_scan = SDL_SCANCODE_LEFT;
+		} else if (bit == RING_ENTRY_KEY_RIGHT) {
+			sdl_sym  = SDLK_RIGHT;
+			sdl_scan = SDL_SCANCODE_RIGHT;
+		} else if (bit == RING_ENTRY_KEY_UP) {
+			sdl_sym  = SDLK_UP;
+			sdl_scan = SDL_SCANCODE_UP;
+		} else if (bit == RING_ENTRY_KEY_DOWN) {
+			sdl_sym  = SDLK_DOWN;
+			sdl_scan = SDL_SCANCODE_DOWN;
+		} else if (bit == RING_ENTRY_KEY_X) {
+			sdl_sym  = SDLK_x;
+			sdl_scan = SDL_SCANCODE_X;
+		} else if (bit == RING_ENTRY_KEY_Y) {
+			sdl_sym  = SDLK_y;
+			sdl_scan = SDL_SCANCODE_Y;
+		} else if (bit == RING_ENTRY_KEY_A) {
+			sdl_sym  = SDLK_a;
+			sdl_scan = SDL_SCANCODE_A;
+		} else if (bit == RING_ENTRY_KEY_B) {
+			sdl_sym  = SDLK_b;
+			sdl_scan = SDL_SCANCODE_B;
+		} else if (bit == RING_ENTRY_KEY_SAVE) {
+			sdl_sym  = SDLK_F2;
+			sdl_scan = SDL_SCANCODE_F2;
+		} else if (bit == RING_ENTRY_KEY_NEW) {
+			// Pretend the NEW key was injected
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN)
+				// Exit current game loop if new game is requested
+				gbRunGame = false;
+			continue;
+		} else if (bit == RING_ENTRY_KEY_LOAD) {
+			sdl_sym  = SDLK_F3;
+			sdl_scan = SDL_SCANCODE_F3;
+		} else if (bit == RING_ENTRY_KEY_PAUSE) {
+			sdl_sym  = SDLK_PAUSE;
+			sdl_scan = SDL_SCANCODE_PAUSE;
+		} else if (bit == RING_ENTRY_KEY_NOOP) {
+			// Pretend the NOOP key was injected
+			injected = true;
+			continue;
+		} else {
+			// Unknown key
+			continue;
+		}
+
+		event.type = sdl_type;
+		event.key.keysym.sym = sdl_sym;
+		event.key.keysym.scancode = sdl_scan;
+		event.key.keysym.mod = KMOD_NONE;
+		event.key.repeat = 0;
+
+		if (SDL_PushEvent(&event) < 0) {
+			printf("Failed to push event: %s\n", SDL_GetError());
+		} else {
+			injected = true;
+		}
+	}
+
+	return injected;
+}
+
+static bool update_shared_state(int timeout_ms, bool retrieve_input,
+								uint32_t *request_tag)
+{
+	static bool should_release_keys;
+	static uint32_t keys_state;
+	struct ring_entry *entry;
+	bool injected = false;
+
+	if (MyPlayer)
+		// Do a static cast to avoid compiler warning that writing to
+		// an object with no trivial copy-assignment is not
+		// allowed. Please, FIXME.
+		memcpy(static_cast<void *>(&shared::player), MyPlayer, sizeof(shared::player));
+
+	// On early start, the game state is not completely initialized,
+	// so incoming keys may not work. Delay keys processing. The
+	// number of ticks to delay was chosen empirically.
+	if (shared::game_ticks > 5) {
+		uint32_t released_keys = 0;
+
+		if (timeout_ms != 0)
+			ring_queue_wait_any_submitted(&shared::input_queue, timeout_ms);
+
+		if (should_release_keys) {
+			should_release_keys = false;
+			released_keys = keys_state;
+			injected = inject_sdl_events(&keys_state, 0);
+		} else if (retrieve_input &&
+				   (entry = ring_queue_get_entry_to_retrieve(&shared::input_queue))) {
+			uint32_t keys = entry->type;
+
+			should_release_keys = (keys & RING_ENTRY_F_SINGLE_TICK_PRESS);
+			keys &= ~RING_ENTRY_FLAGS;
+
+			if (!should_release_keys)
+				released_keys = (keys_state ^ keys) & ~keys;
+
+			injected = inject_sdl_events(&keys_state, keys);
+			if (injected && request_tag)
+				*request_tag = entry->data;
+			ring_queue_retrieve(&shared::input_queue);
+		}
+
+		if (released_keys) {
+			// Reply with release key event
+			entry = ring_queue_get_entry_to_submit(&shared::events_queue);
+			entry->type = released_keys;
+			entry->data = request_tag ? *request_tag : 0;
+			ring_queue_submit(&shared::events_queue);
+		}
+	}
+	std::atomic_signal_fence(std::memory_order_seq_cst);
+	shared::game_ticks++;
+
+	return injected;
 }
 
 void RunGameLoop(interface_mode uMsg)
@@ -2583,6 +2726,12 @@ int DiabloMain(int argc, char **argv)
 	LuaInitialize();
 	SaveOptions();
 
+	if (!(*GetOptions().Gameplay.shareGameStateFilename).empty()) {
+		// Share whole diablo state
+		shared::share_diablo_state(paths::ConfigPath() + "/" +
+					   *GetOptions().Gameplay.shareGameStateFilename);
+	}
+
 	// Finally load game data
 	LoadGameArchives();
 
@@ -3291,6 +3440,7 @@ bool game_loop(bool bStartup)
 		if (!gbRunGame || !gbIsMultiplayer || demo::IsRunning() || demo::IsRecording() || !nthread_has_500ms_passed())
 			break;
 	}
+
 	return true;
 }
 
