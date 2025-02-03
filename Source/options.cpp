@@ -925,6 +925,7 @@ GameplayOptions::GameplayOptions()
     , noMonstersAutoPursuing("Disable monsters auto-pursuing", OptionEntryFlags::Invisible, "", "", 0)
     , gameTicksPerStep("Game ticks per step", OptionEntryFlags::Invisible, "", "", 0)
     , stepMode("Run the game loop in step mode", OptionEntryFlags::Invisible, "", "", false)
+    , automapActive("Automap active on start", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -979,6 +980,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noMonstersAutoPursuing,
 		&gameTicksPerStep,
 		&stepMode,
+		&automapActive,
 	};
 }
 

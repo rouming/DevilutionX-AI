@@ -666,6 +666,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> gameTicksPerStep;
 	/** @brief Run the game loop in step mode */
 	OptionEntryBoolean stepMode;
+	/** @brief Automap active on start */
+	OptionEntryBoolean automapActive;
 };
 
 struct ControllerOptions : OptionCategoryBase {
