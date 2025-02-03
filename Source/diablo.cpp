@@ -1022,22 +1022,80 @@ void RunGameLoop(interface_mode uMsg)
 		if (!gbRunGame)
 			break;
 
+		static uint32_t request_tag;
 		bool drawGame = true;
-		bool processInput = true;
-		bool runGameLoop = demo::IsRunning() ? demo::GetRunGameLoop(drawGame, processInput) : nthread_has_500ms_passed(&drawGame);
-		if (demo::IsRecording())
-			demo::RecordGameLoopResult(runGameLoop);
+		if (!*GetOptions().Gameplay.gameTicksPerStep) {
+			//
+			// Run-time mode
+			//
 
-		discord_manager::UpdateGame();
+			bool processInput = true;
+			bool runGameLoop = demo::IsRunning() ?
+				demo::GetRunGameLoop(drawGame, processInput) :
+				nthread_has_500ms_passed(&drawGame);
+			if (demo::IsRecording())
+				demo::RecordGameLoopResult(runGameLoop);
 
-		if (!runGameLoop) {
-			if (processInput)
-				ProcessInput();
-			if (!drawGame)
+			discord_manager::UpdateGame();
+
+			if (!runGameLoop) {
+				if (processInput)
+					ProcessInput();
+				if (!drawGame)
+					continue;
+				RedrawViewport();
+				DrawAndBlit();
 				continue;
-			RedrawViewport();
-			DrawAndBlit();
-			continue;
+			}
+
+			if (!(*GetOptions().Gameplay.shareGameStateFilename).empty())
+				update_shared_state(0, true, &request_tag);
+		} else {
+			//
+			// Step mode
+			//
+
+			// Ininite wait for input submission
+			static const int INFINITE_WAIT_MS = -1;
+
+			static int timeout_ms = INFINITE_WAIT_MS;
+			static bool running_loop;
+			static size_t run_ticks;
+
+			// Expect filename for state sharing
+			assert(!(*GetOptions().Gameplay.shareGameStateFilename).empty());
+
+			if (running_loop && !run_ticks) {
+				running_loop = false;
+				timeout_ms = INFINITE_WAIT_MS;
+
+				RedrawViewport();
+				DrawAndBlit();
+
+				// Reply with step finished event
+				struct ring_entry *entry;
+				entry = ring_queue_get_entry_to_submit(&shared::events_queue);
+				entry->type = RING_ENTRY_EVENT_STEP_FINISHED;
+				entry->data = request_tag;
+				ring_queue_submit(&shared::events_queue);
+			}
+
+			// Retrieve only when wait
+			bool retrieve_input = !running_loop;
+			bool injected = update_shared_state(timeout_ms, retrieve_input,
+												&request_tag);
+
+			drawGame = false;
+			ProcessInput();
+
+			if (!running_loop) {
+				if (!injected)
+					continue;
+				running_loop = true;
+				run_ticks = *GetOptions().Gameplay.gameTicksPerStep;
+				timeout_ms = 0;
+			}
+			run_ticks -= 1;
 		}
 
 		multi_process_network_packets();
