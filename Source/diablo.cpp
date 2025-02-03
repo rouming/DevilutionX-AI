@@ -2501,7 +2501,20 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 	gbSelectProvider = true;
 	ReturnToMainMenu = false;
 
+	int initialSeed = *GetOptions().Gameplay.gameAndPlayerSeed;
+	bool fixedSeed = *GetOptions().Gameplay.fixedSeed;
+	bool initSeed = true;
+
 	do {
+		if (initSeed && initialSeed != -1) {
+			// Initialize the seed once the initial seed is
+			// provided. If the seed is fixed, repeat seed
+			// initialization on each loop.
+			InitSeedSequence(initialSeed);
+			SetRndSeed(initialSeed);
+			initSeed = fixedSeed;
+		}
+
 		gbLoadGame = false;
 
 		if (!NetInit(bSinglePlayer)) {

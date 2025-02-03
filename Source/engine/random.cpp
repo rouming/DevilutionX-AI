@@ -49,6 +49,11 @@ void xoshiro128plusplus::copy(state &dst, const state &src)
 	memcpy(dst, src, sizeof(dst));
 }
 
+void InitSeedSequence(int initialSeed)
+{
+	seedGenerator = xoshiro128plusplus((uint64_t)initialSeed);
+}
+
 xoshiro128plusplus ReserveSeedSequence()
 {
 	xoshiro128plusplus reserved = seedGenerator;

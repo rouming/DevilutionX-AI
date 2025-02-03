@@ -648,6 +648,10 @@ struct GameplayOptions : OptionCategoryBase {
 
 	/** @brief Share the whole game state for AI via file  */
 	OptionEntryString shareGameStateFilename;
+	/** @brief Game and player initial seed */
+	OptionEntryInt<int> gameAndPlayerSeed;
+	/** @brief Fixed seed for each game run */
+	OptionEntryBoolean fixedSeed;
 };
 
 struct ControllerOptions : OptionCategoryBase {

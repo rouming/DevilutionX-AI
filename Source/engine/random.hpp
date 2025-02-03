@@ -283,6 +283,11 @@ private:
 };
 
 /**
+ * @brief Inits the global seed generator
+ */
+void InitSeedSequence(int initialSeed);
+
+/**
  * @brief Returns a copy of the global seed generator and fast-forwards the global seed generator to avoid collisions
  */
 xoshiro128plusplus ReserveSeedSequence();
