@@ -917,6 +917,7 @@ GameplayOptions::GameplayOptions()
     , noMonsters("Disable all monsters", OptionEntryFlags::Invisible, "", "", false)
     , skipAnimation("Skip animation", OptionEntryFlags::Invisible, "", "", 0)
     , noMonstersAutoPursuing("Disable monsters auto-pursuing", OptionEntryFlags::Invisible, "", "", 0)
+    , gameTicksPerStep("Game ticks per step", OptionEntryFlags::Invisible, "", "", 0)
 {
 }
 
@@ -969,6 +970,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noMonsters,
 		&skipAnimation,
 		&noMonstersAutoPursuing,
+		&gameTicksPerStep,
 	};
 }
 
