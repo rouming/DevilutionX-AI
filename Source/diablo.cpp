@@ -99,6 +99,7 @@
 #include "utils/status_macros.hpp"
 #include "utils/str_cat.hpp"
 #include "utils/utf8.hpp"
+#include "utils/shared.h"
 
 #ifndef USE_SDL1
 #include "controls/touch/gamepad.h"
@@ -118,6 +119,9 @@ namespace devilution {
 uint32_t DungeonSeeds[NUMLEVELS];
 std::optional<uint32_t> LevelSeeds[NUMLEVELS];
 Point MousePosition;
+bool gbSkipMenu;
+uint32_t gbSeed;
+bool gbSeedNeedSet;
 bool gbRunGame;
 bool gbRunGameResult;
 bool ReturnToMainMenu;
@@ -810,6 +814,175 @@ void GameEventHandler(const SDL_Event &event, uint16_t modState)
 	}
 }
 
+static bool
+inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
+				  uint32_t data1, uint32_t data2)
+{
+	unsigned int sdl_type, sdl_sym;
+	SDL_Scancode sdl_scan;
+	unsigned int diff, i;
+	SDL_Event event;
+
+	bool injected = false;
+
+	diff = *old_keys ^ new_keys;
+	*old_keys = new_keys;
+
+	for (i = 0; i < sizeof(diff) * 8; i++) {
+		unsigned int bit = (1 << i);
+		if (!(diff & bit))
+			continue;
+
+		sdl_type = (new_keys & bit ? SDL_KEYDOWN : SDL_KEYUP);
+
+		if (bit == RING_ENTRY_KEY_LEFT) {
+			sdl_sym  = SDLK_LEFT;
+			sdl_scan = SDL_SCANCODE_LEFT;
+		} else if (bit == RING_ENTRY_KEY_RIGHT) {
+			sdl_sym  = SDLK_RIGHT;
+			sdl_scan = SDL_SCANCODE_RIGHT;
+		} else if (bit == RING_ENTRY_KEY_UP) {
+			sdl_sym  = SDLK_UP;
+			sdl_scan = SDL_SCANCODE_UP;
+		} else if (bit == RING_ENTRY_KEY_DOWN) {
+			sdl_sym  = SDLK_DOWN;
+			sdl_scan = SDL_SCANCODE_DOWN;
+		} else if (bit == RING_ENTRY_KEY_X) {
+			sdl_sym  = SDLK_x;
+			sdl_scan = SDL_SCANCODE_X;
+		} else if (bit == RING_ENTRY_KEY_Y) {
+			sdl_sym  = SDLK_y;
+			sdl_scan = SDL_SCANCODE_Y;
+		} else if (bit == RING_ENTRY_KEY_A) {
+			sdl_sym  = SDLK_a;
+			sdl_scan = SDL_SCANCODE_A;
+		} else if (bit == RING_ENTRY_KEY_B) {
+			sdl_sym  = SDLK_b;
+			sdl_scan = SDL_SCANCODE_B;
+		} else if (bit == RING_ENTRY_KEY_SAVE) {
+			sdl_sym  = SDLK_F2;
+			sdl_scan = SDL_SCANCODE_F2;
+		} else if (bit == RING_ENTRY_KEY_NEW) {
+			// Pretend the NEW key was injected
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN) {
+				// Exit current game loop if new game is requested
+				gbRunGame = false;
+				gbSkipMenu = true;
+				if (data1) {
+					gbSeed = data2;
+					gbSeedNeedSet = true;
+				}
+			}
+			continue;
+		} else if (bit == RING_ENTRY_KEY_LOAD) {
+			sdl_sym  = SDLK_F3;
+			sdl_scan = SDL_SCANCODE_F3;
+		} else if (bit == RING_ENTRY_KEY_PAUSE) {
+			sdl_sym  = SDLK_PAUSE;
+			sdl_scan = SDL_SCANCODE_PAUSE;
+		} else if (bit == RING_ENTRY_KEY_NOOP) {
+			// Pretend the NOOP key was injected
+			injected = true;
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_SET_GOAL) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN)
+				AddPortalMissile(*MyPlayer, { (int)data1, (int)data2 }, false);
+
+			continue;
+
+		} else {
+			// Unknown key
+			continue;
+		}
+
+		event.type = sdl_type;
+		event.key.keysym.sym = sdl_sym;
+		event.key.keysym.scancode = sdl_scan;
+		event.key.keysym.mod = KMOD_NONE;
+		event.key.repeat = 0;
+
+		if (SDL_PushEvent(&event) < 0) {
+			printf("Failed to push event: %s\n", SDL_GetError());
+		} else {
+			injected = true;
+		}
+	}
+
+	return injected;
+}
+
+static struct ring_entry *receive_ring_event(int timeout_ms)
+{
+	if (timeout_ms != 0)
+		ring_queue_wait_any_submitted(&shared::input_queue, timeout_ms);
+	return ring_queue_get_entry_to_retrieve(&shared::input_queue);
+}
+
+static bool receive_and_inject_input(bool receive_new,
+									 int timeout_ms,
+									 uint32_t *request_tag)
+{
+	static bool should_release_keys;
+	static uint32_t keys_state;
+
+	struct ring_entry *entry;
+	uint32_t released_keys = 0;
+	bool injected = false;
+
+	// On early start, the game state is not completely initialized,
+	// so incoming keys may not work. Delay keys processing. The
+	// number of ticks to delay was chosen empirically.
+	if (shared::game_ticks < 5)
+		return false;
+
+	if (should_release_keys) {
+		should_release_keys = false;
+		released_keys = keys_state;
+		injected = inject_sdl_events(&keys_state, 0, 0, 0);
+	} else if (receive_new && (entry = receive_ring_event(timeout_ms))) {
+		uint32_t keys = entry->en_type;
+		uint32_t data1 = entry->en_data1;
+		uint32_t data2 = entry->en_data2;
+
+		should_release_keys = (keys & RING_ENTRY_F_SINGLE_TICK_PRESS);
+		keys &= ~RING_ENTRY_FLAGS;
+
+		if (!should_release_keys)
+			released_keys = (keys_state ^ keys) & ~keys;
+
+		injected = inject_sdl_events(&keys_state, keys, data1, data2);
+		if (injected && request_tag)
+			*request_tag = entry->en_tag;
+		ring_queue_retrieve(&shared::input_queue);
+	}
+
+	if (released_keys) {
+		// Reply with release key event
+		entry = ring_queue_get_entry_to_submit(&shared::events_queue);
+		entry->en_type = released_keys;
+		entry->en_tag = request_tag ? *request_tag : 0;
+		ring_queue_submit(&shared::events_queue);
+	}
+
+	return injected;
+}
+
+static void update_shared_state()
+{
+	if (MyPlayer)
+		// Do a static cast to avoid compiler warning that writing to
+		// an object with no trivial copy-assignment is not
+		// allowed. Please, FIXME.
+		memcpy(static_cast<void *>(&shared::player), MyPlayer, sizeof(shared::player));
+
+	// Compile barrier
+	std::atomic_signal_fence(std::memory_order_seq_cst);
+	shared::game_ticks++;
+}
+
 void RunGameLoop(interface_mode uMsg)
 {
 	demo::NotifyGameLoopStart();
@@ -876,23 +1049,77 @@ void RunGameLoop(interface_mode uMsg)
 		if (!gbRunGame)
 			break;
 
-		bool drawGame = true;
-		bool processInput = true;
-		bool runGameLoop = demo::IsRunning() ? demo::GetRunGameLoop(drawGame, processInput) : nthread_has_500ms_passed(&drawGame);
-		if (demo::IsRecording())
-			demo::RecordGameLoopResult(runGameLoop);
+		//
+		// Injected events and throttling logic
+		//
 
-		discord_manager::UpdateGame();
+		// Wait for the next request in step mode
+		static const int DEFAULT_WAIT_MS =
+			*GetOptions().Gameplay.stepMode ? -1 : 0;
+		static int timeout_ms = DEFAULT_WAIT_MS;
+		static bool running_loop_N_ticks;
+		static size_t run_ticks;
+		static uint32_t request_tag;
+		bool drawGame = !HeadlessMode;
 
-		if (!runGameLoop) {
-			if (processInput)
-				ProcessInput();
-			if (!drawGame)
-				continue;
-			RedrawViewport();
-			DrawAndBlit();
-			continue;
+		if (running_loop_N_ticks && !run_ticks) {
+			// Reply that all ticks have been executed to completion
+			running_loop_N_ticks = false;
+			timeout_ms = DEFAULT_WAIT_MS;
+
+			// Reply with step finished event
+			struct ring_entry *entry;
+			entry = ring_queue_get_entry_to_submit(&shared::events_queue);
+			entry->en_type = RING_ENTRY_EVENT_STEP_FINISHED;
+			entry->en_tag = request_tag;
+			ring_queue_submit(&shared::events_queue);
 		}
+
+		// Receive a new event when the loop is idle
+		bool receive_new = !running_loop_N_ticks;
+		bool injected = receive_and_inject_input(receive_new, timeout_ms,
+												 &request_tag);
+		if (!running_loop_N_ticks && injected) {
+			run_ticks = *GetOptions().Gameplay.gameTicksPerStep;
+			if (run_ticks) {
+				// We were requested to skip some ticks
+				running_loop_N_ticks = true;
+				timeout_ms = 0;
+			}
+		}
+
+		if (injected) {
+			// Process injected input immediately. Also, if something
+			// is injected, we don't throttle even if we are in
+			// real-time mode (the following `!stepMode` else-if
+			// branch), we fallback to the game loop. If we don't do
+			// so, the engine skips injected input and the game does
+			// not progress (sigh)
+			ProcessInput();
+		} else if (!*GetOptions().Gameplay.stepMode) {
+			bool processInput = true;
+			bool runGameLoop = demo::IsRunning() ?
+				demo::GetRunGameLoop(drawGame, processInput) :
+				nthread_has_500ms_passed(&drawGame);
+			if (demo::IsRecording())
+				demo::RecordGameLoopResult(runGameLoop);
+
+			discord_manager::UpdateGame();
+
+			if (!runGameLoop) {
+				if (processInput)
+					ProcessInput();
+				if (!drawGame)
+					continue;
+				RedrawViewport();
+				DrawAndBlit();
+				continue;
+			}
+		}
+		if (running_loop_N_ticks)
+			run_ticks -= 1;
+
+		update_shared_state();
 
 		multi_process_network_packets();
 		if (game_loop(gbGameLoopStartup))
@@ -2508,16 +2735,20 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 	int initialSeed = *GetOptions().Gameplay.gameAndPlayerSeed;
 	bool fixedSeed = *GetOptions().Gameplay.fixedSeed;
-	bool initSeed = true;
+
+	if (initialSeed != -1) {
+		gbSeed = (uint32_t)initialSeed;
+		gbSeedNeedSet = true;
+	}
 
 	do {
-		if (initSeed && initialSeed != -1) {
+		if (gbSeedNeedSet) {
 			// Initialize the seed once the initial seed is
 			// provided. If the seed is fixed, repeat seed
 			// initialization on each loop.
-			InitSeedSequence(initialSeed);
-			SetRndSeed(initialSeed);
-			initSeed = fixedSeed;
+			InitSeedSequence(gbSeed);
+			SetRndSeed(gbSeed);
+			gbSeedNeedSet = fixedSeed;
 		}
 
 		gbLoadGame = false;
@@ -2603,6 +2834,12 @@ int DiabloMain(int argc, char **argv)
 	ApplicationInit();
 	LuaInitialize();
 	SaveOptions();
+
+	if (!(*GetOptions().Gameplay.shareGameStateFilename).empty()) {
+		// Share whole diablo state
+		shared::share_diablo_state(paths::ConfigPath() + "/" +
+					   *GetOptions().Gameplay.shareGameStateFilename);
+	}
 
 	// Finally load game data
 	LoadGameArchives();
@@ -3312,6 +3549,7 @@ bool game_loop(bool bStartup)
 		if (!gbRunGame || !gbIsMultiplayer || demo::IsRunning() || demo::IsRecording() || !nthread_has_500ms_passed())
 			break;
 	}
+
 	return true;
 }
 

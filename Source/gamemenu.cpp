@@ -19,6 +19,7 @@
 #include "pfile.h"
 #include "qol/floatingnumbers.h"
 #include "utils/language.h"
+#include "utils/shared.h"
 
 #ifndef USE_SDL1
 #include "controls/touch/renderers.h"
@@ -332,6 +333,7 @@ void gamemenu_load_game(bool /*bActivate*/)
 	NewCursor(CURSOR_HAND);
 	interface_msg_pump();
 	SetEventHandler(prevHandler);
+	shared::game_loads++;
 }
 
 void gamemenu_save_game(bool /*bActivate*/)
@@ -364,6 +366,7 @@ void gamemenu_save_game(bool /*bActivate*/)
 	}
 	interface_msg_pump();
 	SetEventHandler(prevHandler);
+	shared::game_saves++;
 }
 
 void gamemenu_on()
