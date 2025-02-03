@@ -328,7 +328,7 @@ void PaletteFadeIn(int fr, const std::array<SDL_Color, 256> &srcPalette)
 {
 	if (HeadlessMode)
 		return;
-	if (demo::IsRunning())
+	if (demo::IsRunning() || *GetOptions().Graphics.skipProgress)
 		fr = 0;
 
 	ApplyGamma(logical_palette, srcPalette, 256);
@@ -362,7 +362,7 @@ void PaletteFadeOut(int fr, const std::array<SDL_Color, 256> &srcPalette)
 {
 	if (!sgbFadedIn || HeadlessMode)
 		return;
-	if (demo::IsRunning())
+	if (demo::IsRunning() || *GetOptions().Graphics.skipProgress)
 		fr = 0;
 
 	if (fr > 0) {
