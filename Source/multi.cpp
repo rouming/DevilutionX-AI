@@ -508,7 +508,10 @@ bool InitMulti(GameData *gameData)
 
 void InitGameInfo()
 {
-	xoshiro128plusplus gameGenerator = ReserveSeedSequence();
+	const Options &options = GetOptions();
+	int initialSeed = *options.Gameplay.gameAndPlayerSeed;
+
+	xoshiro128plusplus gameGenerator = ReserveSeedSequence(initialSeed);
 	gameGenerator.save(sgGameInitInfo.gameSeed);
 
 	sgGameInitInfo.size = sizeof(sgGameInitInfo);
@@ -516,7 +519,6 @@ void InitGameInfo()
 	sgGameInitInfo.versionMajor = PROJECT_VERSION_MAJOR;
 	sgGameInitInfo.versionMinor = PROJECT_VERSION_MINOR;
 	sgGameInitInfo.versionPatch = PROJECT_VERSION_PATCH;
-	const Options &options = GetOptions();
 	sgGameInitInfo.nTickRate = *options.Gameplay.tickRate;
 	sgGameInitInfo.bRunInTown = *options.Gameplay.runInTown ? 1 : 0;
 	sgGameInitInfo.bTheoQuest = *options.Gameplay.theoQuest ? 1 : 0;
