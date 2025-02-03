@@ -664,6 +664,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noMonstersAutoPursuing;
 	/** @brief How many game ticks to make in the step mode per one step  */
 	OptionEntryInt<int> gameTicksPerStep;
+	/** @brief Automap active on start */
+	OptionEntryBoolean automapActive;
 };
 
 struct ControllerOptions : OptionCategoryBase {

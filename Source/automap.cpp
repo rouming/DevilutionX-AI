@@ -18,6 +18,7 @@
 #include "levels/gendung.h"
 #include "levels/setmaps.h"
 #include "player.h"
+#include "options.h"
 #include "utils/attributes.h"
 #include "utils/enum_traits.h"
 #include "utils/is_of.hpp"
@@ -1538,7 +1539,7 @@ Rectangle MinimapRect {};
 
 void InitAutomapOnce()
 {
-	AutomapActive = false;
+	AutomapActive = *GetOptions().Gameplay.automapActive;
 	AutoMapScale = 50;
 
 	// Set the dimensions and screen position of the minimap relative to the screen dimensions
