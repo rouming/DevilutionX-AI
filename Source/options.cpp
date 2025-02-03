@@ -908,6 +908,8 @@ GameplayOptions::GameplayOptions()
           })
     , skipLoadingScreenThresholdMs("Skip loading screen threshold, ms", OptionEntryFlags::Invisible, "", "", 0)
     , shareGameStateFilename("Share game state via file", OptionEntryFlags::Invisible, "", "", "")
+    , gameAndPlayerSeed("Game and player initial seed", OptionEntryFlags::Invisible, "", "", -1)
+    , fixedSeed("Fixed seed for game run", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -954,6 +956,8 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&pauseOnFocusLoss,
 		&skipLoadingScreenThresholdMs,
 		&shareGameStateFilename,
+		&gameAndPlayerSeed,
+		&fixedSeed,
 	};
 }
 

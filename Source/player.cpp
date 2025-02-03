@@ -2234,8 +2234,12 @@ void SetPlrAnims(Player &player)
  */
 void CreatePlayer(Player &player, HeroClass c)
 {
+	int initialSeed = *GetOptions().Gameplay.gameAndPlayerSeed;
+
 	player = {};
-	SetRndSeed(SDL_GetTicks());
+
+	if (initialSeed == -1)
+		SetRndSeed(SDL_GetTicks());
 
 	player.setCharacterLevel(1);
 	player._pClass = c;
