@@ -662,6 +662,10 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> skipAnimation;
 	/** @brief Disable monsters auto-pursuing */
 	OptionEntryBoolean noMonstersAutoPursuing;
+	/** @brief How many game ticks to make in the step mode per one step  */
+	OptionEntryInt<int> gameTicksPerStep;
+	/** @brief Run the game loop in step mode */
+	OptionEntryBoolean stepMode;
 };
 
 struct ControllerOptions : OptionCategoryBase {

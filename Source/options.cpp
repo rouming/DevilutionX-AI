@@ -64,6 +64,10 @@ namespace devilution {
 #define DEFAULT_AUDIO_RESAMPLING_QUALITY 3
 #endif
 
+// Tell linker that variable is used for sharing
+__attribute__((used)) int GameTicksPerStep;
+__attribute__((used)) bool StepMode;
+
 namespace {
 
 std::optional<Ini> ini;
@@ -173,6 +177,8 @@ void LoadOptions()
 		}
 	}
 	HeadlessMode = *options.Graphics.headless;
+	GameTicksPerStep = *options.Gameplay.gameTicksPerStep;
+	StepMode = *options.Gameplay.stepMode;
 
 	ini->getUtf8Buf("Hellfire", "SItem", options.Hellfire.szItem, sizeof(options.Hellfire.szItem));
 	ini->getUtf8Buf("Network", "Bind Address", "0.0.0.0", options.Network.szBindAddress, sizeof(options.Network.szBindAddress));
@@ -917,6 +923,8 @@ GameplayOptions::GameplayOptions()
     , noMonsters("Disable all monsters", OptionEntryFlags::Invisible, "", "", false)
     , skipAnimation("Skip animation", OptionEntryFlags::Invisible, "", "", 0)
     , noMonstersAutoPursuing("Disable monsters auto-pursuing", OptionEntryFlags::Invisible, "", "", 0)
+    , gameTicksPerStep("Game ticks per step", OptionEntryFlags::Invisible, "", "", 0)
+    , stepMode("Run the game loop in step mode", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -969,6 +977,8 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noMonsters,
 		&skipAnimation,
 		&noMonstersAutoPursuing,
+		&gameTicksPerStep,
+		&stepMode,
 	};
 }
 
