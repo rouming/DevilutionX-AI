@@ -24,6 +24,7 @@
 #include "game_mode.hpp"
 #include "headless_mode.hpp"
 #include "hwcursor.hpp"
+#include "options.h"
 #include "loadsave.h"
 #include "multi.h"
 #include "pfile.h"
@@ -476,7 +477,8 @@ void CheckShouldSkipRendering()
 	const bool shouldSkip = ProgressEventHandlerState.loadStartedAt + *GetOptions().Gameplay.skipLoadingScreenThresholdMs > SDL_GetTicks();
 	if (shouldSkip) return;
 	ProgressEventHandlerState.skipRendering = false;
-	if (!HeadlessMode) InitRendering();
+	if (!*GetOptions().Graphics.skipProgress && !HeadlessMode)
+		InitRendering();
 }
 
 static int PeepEvents(SDL_Event *event, unsigned evType)
@@ -509,7 +511,9 @@ void ProgressEventHandler(const SDL_Event &event, uint16_t modState)
 	const interface_mode customEvent = GetCustomEvent(event);
 	switch (customEvent) {
 	case WM_PROGRESS:
-		if (!HeadlessMode && ProgressEventHandlerState.drawnProgress != sgdwProgress && !ProgressEventHandlerState.skipRendering) {
+		if (!*GetOptions().Graphics.skipProgress && !HeadlessMode &&
+			ProgressEventHandlerState.drawnProgress != sgdwProgress &&
+			!ProgressEventHandlerState.skipRendering) {
 			DrawCutsceneForeground();
 			ProgressEventHandlerState.drawnProgress = sgdwProgress;
 		}
@@ -521,7 +525,7 @@ void ProgressEventHandler(const SDL_Event &event, uint16_t modState)
 		if (!ProgressEventHandlerState.skipRendering) {
 			NewCursor(CURSOR_HAND);
 
-			if (!HeadlessMode) {
+			if (!*GetOptions().Graphics.skipProgress && !HeadlessMode) {
 				assert(ghMainWnd);
 
 				if (RenderDirectlyToOutputSurface && PalSurface != nullptr) {
@@ -619,7 +623,8 @@ void IncProgress(uint32_t steps)
 	sgdwProgress += ProgressStepSize * steps;
 	if (sgdwProgress > MaxProgress)
 		sgdwProgress = MaxProgress;
-	if (!HeadlessMode && sgdwProgress != prevProgress) {
+	if (!*GetOptions().Graphics.skipProgress &&
+		!HeadlessMode && sgdwProgress != prevProgress) {
 #if SDL_PUSH_EVENT_BG_THREAD_WORKS
 		SDL_Event event;
 		CustomEventToSdlEvent(event, WM_PROGRESS);
@@ -635,7 +640,7 @@ void IncProgress(uint32_t steps)
 
 void CompleteProgress()
 {
-	if (HeadlessMode)
+	if (*GetOptions().Graphics.skipProgress || HeadlessMode)
 		return;
 	if (!IsProgress)
 		return;
@@ -665,7 +670,7 @@ void ShowProgress(interface_mode uMsg)
 	FreeVirtualGamepadTextures();
 #endif
 
-	if (!HeadlessMode) {
+	if (!*GetOptions().Graphics.skipProgress && !HeadlessMode) {
 		assert(ghMainWnd);
 
 		interface_msg_pump();
