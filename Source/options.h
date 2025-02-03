@@ -654,6 +654,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> gameAndPlayerSeed;
 	/** @brief Fixed seed for each game run */
 	OptionEntryBoolean fixedSeed;
+	/** @brief Load player into the level on a new game start */
+	OptionEntryInt<int> gameLevel;
 };
 
 struct ControllerOptions : OptionCategoryBase {
