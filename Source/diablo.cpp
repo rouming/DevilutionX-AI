@@ -488,6 +488,7 @@ void PressKey(SDL_Keycode vkey, uint16_t modState)
 		return;
 
 	if (gmenu_presskeys(vkey) || CheckKeypress(vkey)) {
+		printf(">> %s:%d, not handled\n", __func__, __LINE__);
 		return;
 	}
 
@@ -838,30 +839,56 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 		if (bit == RING_ENTRY_KEY_LEFT) {
 			sdl_sym  = SDLK_LEFT;
 			sdl_scan = SDL_SCANCODE_LEFT;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received LEFT\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_RIGHT) {
 			sdl_sym  = SDLK_RIGHT;
 			sdl_scan = SDL_SCANCODE_RIGHT;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received RIGHT\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_UP) {
 			sdl_sym  = SDLK_UP;
 			sdl_scan = SDL_SCANCODE_UP;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received UP\n", __func__);
 		} else if (bit == RING_ENTRY_KEY_DOWN) {
 			sdl_sym  = SDLK_DOWN;
 			sdl_scan = SDL_SCANCODE_DOWN;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received DOWN\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_X) {
 			sdl_sym  = SDLK_x;
 			sdl_scan = SDL_SCANCODE_X;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received X\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_Y) {
 			sdl_sym  = SDLK_y;
 			sdl_scan = SDL_SCANCODE_Y;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received Y\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_A) {
 			sdl_sym  = SDLK_a;
 			sdl_scan = SDL_SCANCODE_A;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received A\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_B) {
 			sdl_sym  = SDLK_b;
 			sdl_scan = SDL_SCANCODE_B;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received B\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_SAVE) {
 			sdl_sym  = SDLK_F2;
 			sdl_scan = SDL_SCANCODE_F2;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received SAVE\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_NEW) {
 			// Pretend the NEW key was injected
 			injected = true;
@@ -874,22 +901,42 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 					gbSeedNeedSet = true;
 				}
 			}
+			if (sdl_type == SDL_KEYDOWN) {
+				if (data1)
+					printf(">> %s: received NEW with seed '%u'\n", __func__, data2);
+				else
+					printf(">> %s: received NEW\n", __func__);
+			}
+
 			continue;
 		} else if (bit == RING_ENTRY_KEY_LOAD) {
 			sdl_sym  = SDLK_F3;
 			sdl_scan = SDL_SCANCODE_F3;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received LOAD\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_PAUSE) {
 			sdl_sym  = SDLK_PAUSE;
 			sdl_scan = SDL_SCANCODE_PAUSE;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received PAUSE\n", __func__);
+
 		} else if (bit == RING_ENTRY_KEY_NOOP) {
 			// Pretend the NOOP key was injected
 			injected = true;
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received NOOP\n", __func__);
+
 			continue;
 
 		} else if (bit == RING_ENTRY_KEY_SET_GOAL) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN)
 				AddPortalMissile(*MyPlayer, { (int)data1, (int)data2 }, false);
+
+			if (sdl_type == SDL_KEYDOWN)
+				printf(">> %s: received SET GOAL (%d, %d)\n",
+					   __func__, data1, data2);
 
 			continue;
 
@@ -996,6 +1043,8 @@ void RunGameLoop(interface_mode uMsg)
 	gbRunGame = true;
 	gbProcessPlayers = IsDiabloAlive(true);
 	gbRunGameResult = true;
+
+	printf(">> %s\n", __func__);
 
 	RedrawEverything();
 	if (!HeadlessMode) {
@@ -2741,6 +2790,8 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 		gbSeedNeedSet = true;
 	}
 
+	printf(">> %s: newgame=%d, single=%d\n", __func__, bNewGame, bSinglePlayer);
+
 	do {
 		if (gbSeedNeedSet) {
 			// Initialize the seed once the initial seed is
@@ -2749,6 +2800,8 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 			InitSeedSequence(gbSeed);
 			SetRndSeed(gbSeed);
 			gbSeedNeedSet = fixedSeed;
+
+			printf(">> %s: set seed=%d, fixedSeed=%d\n", __func__, gbSeed, fixedSeed);
 		}
 
 		gbLoadGame = false;
@@ -2973,8 +3026,10 @@ void diablo_pause_game()
 	if (!gbIsMultiplayer) {
 		if (PauseMode != 0) {
 			PauseMode = 0;
+			printf(">> %s: resumed\n", __func__);
 		} else {
 			PauseMode = 2;
+			printf(">> %s: paused\n", __func__);
 			sound_stop();
 			qtextflag = false;
 			LastMouseButtonAction = MouseActionType::None;
