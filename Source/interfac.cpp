@@ -288,6 +288,7 @@ void DoLoad(interface_mode uMsg)
 		currlevel = myPlayer.plrlevel;
 		leveltype = GetLevelType(currlevel);
 		IncProgress();
+		//XXX
 		loadResult = LoadGameLevel(false, ENTRY_MAIN);
 		if (loadResult.has_value()) IncProgress();
 		break;
