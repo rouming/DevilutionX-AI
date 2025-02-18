@@ -1,0 +1,11 @@
+dm-tree==0.1.9
+gymnasium==1.1.0
+numpy==2.2.3
+psutil==7.0.0
+scipy==1.15.2
+torch==2.6.0
+tensorboardX==2.6.4
+tensorboard==2.20.0
+pyyaml==6.0.3
+numba==0.62.1
+blosc==1.11.3
