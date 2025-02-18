@@ -1,0 +1,253 @@
+[Language]
+Code=en
+
+[GameMode]
+Game=2
+Shareware=0
+
+[StartUp]
+Diablo Intro=1
+Hellfire Intro=1
+Splash=0
+
+[Graphics]
+Width=640
+Height=480
+Fullscreen=0
+Headless={headless}
+Fit to Screen=1
+Upscale=1
+Scaling Quality=2
+Integer Scaling=0
+Vertical Sync=1
+Gamma Correction=100
+Zoom=0
+FPS Limiter=1
+Show FPS=0
+Color Cycling=1
+Alternate nest art=0
+Hardware Cursor=1
+Hardware Cursor For Items=0
+Hardware Cursor Maximum Size=128
+Frame Rate Control=1
+
+[Audio]
+Sound Volume=-1350
+Music Volume=-1400
+Walking Sound=1
+Auto Equip Sound=0
+Item Pickup Sound=0
+Sample Rate=22050
+Channels=2
+Buffer Size=2048
+Resampler=Speex
+Resampling Quality=3
+
+[Diablo]
+LastSinglePlayerHero=0
+LastMultiplayerHero=0
+
+[Hellfire]
+LastSinglePlayerHero=0
+LastMultiplayerHero=0
+SItem=
+
+[Game]
+Speed=50
+Friendly Fire=1
+MultiplayerFullQuests=0
+Randomize Quests=1
+Theo Quest=0
+Cow Quest=0
+Run in Town=0
+Quick Cast=0
+Test Bard=0
+Test Barbarian=0
+Experience Bar=0
+Show Item Graphics in Stores=0
+Show health values=0
+Show mana values=0
+Enemy Health Bar=0
+Show Monster Type=0
+Show Item Labels=0
+Enable floating numbers=0
+Auto Refill Belt=0
+Auto Equip Weapons=1
+Auto Equip Armor=0
+Auto Equip Helms=0
+Auto Equip Shields=0
+Auto Equip Jewelry=0
+Auto Gold Pickup=0
+Auto Elixir Pickup=0
+Auto Oil Pickup=0
+Heal Potion Pickup=0
+Full Heal Potion Pickup=0
+Mana Potion Pickup=0
+Full Mana Potion Pickup=0
+Rejuvenation Potion Pickup=0
+Full Rejuvenation Potion Pickup=0
+Auto Pickup in Town=0
+Disable Crippling Shrines=0
+Adria Refills Mana=0
+Grab Input=0
+Pause Game When Window Loses Focus=0
+Skip loading screen threshold, ms=0
+Game and player initial seed={seed}
+Share game state via file={mshared_filename}
+Load player into the level=1
+Disable all monsters={no_monsters}
+Skip animation=1
+Disable monsters auto-pursuing=1
+
+[Network]
+Port=6112
+Bind Address=0.0.0.0
+Previous Game ID=
+Previous Host=
+
+[Keymapping]
+BeltItem1=1
+BeltItem2=2
+BeltItem3=3
+BeltItem4=4
+BeltItem5=5
+BeltItem6=6
+BeltItem7=7
+BeltItem8=8
+QuickSpell1=F5
+QuickSpell2=F6
+QuickSpell3=F7
+QuickSpell4=F8
+QuickSpell5=
+QuickSpell6=
+QuickSpell7=
+QuickSpell8=
+QuickSpell9=
+QuickSpell10=
+QuickSpell11=
+QuickSpell12=
+QuickSpellPrevious=SCROLLUPMOUSE
+QuickSpellNext=SCROLLDOWNMOUSE
+UseHealthPotion=
+UseManaPotion=
+DisplaySpells=S
+QuickSave=F2
+QuickLoad=F3
+QuitGame=
+StopHero=
+Item Highlighting=LALT
+Toggle Item Highlighting=RCONTROL
+Toggle Automap=TAB
+CycleAutomapType=M
+Inventory=I
+Character=C
+QuestLog=Q
+SpellBook=B
+QuickMessage1=F9
+QuickMessage2=F10
+QuickMessage3=F11
+QuickMessage4=F12
+QuickMessage5=
+QuickMessage6=
+QuickMessage7=
+QuickMessage8=
+QuickMessage9=
+QuickMessage10=
+Hide Info Screens=SPACE
+Zoom=Z
+Pause Game=P
+Pause Game (Alternate)=PAUSE
+DecreaseGamma=G
+IncreaseGamma=F
+Help=F1
+Screenshot=PRINT
+GameInfo=V
+ChatLog=L
+SortInv=R
+OpenConsole=`
+DebugToggle=X
+
+[Padmapping]
+BeltItem1=
+BeltItem2=
+BeltItem3=
+BeltItem4=
+BeltItem5=
+BeltItem6=
+BeltItem7=
+BeltItem8=
+QuickSpell1=
+QuickSpell2=
+QuickSpell3=
+QuickSpell4=
+QuickSpell5=
+QuickSpell6=
+QuickSpell7=
+QuickSpell8=
+QuickSpell9=
+QuickSpell10=
+QuickSpell11=
+QuickSpell12=
+PrimaryAction=B
+SecondaryAction=Y
+SpellAction=X
+CancelAction=A
+MoveUp=Up
+MoveDown=Down
+MoveLeft=Left
+MoveRight=Right
+StandGround=
+ToggleStandGround=
+UseHealthPotion=LB
+UseManaPotion=RB
+Character=LT
+Inventory=RT
+QuestLog=Select+LT
+SpellBook=Select+RT
+DisplaySpells=A
+Toggle Automap=LS
+MouseUp=Select+Up
+MouseDown=Select+Down
+MouseLeft=Select+Left
+MouseRight=Select+Right
+LeftMouseClick1=RS
+LeftMouseClick2=Select+LB
+RightMouseClick1=Select+RS
+RightMouseClick2=Select+RB
+PadHotspellMenu=Select
+PadMenuNavigator=Start
+ToggleGameMenu1=Select+Start
+ToggleGameMenu2=Start+Select
+QuickSave=
+QuickLoad=
+Item Highlighting=
+Toggle Item Highlighting=
+Hide Info Screens=
+Zoom=
+Pause Game=
+DecreaseGamma=
+IncreaseGamma=
+Help=
+Screenshot=
+GameInfo=
+SortInv=
+ChatLog=
+
+[Controller]
+Mapping=
+deadzone=0.07
+
+[Mods]
+clock=0
+
+[NetMsg]
+QuickMessage1=I need help! Come here!
+QuickMessage2=Follow me.
+QuickMessage3=Here's something for you.
+QuickMessage4=Now you DIE!
+QuickMessage5=Heal yourself!
+QuickMessage6=Watch out!
+QuickMessage7=Thanks.
+QuickMessage8=Retreat!
+QuickMessage9=Sorry.
+QuickMessage10=I'm waiting.
