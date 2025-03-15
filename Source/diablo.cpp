@@ -841,7 +841,8 @@ void RunGameLoop(interface_mode uMsg)
 	nthread_ignore_mutex(true);
 	StartGame(uMsg);
 	assert(HeadlessMode || ghMainWnd);
-	EventHandler previousHandler = SetEventHandler(GameEventHandler);
+	EventHandler newHandler = { GameEventHandler, SDL_PollEvent };
+	EventHandler previousHandler = SetEventHandler(newHandler);
 	run_delta_info();
 	gbRunGame = true;
 	gbProcessPlayers = IsDiabloAlive(true);
@@ -937,7 +938,7 @@ void RunGameLoop(interface_mode uMsg)
 	RedrawEverything();
 	scrollrt_draw_game_screen();
 	previousHandler = SetEventHandler(previousHandler);
-	assert(HeadlessMode || previousHandler == GameEventHandler);
+	assert(HeadlessMode || previousHandler.handle == GameEventHandler);
 	FreeGame();
 
 	if (cineflag) {
