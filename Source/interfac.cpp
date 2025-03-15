@@ -479,6 +479,28 @@ void CheckShouldSkipRendering()
 	if (!HeadlessMode) InitRendering();
 }
 
+static int PeepEvents(SDL_Event *event, unsigned evType)
+{
+#ifdef USE_SDL1
+	return SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_EVENTMASK(evType));
+#else
+	return SDL_PeepEvents(event, 1, SDL_GETEVENT, evType, evType + 1);
+#endif
+}
+
+static int ProgressEventPoll(SDL_Event *event)
+{
+	int ret;
+
+	// SDL_QUIT event has higher priority
+	ret = PeepEvents(event, SDL_QUIT);
+	if (ret)
+		return ret;
+
+	// Peek only custom events, leaving others in the queue
+	return PeepEvents(event, CustomEventType);
+}
+
 void ProgressEventHandler(const SDL_Event &event, uint16_t modState)
 {
 	DisableInputEventHandler(event, modState);
@@ -626,7 +648,7 @@ void ShowProgress(interface_mode uMsg)
 	gbSomebodyWonGameKludge = false;
 
 	ProgressEventHandlerState.loadStartedAt = SDL_GetTicks();
-	EventHandler newHandler = { ProgressEventHandler, SDL_PollEvent };
+	EventHandler newHandler = { ProgressEventHandler, ProgressEventPoll };
 	ProgressEventHandlerState.prevHandler = SetEventHandler(newHandler);
 	ProgressEventHandlerState.skipRendering = true;
 	ProgressEventHandlerState.done = false;
@@ -687,7 +709,7 @@ void ShowProgress(interface_mode uMsg)
 		SDL_Event event;
 		// We use the real `PollEventCustom` here instead of `FetchMessage`
 		// to process real events rather than the recorded ones in demo mode.
-		while (PollEventCustom(&event, SDL_PollEvent)) {
+		while (PollEventCustom(&event, ProgressEventPoll)) {
 			if (!processEvent(event)) return;
 		}
 #if !SDL_PUSH_EVENT_BG_THREAD_WORKS
