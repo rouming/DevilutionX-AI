@@ -524,8 +524,8 @@ void ProgressEventHandler(const SDL_Event &event, uint16_t modState)
 		}
 
 		[[maybe_unused]] EventHandler prevHandler = SetEventHandler(ProgressEventHandlerState.prevHandler);
-		assert(prevHandler == ProgressEventHandler);
-		ProgressEventHandlerState.prevHandler = nullptr;
+		assert(prevHandler.handle == ProgressEventHandler);
+		ProgressEventHandlerState.prevHandler.handle = nullptr;
 		IsProgress = false;
 
 		Player &myPlayer = *MyPlayer;
@@ -580,7 +580,7 @@ void interface_msg_pump()
 {
 	SDL_Event event;
 	uint16_t modState;
-	while (FetchMessage(&event, &modState)) {
+	while (FetchMessage(&event, &modState, CurrentEventHandler.poll)) {
 		if (event.type != SDL_QUIT) {
 			HandleMessage(event, modState);
 		}
@@ -626,7 +626,8 @@ void ShowProgress(interface_mode uMsg)
 	gbSomebodyWonGameKludge = false;
 
 	ProgressEventHandlerState.loadStartedAt = SDL_GetTicks();
-	ProgressEventHandlerState.prevHandler = SetEventHandler(ProgressEventHandler);
+	EventHandler newHandler = { ProgressEventHandler, SDL_PollEvent };
+	ProgressEventHandlerState.prevHandler = SetEventHandler(newHandler);
 	ProgressEventHandlerState.skipRendering = true;
 	ProgressEventHandlerState.done = false;
 	ProgressEventHandlerState.drawnProgress = 0;
@@ -684,9 +685,9 @@ void ShowProgress(interface_mode uMsg)
 	while (true) {
 		CheckShouldSkipRendering();
 		SDL_Event event;
-		// We use the real `PollEvent` here instead of `FetchMessage`
+		// We use the real `PollEventCustom` here instead of `FetchMessage`
 		// to process real events rather than the recorded ones in demo mode.
-		while (PollEvent(&event)) {
+		while (PollEventCustom(&event, SDL_PollEvent)) {
 			if (!processEvent(event)) return;
 		}
 #if !SDL_PUSH_EVENT_BG_THREAD_WORKS
