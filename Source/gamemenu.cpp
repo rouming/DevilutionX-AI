@@ -300,7 +300,8 @@ void gamemenu_quit_game(bool bActivate)
 
 void gamemenu_load_game(bool /*bActivate*/)
 {
-	EventHandler saveProc = SetEventHandler(DisableInputEventHandler);
+	EventHandler newHandler = { DisableInputEventHandler, SDL_PollEvent };
+	EventHandler prevHandler = SetEventHandler(newHandler);
 	gamemenu_off();
 	ClearFloatingNumbers();
 	NewCursor(CURSOR_NONE);
@@ -330,7 +331,7 @@ void gamemenu_load_game(bool /*bActivate*/)
 	PaletteFadeIn(8);
 	NewCursor(CURSOR_HAND);
 	interface_msg_pump();
-	SetEventHandler(saveProc);
+	SetEventHandler(prevHandler);
 }
 
 void gamemenu_save_game(bool /*bActivate*/)
@@ -344,7 +345,8 @@ void gamemenu_save_game(bool /*bActivate*/)
 		return;
 	}
 
-	EventHandler saveProc = SetEventHandler(DisableInputEventHandler);
+	EventHandler newHandler = { DisableInputEventHandler, SDL_PollEvent };
+	EventHandler prevHandler = SetEventHandler(newHandler);
 	NewCursor(CURSOR_NONE);
 	gamemenu_off();
 	InitDiabloMsg(EMSG_SAVING);
@@ -361,7 +363,7 @@ void gamemenu_save_game(bool /*bActivate*/)
 		SaveOptions();
 	}
 	interface_msg_pump();
-	SetEventHandler(saveProc);
+	SetEventHandler(prevHandler);
 }
 
 void gamemenu_on()
