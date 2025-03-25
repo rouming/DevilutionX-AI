@@ -238,6 +238,9 @@ bool CanPlaceMonster(Point position)
 
 void PlaceMonster(size_t i, size_t typeIndex, Point position)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return;
+
 	if (LevelMonsterTypes[typeIndex].type == MT_NAKRUL) {
 		for (size_t j = 0; j < ActiveMonsterCount; j++) {
 			if (Monsters[j].levelType == typeIndex) {
@@ -254,6 +257,9 @@ void PlaceMonster(size_t i, size_t typeIndex, Point position)
 
 void PlaceGroup(size_t typeIndex, size_t num, Monster *leader = nullptr, bool leashed = false)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return;
+
 	uint8_t placed = 0;
 
 	for (int try1 = 0; try1 < 10; try1++) {
@@ -409,6 +415,9 @@ Point GetUniqueMonstPosition(UniqueMonsterType uniqindex)
 
 tl::expected<void, std::string> PlaceUniqueMonst(UniqueMonsterType uniqindex, size_t minionType, int bosspacksize)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	const auto &uniqueMonsterData = UniqueMonstersData[static_cast<size_t>(uniqindex)];
 	const size_t typeIndex = GetMonsterTypeIndex(uniqueMonsterData.mtype);
 	const Point position = GetUniqueMonstPosition(uniqindex);
@@ -449,6 +458,9 @@ void ClrAllMonsters()
 
 tl::expected<void, std::string> PlaceUniqueMonsters()
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	for (size_t u = 0; u < UniqueMonstersData.size(); ++u) {
 		if (UniqueMonstersData[u].mlevel != currlevel)
 			continue;
@@ -3270,6 +3282,9 @@ void InitLevelMonsters()
 
 tl::expected<void, std::string> GetLevelMTypes()
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	RETURN_IF_ERROR(AddMonsterType(MT_GOLEM, PLACE_SPECIAL));
 	if (currlevel == 16) {
 		RETURN_IF_ERROR(AddMonsterType(MT_ADVOCATE, PLACE_SCATTER));
@@ -3524,6 +3539,9 @@ void InitGolems()
 
 tl::expected<void, std::string> InitMonsters()
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	if (!gbIsSpawn && !setlevel && currlevel == 16)
 		LoadDiabMonsts();
 
@@ -3613,6 +3631,9 @@ tl::expected<void, std::string> SetMapMonsters(const uint16_t *dunData, Point st
 
 Monster *AddMonster(Point position, Direction dir, size_t typeIndex, bool inMap)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return nullptr;
+
 	if (ActiveMonsterCount < MaxMonsters) {
 		Monster &monster = Monsters[ActiveMonsters[ActiveMonsterCount++]];
 		if (inMap)
@@ -3626,6 +3647,9 @@ Monster *AddMonster(Point position, Direction dir, size_t typeIndex, bool inMap)
 
 void SpawnMonster(Point position, Direction dir, size_t typeIndex, bool startSpecialStand /*= false*/)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return;
+
 	if (ActiveMonsterCount >= MaxMonsters)
 		return;
 

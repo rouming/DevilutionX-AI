@@ -16,6 +16,7 @@
 #include "levels/trigs.h"
 #include "monster.h"
 #include "objects.h"
+#include "options.h"
 #include "quests.h"
 #include "utils/algorithm/container.hpp"
 #include "utils/is_of.hpp"
@@ -348,8 +349,10 @@ bool CheckThemeRoom(int8_t tv)
  */
 void PlaceThemeMonsts(int t, int f)
 {
-	size_t scattertypes[138];
+	if (*GetOptions().Gameplay.noMonsters)
+		return;
 
+	size_t scattertypes[138];
 	int numscattypes = 0;
 	for (size_t i = 0; i < LevelMonsterTypeCount; i++) {
 		if ((LevelMonsterTypes[i].placeFlags & PLACE_SCATTER) != 0) {

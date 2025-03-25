@@ -914,6 +914,7 @@ GameplayOptions::GameplayOptions()
     , gameAndPlayerSeed("Game and player initial seed", OptionEntryFlags::Invisible, "", "", -1)
     , fixedSeed("Fixed seed for game run", OptionEntryFlags::Invisible, "", "", false)
     , gameLevel("Load player into the level", OptionEntryFlags::Invisible, "", "", 0)
+    , noMonsters("Disable all monsters", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -963,6 +964,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&gameAndPlayerSeed,
 		&fixedSeed,
 		&gameLevel,
+		&noMonsters,
 	};
 }
 
