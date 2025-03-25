@@ -3270,6 +3270,9 @@ void InitLevelMonsters()
 
 tl::expected<void, std::string> GetLevelMTypes()
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	RETURN_IF_ERROR(AddMonsterType(MT_GOLEM, PLACE_SPECIAL));
 	if (currlevel == 16) {
 		RETURN_IF_ERROR(AddMonsterType(MT_ADVOCATE, PLACE_SCATTER));
@@ -3524,6 +3527,9 @@ void InitGolems()
 
 tl::expected<void, std::string> InitMonsters()
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return {};
+
 	if (!gbIsSpawn && !setlevel && currlevel == 16)
 		LoadDiabMonsts();
 
@@ -3613,6 +3619,9 @@ tl::expected<void, std::string> SetMapMonsters(const uint16_t *dunData, Point st
 
 Monster *AddMonster(Point position, Direction dir, size_t typeIndex, bool inMap)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return nullptr;
+
 	if (ActiveMonsterCount < MaxMonsters) {
 		Monster &monster = Monsters[ActiveMonsters[ActiveMonsterCount++]];
 		if (inMap)
@@ -3626,6 +3635,9 @@ Monster *AddMonster(Point position, Direction dir, size_t typeIndex, bool inMap)
 
 void SpawnMonster(Point position, Direction dir, size_t typeIndex, bool startSpecialStand /*= false*/)
 {
+	if (*GetOptions().Gameplay.noMonsters)
+		return;
+
 	if (ActiveMonsterCount >= MaxMonsters)
 		return;
 
