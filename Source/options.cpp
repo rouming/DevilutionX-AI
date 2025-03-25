@@ -913,6 +913,7 @@ GameplayOptions::GameplayOptions()
     , shareGameStateFilename("Share game state via file", OptionEntryFlags::Invisible, "", "", "")
     , gameAndPlayerSeed("Game and player initial seed", OptionEntryFlags::Invisible, "", "", -1)
     , gameLevel("Load player into the level", OptionEntryFlags::Invisible, "", "", 0)
+    , noMonsters("Disable all monsters", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -961,6 +962,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&shareGameStateFilename,
 		&gameAndPlayerSeed,
 		&gameLevel,
+		&noMonsters,
 	};
 }
 
