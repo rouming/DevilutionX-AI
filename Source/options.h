@@ -656,6 +656,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> gameLevel;
 	/** @brief Disable all monsters. */
 	OptionEntryBoolean noMonsters;
+	/** @brief Skip animation */
+	OptionEntryInt<int> skipAnimation;
 };
 
 struct ControllerOptions : OptionCategoryBase {
