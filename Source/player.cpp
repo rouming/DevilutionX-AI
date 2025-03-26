@@ -138,6 +138,9 @@ void StartWalkAnimation(Player &player, Direction dir, bool pmWillBeCalled)
 		skippedFrames = 2;
 	if (pmWillBeCalled)
 		skippedFrames += 1;
+	if (*GetOptions().Gameplay.skipAnimation)
+		skippedFrames = player._pWFrames - 1;
+
 	NewPlrAnim(player, player_graphic::Walk, dir, AnimationDistributionFlags::ProcessAnimationPending, skippedFrames);
 }
 
@@ -1802,7 +1805,10 @@ void Player::getAnimationFramesAndTicksPerFrame(player_graphic graphics, int8_t 
 	switch (graphics) {
 	case player_graphic::Stand:
 		numberOfFrames = _pNFrames;
-		ticksPerFrame = 4;
+		if (*GetOptions().Gameplay.skipAnimation)
+			ticksPerFrame = 1;
+		else
+			ticksPerFrame = 4;
 		break;
 	case player_graphic::Walk:
 		numberOfFrames = _pWFrames;
@@ -2169,11 +2175,21 @@ void SetPlrAnims(Player &player)
 	auto gn = static_cast<PlayerWeaponGraphic>(player._pgfxnum & 0xFU);
 
 	if (leveltype == DTYPE_TOWN) {
-		player._pNFrames = plrAtkAnimData.townIdleFrames;
-		player._pWFrames = plrAtkAnimData.townWalkingFrames;
+		if (*GetOptions().Gameplay.skipAnimation) {
+			player._pNFrames = 1;
+			player._pWFrames = 1;
+		} else {
+			player._pNFrames = plrAtkAnimData.townIdleFrames;
+			player._pWFrames = plrAtkAnimData.townWalkingFrames;
+		}
 	} else {
-		player._pNFrames = plrAtkAnimData.idleFrames;
-		player._pWFrames = plrAtkAnimData.walkingFrames;
+		if (*GetOptions().Gameplay.skipAnimation) {
+			player._pNFrames = 1;
+			player._pWFrames = 1;
+		} else {
+			player._pNFrames = plrAtkAnimData.idleFrames;
+			player._pWFrames = plrAtkAnimData.walkingFrames;
+		}
 		player._pHFrames = plrAtkAnimData.recoveryFrames;
 		player._pBFrames = plrAtkAnimData.blockingFrames;
 		switch (gn) {
