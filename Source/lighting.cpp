@@ -254,9 +254,6 @@ void DoVision(Point position, uint8_t radius, MapExplorationType doAutomap, bool
 				if (!InDungeonBounds(rayPoint))
 					break;
 
-				bool visible = true;
-
-				//
 				// We've cast an approximated ray on an integer 2D
 				// grid, so we need to check if a ray can pass through
 				// the diagonally adjacent tiles. For example, consider
@@ -283,10 +280,13 @@ void DoVision(Point position, uint8_t radius, MapExplorationType doAutomap, bool
 					Displacement adjacent1 = { -quadrant.deltaX, 0 };
 					Displacement adjacent2 = { 0, -quadrant.deltaY };
 
-					visible = (TileAllowsLight(rayPoint + adjacent1) || TileAllowsLight(rayPoint + adjacent2));
+					bool passesLight = (TileAllowsLight(rayPoint + adjacent1) || TileAllowsLight(rayPoint + adjacent2));
+					if (!passesLight)
+						// Diagonally adjacent tiles do not pass the
+						// light further, we are done with this ray
+						break;
 				}
-				if (visible)
-					DoVisionFlags(rayPoint, doAutomap, visible);
+				DoVisionFlags(rayPoint, doAutomap, visible);
 
 				bool passesLight = TileAllowsLight(rayPoint);
 				if (!passesLight)
