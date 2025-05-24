@@ -279,7 +279,7 @@ bool CreateSdlEvent(const DemoMsg &dmsg, SDL_Event &event, uint16_t &modState)
 		return true;
 	default:
 		if (type >= DemoMsg::MinCustomEvent) {
-			event.type = CustomEventToSdlEvent(static_cast<interface_mode>(type - DemoMsg::MinCustomEvent));
+			CustomEventToSdlEvent(event, static_cast<interface_mode>(type - DemoMsg::MinCustomEvent));
 			return true;
 		}
 		event.type = static_cast<SDL_EventType>(0);
@@ -376,7 +376,7 @@ bool CreateSdlEvent(const DemoMsg &dmsg, SDL_Event &event, uint16_t &modState)
 		return true;
 	default:
 		if (type >= DemoMsg::MinCustomEvent) {
-			event.type = CustomEventToSdlEvent(static_cast<interface_mode>(type - DemoMsg::MinCustomEvent));
+			CustomEventToSdlEvent(event, static_cast<interface_mode>(type - DemoMsg::MinCustomEvent));
 			return true;
 		}
 		event.type = static_cast<SDL_EventType>(0);
@@ -801,7 +801,7 @@ void RecordMessage(const SDL_Event &event, uint16_t modState)
 	default:
 		if (IsCustomEvent(event.type)) {
 			WriteDemoMsgHeader(static_cast<DemoMsg::EventType>(
-			    DemoMsg::MinCustomEvent + static_cast<uint8_t>(GetCustomEvent(event.type))));
+			    DemoMsg::MinCustomEvent + static_cast<uint8_t>(GetCustomEvent(event))));
 		}
 		break;
 	}
