@@ -524,6 +524,8 @@ struct GraphicsOptions : OptionCategoryBase {
 	OptionEntryResolution resolution;
 	/** @brief Run in fullscreen or windowed mode. */
 	OptionEntryBoolean fullscreen;
+	/** @brief Run completely headless. */
+	OptionEntryBoolean headless;
 #if !defined(USE_SDL1) || defined(__3DS__)
 	/** @brief Expand the aspect ratio to match the screen. */
 	OptionEntryBoolean fitToScreen;
