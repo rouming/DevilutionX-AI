@@ -172,6 +172,7 @@ void LoadOptions()
 			pEntry->LoadFromIni(pCategory->GetKey());
 		}
 	}
+	HeadlessMode = *options.Graphics.headless;
 
 	ini->getUtf8Buf("Hellfire", "SItem", options.Hellfire.szItem, sizeof(options.Hellfire.szItem));
 	ini->getUtf8Buf("Network", "Bind Address", "0.0.0.0", options.Network.szBindAddress, sizeof(options.Network.szBindAddress));
@@ -778,6 +779,7 @@ std::string_view OptionEntryAudioDevice::GetDeviceName(size_t index) const
 GraphicsOptions::GraphicsOptions()
     : OptionCategoryBase("Graphics", N_("Graphics"), N_("Graphics Settings"))
     , fullscreen("Fullscreen", OnlyIfSupportsWindowed | OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Fullscreen"), N_("Display the game in windowed or fullscreen mode."), true)
+    , headless("Headless", OptionEntryFlags::Invisible, "", "", false)
 #if !defined(USE_SDL1) || defined(__3DS__)
     , fitToScreen("Fit to Screen", OptionEntryFlags::CantChangeInGame | OptionEntryFlags::RecreateUI, N_("Fit to Screen"), N_("Automatically adjust the game window to your current desktop screen aspect ratio and resolution."), true)
 #endif
@@ -838,6 +840,7 @@ std::vector<OptionEntryBase *> GraphicsOptions::GetEntries()
 #ifndef __vita__
 		&fullscreen,
 #endif
+		&headless,
 #if !defined(USE_SDL1) || defined(__3DS__)
 		&fitToScreen,
 #endif
