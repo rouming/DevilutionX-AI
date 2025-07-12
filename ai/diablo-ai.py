@@ -396,33 +396,36 @@ def get_events_as_string(game, events):
         keys = event.type
         k = "?"
 
-        if keys == (ring.RingEntryType.RING_ENTRY_KEY_UP |
+        if keys == 0:
+            # Stand, "◦" - white bullet
+            k = "\u25e6"
+        elif keys == (ring.RingEntryType.RING_ENTRY_KEY_UP |
                     ring.RingEntryType.RING_ENTRY_KEY_RIGHT):
-            # N
+            # N, "↑" - upwards arrow
             k = "\u2191"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_RIGHT):
-            # NE
+            # NE, "↗" - north east arrow
             k = "\u2197"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_DOWN |
                       ring.RingEntryType.RING_ENTRY_KEY_RIGHT):
-            # E
+            # E, "→" - rightwards arrow
             k = "\u2192"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_DOWN):
-            # SE
+            # SE, "↘" - south east arrow
             k = "\u2198"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_DOWN |
                       ring.RingEntryType.RING_ENTRY_KEY_LEFT):
-            # S
+            # S, "↓" - downwards arrow
             k = "\u2193"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_LEFT):
-            # SW
+            # SW, "↙" - southwest arrow
             k = "\u2199"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_UP |
                       ring.RingEntryType.RING_ENTRY_KEY_LEFT):
-            # W
+            # W, "←" - leftwards arrow
             k = "\u2190"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_UP):
-            # NW
+            # NW, "↖" - north west arrow
             k = "\u2196"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_X):
             k = "X"
