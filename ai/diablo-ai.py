@@ -6,8 +6,8 @@
    play as human
 
 Usage:
-  diablo-ai.py play     [--attach=MEM_PATH_OR_PID] [--no-monsters] [--no-env-log] [--seed=SEED]
-  diablo-ai.py play-ai  [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED]
+  diablo-ai.py play     [--attach=MEM_PATH_OR_PID] [--no-monsters] [--no-env-log] [--seed=SEED] [--env-radius=NR]
+  diablo-ai.py play-ai  [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--env-radius=NR]
   diablo-ai.py train-ai [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--same-seed] [--train-batch-size=SIZE] [--train-iters=ITERS] [--gpus=NR] [--env-runners=NR] [--env-radius=NR] [--tune] [--log-to-stdout] [--no-actions] [--restore-from-checkpoint] [--save-to-checkpoint] [--exploration-door-attraction] [--exploration-door-backtrack-penalty]
   diablo-ai.py list
   diablo-ai.py (-h | --help)
@@ -486,15 +486,17 @@ def display_matrix(dunwin, m):
             # square in a terminal
             _addch(dunwin, row + y_off, col + x_off + 1, ' ')
 
-def display_dungeon(d, stdscr):
+def display_dungeon(d, stdscr, env_radius):
     height, width = stdscr.getmaxyx()
     dunwin = stdscr.subwin(height - (4 + 1), width, 4, 0)
     radius = get_radius(d, dunwin)
+    if env_radius is not None:
+        radius = np.minimum(radius, env_radius)
     surroundings = diablo_state.get_surroundings(d, radius)
 
     display_matrix(dunwin, surroundings)
 
-def display_diablo_state(game, stdscr, events, envlog, missed_ticks):
+def display_diablo_state(game, stdscr, events, envlog, missed_ticks, env_radius):
     # Unfortunately (performance-wise) we have to make a deep copy to
     # prevent partial or complete changes of the state in the middle
     # of this routine
@@ -537,7 +539,7 @@ def display_diablo_state(game, stdscr, events, envlog, missed_ticks):
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 2, width // 2 - len(msg) // 2, msg)
 
-    display_dungeon(d, stdscr)
+    display_dungeon(d, stdscr, env_radius)
     display_env_log(game, stdscr, envlog)
 
     if diablo_state.is_game_paused(d):
@@ -573,8 +575,9 @@ def run_tui(stdscr, gameconfig):
         if not gameconfig['no-env-log'] and envlog is None:
             # Try to open a environment log, can be created later
             envlog = open_envlog(game)
+        env_radius = gameconfig['env-radius']
 
-        display_diablo_state(game, stdscr, events, envlog, missed_ticks)
+        display_diablo_state(game, stdscr, events, envlog, missed_ticks, env_radius)
 
         if last_key:
             # Compensate dungeon 45CW rotation
