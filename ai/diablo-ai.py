@@ -8,7 +8,7 @@
 Usage:
   diablo-ai.py play     [--attach=MEM_PATH_OR_PID] [--no-monsters] [--no-env-log] [--seed=SEED]
   diablo-ai.py play-ai  [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED]
-  diablo-ai.py train-ai [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--same-seed] [--train-batch-size=SIZE] [--train-iters=ITERS] [--gpus=NR] [--env-runners=NR] [--tune] [--log-to-stdout] [--no-actions] [--restore-from-checkpoint] [--save-to-checkpoint] [--exploration-door-attraction] [--exploration-door-backtrack-penalty]
+  diablo-ai.py train-ai [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--same-seed] [--train-batch-size=SIZE] [--train-iters=ITERS] [--gpus=NR] [--env-runners=NR] [--env-radius=NR] [--tune] [--log-to-stdout] [--no-actions] [--restore-from-checkpoint] [--save-to-checkpoint] [--exploration-door-attraction] [--exploration-door-backtrack-penalty]
   diablo-ai.py list
   diablo-ai.py (-h | --help)
   diablo-ai.py --version
@@ -60,6 +60,9 @@ Options:
 
   --env-runners=NR
       Number of environment runners (default: 1)
+
+  --env-radius=NR
+      Number of environment cells surrounding an AI agent character (default: 112, the entire dungeon).
 
   --tune
       Run hyperparameters tuner first
@@ -786,6 +789,11 @@ def main():
         else int(args["--env-runners"])
     args["--gpus"] = 0 if args["--gpus"] is None \
         else int(args["--gpus"])
+    args["--env-radius"] = None if args["--env-radius"] is None \
+        else int(args["--env-radius"])
+    args["--env-radius"] = None if args["--env-radius"] == 0 \
+        else args["--env-radius"]
+
     args["--exploration-door-attraction"] = True if args["--exploration-door-backtrack-penalty"] \
         else args["--exploration-door-attraction"]
 
@@ -815,6 +823,7 @@ def main():
         "seed": args["--seed"],
         "same-seed": args["--same-seed"],
         "no-monsters": args["--no-monsters"],
+        "env-radius": args["--env-radius"],
         "log-to-stdout": args["--log-to-stdout"],
         "no-actions": args["--no-actions"],
         "no-env-log": args["--no-env-log"],

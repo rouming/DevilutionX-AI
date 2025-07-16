@@ -152,6 +152,9 @@ class DiabloEnv(gym.Env):
             env_config["seed"] = self.seed
         self.paused = False
         self.env_radius = None
+        if self.config['env-radius'] is not None:
+            radius = self.config['env-radius']
+            self.env_radius = np.array([radius, radius])
 
         self.log_to_stdout = self.config['log-to-stdout'] \
             if 'log-to-stdout' in self.config else 0
