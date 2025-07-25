@@ -1,0 +1,9 @@
+# Ignore build artifacts and temp files
+build/
+*~
+*.o
+*.pyc
+*.pyo
+__pycache__/
+*.tmp
+*.log
