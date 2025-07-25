@@ -33,6 +33,26 @@ experience in RL. Perhaps it will be possible to achieve Diablo
 gameplay performed by the RL agent that is indistinguishable from that
 of a human player.
 
+## Docker Container
+
+A prebuilt docker image is available on [Docker Hub](https://hub.docker.com/r/romanpen/devilutionx-ai-ubuntu24.04).
+
+First, the NVIDIA Container Toolkit must be installed. For a detailed guide, please follow the [NVIDIA instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+As described by [NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/sample-workload.html), you can run the image with CUDA support as follows:
+
+```
+docker run --runtime=nvidia --gpus all -dit --name devilutionx-ai romanpen/devilutionx-ai-ubuntu24.04:latest
+```
+
+Previous command starts the container in the background with a default
+`tmux` session available for attaching. To attach to the `tmux` session,
+please execute:
+
+```
+docker exec -it devilutionx-ai tmux -u attach
+```
+
 ## Training Pecularitites
 
 The chosen training method is the least resource-intensive: training
