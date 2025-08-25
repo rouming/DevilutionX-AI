@@ -29,7 +29,7 @@ import ring
 
 class DoorState(enum.Enum):
     DOOR_CLOSED   = 0
-    DOOR_OPEN     = 1,
+    DOOR_OPEN     = 1
     DOOR_BLOCKED  = 2
 
 def round_up_int(i, d):
@@ -62,6 +62,9 @@ def is_breakable(obj):
 
 def is_door_closed(obj):
     return obj._oVar4 == DoorState.DOOR_CLOSED.value
+
+def is_door_open(obj):
+    return obj._oVar4 == DoorState.DOOR_OPEN.value
 
 def is_door(obj):
     return obj._oDoorFlag
@@ -102,11 +105,20 @@ def is_arch(d, pos):
 def is_wall(d, pos):
     return not is_floor(d, pos) and not is_arch(d, pos)
 
-def is_trigger(d, pos):
+def to_trigger(d, pos):
     for trig in d.trigs[:d.numtrigs.value]:
         if trig.position.x == pos[0] and trig.position.y == pos[1]:
-            return True
-    return False
+            return trig
+    return None
+
+def is_trigger_to_prev_level(trig):
+    return trig._tmsg == dx.interface_mode.WM_DIABPREVLVL.value
+
+def is_trigger_to_next_level(trig):
+    return trig._tmsg == dx.interface_mode.WM_DIABNEXTLVL.value
+
+def is_trigger_warp(trig):
+    return trig._tmsg == dx.interface_mode.WM_DIABTWARPUP.value
 
 def is_game_paused(d):
     return d.PauseMode.value != 0
@@ -164,7 +176,7 @@ class Rect:
     width  = 0
     height = 0
 
-class EnvironmentRect:
+class EnvRect:
     # Source rectangle
     srect = Rect()
     # Destination rectangle
@@ -176,9 +188,9 @@ class EnvironmentRect:
             pos = player_position(d)
 
             x_min = max(pos[0] - radius[0], 0)
-            x_max = min(pos[0] + radius[0], dundim[0])
+            x_max = min(pos[0] + radius[0] + 1, dundim[0])
             y_min = max(pos[1] - radius[1], 0)
-            y_max = min(pos[1] + radius[1], dundim[1])
+            y_max = min(pos[1] + radius[1] + 1, dundim[1])
 
             self.srect.lt     = np.array([x_min, y_min])
             self.srect.width  = x_max - self.srect.lt[0]
@@ -186,8 +198,8 @@ class EnvironmentRect:
 
             # Place player position in the center of a destination rectangle
             self.drect.lt     = radius - (pos - self.srect.lt)
-            self.drect.width  = radius[0] * 2
-            self.drect.height = radius[1] * 2
+            self.drect.width  = radius[0] * 2 + 1
+            self.drect.height = radius[1] * 2 + 1
         else:
             self.srect.lt     = np.array([0, 0])
             self.srect.width  = dundim[0]
@@ -197,20 +209,22 @@ class EnvironmentRect:
 class EnvironmentFlag(enum.Enum):
     Player         = 1<<0
     Wall           = 1<<1
-    Trigger        = 1<<2
-    DoorOpened     = 1<<3
-    DoorClosed     = 1<<4
-    Missile        = 1<<5
-    Monster        = 1<<6
-    UnknownObject  = 1<<7
-    Crucifix       = 1<<8
-    Barrel         = 1<<9
-    Chest          = 1<<10
-    Sarcophagus    = 1<<11
-    Item           = 1<<12
-    Explored       = 1<<13
-    Visible        = 1<<14
-    Interactable   = 1<<15
+    PrevTrigger    = 1<<2
+    NextTrigger    = 1<<3
+    WarpTrigger    = 1<<4
+    Door           = 1<<5
+    Missile        = 1<<6
+    Monster        = 1<<7
+    UnknownObject  = 1<<8
+    Crucifix       = 1<<9
+    Barrel         = 1<<10
+    Chest          = 1<<11
+    Sarcophagus    = 1<<12
+    Item           = 1<<13
+    Explored       = 1<<14
+    Visible        = 1<<15
+    Interactable   = 1<<16
+    Open           = 1<<17
 
 def get_environment(d, radius=None, ignore_explored_visible=False):
     """Returns the environment, either the whole dungeon or windowed
@@ -219,16 +233,17 @@ def get_environment(d, radius=None, ignore_explored_visible=False):
     careful, as this can be CPU intensive, so @ignore_explored_visible
     set to False is the default.
     """
-    env_rect = EnvironmentRect(d, radius)
+    env_rect = EnvRect(d, radius)
     # Transpose to Diablo indexing: (width, height), instead of numpy
     # (height, weight)
     env = np.zeros((env_rect.drect.width, env_rect.drect.height),
-                   dtype=np.uint16)
+                   dtype=np.uint32)
 
     for j in range(env_rect.srect.height):
         for i in range(env_rect.srect.width):
             spos = (env_rect.srect.lt[0] + i, env_rect.srect.lt[1] + j)
             obj = to_object(d, spos)
+            trig = to_trigger(d, spos)
             s = 0
 
             if d.dFlags_np[spos] & dx.DungeonFlag.Explored.value:
@@ -239,13 +254,17 @@ def get_environment(d, radius=None, ignore_explored_visible=False):
             if ignore_explored_visible or s & EnvironmentFlag.Explored.value:
                 if is_wall(d, spos):
                     s |= EnvironmentFlag.Wall.value
-                if is_trigger(d, spos):
-                    s |= EnvironmentFlag.Trigger.value
+                if trig is not None:
+                    if is_trigger_to_next_level(trig):
+                        s |= EnvironmentFlag.NextTrigger.value
+                    elif is_trigger_to_prev_level(trig):
+                        s |= EnvironmentFlag.PrevTrigger.value
+                    elif is_trigger_warp(trig):
+                        s |= EnvironmentFlag.WarpTrigger.value
                 if obj is not None and is_door(obj):
-                    if is_door_closed(obj):
-                        s |= EnvironmentFlag.DoorClosed.value
-                    else:
-                        s |= EnvironmentFlag.DoorOpened.value
+                    s |= EnvironmentFlag.Door.value
+                    if is_door_open(obj):
+                        s |= EnvironmentFlag.Open.value
             if ignore_explored_visible or s & EnvironmentFlag.Visible.value:
                 if d.dFlags_np[spos] & dx.DungeonFlag.Missile.value:
                     s |= EnvironmentFlag.Missile.value
@@ -301,12 +320,14 @@ def get_surroundings(d, radius):
                 s = '.'
             if tile & EnvironmentFlag.Wall.value:
                 s = '#'
-            if tile & EnvironmentFlag.Trigger.value:
+            if tile & EnvironmentFlag.NextTrigger.value:
+                s = 'v'
+            if tile & EnvironmentFlag.PrevTrigger.value:
+                s = '^'
+            if tile & EnvironmentFlag.WarpTrigger.value:
                 s = '$'
-            if tile & EnvironmentFlag.DoorClosed.value:
-                s = 'D'
-            if tile & EnvironmentFlag.DoorOpened.value:
-                s = 'd'
+            if tile & EnvironmentFlag.Door.value:
+                s = 'd' if tile & EnvironmentFlag.Open.value else 'D'
             if tile & EnvironmentFlag.Barrel.value:
                 s = 'B'
             if tile & EnvironmentFlag.UnknownObject.value:
@@ -359,15 +380,15 @@ def get_dungeon_graph_and_path(d, start, goal):
         (env & EnvironmentFlag.Monster.value) | \
         (env & EnvironmentFlag.Barrel.value) | \
         (env & EnvironmentFlag.Item.value) | \
-        (env & EnvironmentFlag.Trigger.value) | \
+        (env & EnvironmentFlag.PrevTrigger.value) | \
+        (env & EnvironmentFlag.NextTrigger.value) | \
         (env == 0) | \
         (env == EnvironmentFlag.Explored.value) | \
         (env == EnvironmentFlag.Visible.value) | \
         (env == (EnvironmentFlag.Explored.value | \
                  EnvironmentFlag.Visible.value))
     # Doors positions
-    doors = np.argwhere(env & (EnvironmentFlag.DoorOpened.value | \
-                               EnvironmentFlag.DoorClosed.value))
+    doors = np.argwhere(env & EnvironmentFlag.Door.value)
 
     # Label independent regions
     labeled_regions, num_regions = maze.detect_regions(empty_env)

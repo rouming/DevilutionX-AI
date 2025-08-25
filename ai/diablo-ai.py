@@ -5,89 +5,10 @@
    Tool which trains AI for playing Diablo and helps to evalulate and
    play as human
 
-Usage:
-  diablo-ai.py play     [--attach=MEM_PATH_OR_PID] [--no-monsters] [--no-env-log] [--seed=SEED] [--env-radius=NR]
-  diablo-ai.py play-ai  [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--env-radius=NR]
-  diablo-ai.py train-ai [--attach=MEM_PATH_OR_PID] [--no-monsters] [--seed=SEED] [--same-seed] [--train-batch-size=SIZE] [--train-iters=ITERS] [--gpus=NR] [--env-runners=NR] [--env-radius=NR] [--tune] [--log-to-stdout] [--no-actions] [--restore-from-checkpoint] [--save-to-checkpoint] [--exploration-door-attraction] [--exploration-door-backtrack-penalty]
-  diablo-ai.py list
-  diablo-ai.py (-h | --help)
-  diablo-ai.py --version
-
-Modes:
-  play           Let the human play Diablo or attach to an existing Diablo instance (devilutionX process) by providing the --attach option.
-  play-ai        Let AI play Diablo.
-  train-ai       Train the AI by creating new workers and Diablo instances (devilutionX processes), or attach to a single existing instance by providing the --attach option (convenient for debug purposes).
-  list           List all Diablo instances (devilutionX processes).
-
-Options:
-  -h --help
-      Show this screen.
-
-  --version
-      Show version.
-
-  --attach=MEM_PATH_OR_PID
-      Attach to existing Diablo instance by path, pid or  an index of an instance from the `diablo-ai.py list` output. For example:
-        Attach by PID:
-           diablo-ai.py play --attach 112342
-
-         Attach by path:
-           diablo-ai.py play --attach /tmp/diablo-tj3bxyvy/shared.mem
-
-         Attach by index:
-           diablo-ai.py play --attach 0
-
-  --no-monsters
-    Disable all monsters on the level.
-
-  --no-env-log
-      No environment log is shown on the TUI screen, which can speed up refresh rate on slow terminals (default: enabled, meaning that if a log is produced by the Gymnasium environment, it will be displayed).
-
-  --seed=SEED
-      Initial seed (default: 0).
-
-  --same-seed
-      Set same seed for all runners (default: seed += worker_index - 1)
-
-  --train-batch-size=SIZE
-      Size of a train batch (default: 200)
-
-  --train-iters=ITERS
-      Number of train iterations (default: 3)
-
-  --gpus=NR
-      Number of GPUs (default: 0)
-
-  --env-runners=NR
-      Number of environment runners (default: 1)
-
-  --env-radius=NR
-      Number of environment cells surrounding an AI agent character (default: 112, the entire dungeon).
-
-  --tune
-      Run hyperparameters tuner first
-
-  --log-to-stdout
-      Write logs to stdout (default: env.log file in Diablo state folder)
-
-  --no-actions
-      Disable agent from generating actions. Very handy mode to attach and play manually to simulate reward (default: actions enabled)
-
-  --restore-from-checkpoint
-      Restores state from a checkpoint prior training (default: no restore from a checkpoint)
-
-  --save-to-checkpoint
-      Saves state to a checkpoint on each train loop (default: no save to a checkpoint)
-
-  --exploration-door-attraction
-      Reward increases when the agent moves closer to unexplored doors. Helps guide the agent toward new areas faster (default: disabled).
-
-  --exploration-door-backtrack-penalty
-      Penalizes the agent for moving away from unexplored doors after approaching them. Encourages committing to exploration paths instead of turning back. If set, enables the `--exploration-door-attraction`.
 """
-VERSION='Diablo AI Tool v1.1'
+VERSION='Diablo AI Tool v1.2'
 
-from docopt import docopt
+import argparse
 from pathlib import Path
 import collections
 import configparser
@@ -107,6 +28,126 @@ import tempfile
 import time
 
 import procutils
+
+def make_diablo_parser():
+    class IndentedHelpFormatter(argparse.RawTextHelpFormatter):
+        def __init__(self, *args, **kwargs):
+            # Width controls line wrapping; max_help_position controls indent
+            kwargs['max_help_position'] = 8
+            super().__init__(*args, **kwargs)
+
+    parser = argparse.ArgumentParser(
+        prog="diablo-ai.py",
+        description=(
+            VERSION + "\n\n"
+            "Tool which trains AI for playing Diablo and helps to evalulate and play as human.\n\n"
+        ),
+        epilog="For more details, see https://github.com/rouming/DevilutionX-AI",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--version", action="version", version=VERSION)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Common reusable options
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument("--attach", metavar="MEM_PATH_OR_PID",
+        help=("Attach to existing Diablo instance by path, pid or  an index of an instance from the `diablo-ai.py list` output. For example:\n"
+              "  Attach by PID:\n"
+              "    diablo-ai.py play --attach 112342\n"
+              "\n"
+              "  Attach by path:\n"
+              "    diablo-ai.py play --attach /tmp/diablo-tj3bxyvy/shared.mem\n"
+              "\n"
+              "  Attach by index:\n"
+              "    diablo-ai.py play --attach 0"
+              )
+    )
+    common_parser.add_argument("--env-radius", type=int, default=0,
+                               help="Number of environment cells surrounding the AI agent (default: 0, entire dungeon).")
+    common_parser.add_argument("--no-monsters", action="store_true",
+                               help="Disable all monsters on the level.")
+    common_parser.add_argument("--seed", type=int, default=0,
+                               help="Initial seed (default: 0).")
+
+    # play
+    play_parser = subparsers.add_parser("play", parents=[common_parser],
+                                        help="Let the human play Diablo or attach to an existing Diablo instance (devilutionX process) by providing the `--attach` option.",
+                                        formatter_class=IndentedHelpFormatter)
+    play_parser.add_argument("--no-env-log", action="store_true",
+                             help="Disable environment log on TUI screen.")
+
+    # play-ai
+    play_ai_parser = subparsers.add_parser("play-ai", parents=[common_parser],
+                                           help="Let AI play Diablo.",
+                                           formatter_class=IndentedHelpFormatter)
+
+    # train-ai
+    train_ai_parser = subparsers.add_parser("train-ai", parents=[common_parser],
+                                            help="Train the AI by creating new workers and Diablo instances (devilutionX processes), or attach to a single existing instance by providing the `--attach` option (convenient for debug purposes).",
+                                            formatter_class=IndentedHelpFormatter)
+    # General game env parameters
+    train_ai_parser.add_argument("--same-seed", action="store_true",
+                                 help="Use same seed for all runners.")
+    train_ai_parser.add_argument("--log-to-stdout", action="store_true",
+                                 help="Write logs to stdout instead of env.log.")
+    train_ai_parser.add_argument("--no-actions", action="store_true",
+                                 help="Disable agent actions (manual play mode).")
+    train_ai_parser.add_argument("--exploration-door-attraction", action="store_true",
+                                 help="Reward for approaching unexplored doors.")
+    train_ai_parser.add_argument("--exploration-door-backtrack-penalty", action="store_true",
+                                 help="Penalty for moving away from unexplored doors.")
+
+    # General RL parameters
+    train_ai_parser.add_argument("--algo",
+                                 choices=["a2c", "ppo"], default="ppo",
+                                 help="Algorithm to use: a2c | ppo")
+    train_ai_parser.add_argument("--model", default=None,
+                                 help="Name of the model (default: {ENV}_{ALGO}_{TIME})")
+    train_ai_parser.add_argument("--log-interval", type=int, default=1,
+                                 help="Number of updates between two logs (default: 1)")
+    train_ai_parser.add_argument("--save-interval", type=int, default=10,
+                                 help="Number of updates between two saves (default: 10, 0 means no saving)")
+    train_ai_parser.add_argument("--env-runners", type=int, default=1,
+                                 help="Number of environment runners or processes (default: 1)")
+    train_ai_parser.add_argument("--frames", type=int, default=10**7,
+                                 help="Number of frames of training (default: 1e7)")
+
+    # Parameters for main RL algorithm
+    train_ai_parser.add_argument("--epochs", type=int, default=4,
+                                 help="Number of epochs for PPO (default: 4)")
+    train_ai_parser.add_argument("--batch-size", type=int, default=256,
+                                 help="Batch size for PPO (default: 256)")
+    train_ai_parser.add_argument("--frames-per-env-runner", type=int, default=None,
+                                 help="Number of frames per environment runner (process) before update (default: 5 for A2C and 128 for PPO)")
+    train_ai_parser.add_argument("--discount", type=float, default=0.99,
+                                 help="Discount factor (default: 0.99)")
+    train_ai_parser.add_argument("--lr", type=float, default=0.001,
+                                 help="Learning rate (default: 0.001)")
+    train_ai_parser.add_argument("--gae-lambda", type=float, default=0.95,
+                                 help="Lambda coefficient in GAE formula (default: 0.95, 1 means no gae)")
+    train_ai_parser.add_argument("--entropy-coef", type=float, default=0.01,
+                                 help="Entropy term coefficient (default: 0.01)")
+    train_ai_parser.add_argument("--value-loss-coef", type=float, default=0.5,
+                                 help="Value loss term coefficient (default: 0.5)")
+    train_ai_parser.add_argument("--max-grad-norm", type=float, default=0.5,
+                                 help="Maximum norm of gradient (default: 0.5)")
+    train_ai_parser.add_argument("--optim-eps", type=float, default=1e-8,
+                                 help="Adam and RMSprop optimizer epsilon (default: 1e-8)")
+    train_ai_parser.add_argument("--optim-alpha", type=float, default=0.99,
+                                 help="RMSprop optimizer alpha (default: 0.99)")
+    train_ai_parser.add_argument("--clip-eps", type=float, default=0.2,
+                                 help="Clipping epsilon for PPO (default: 0.2)")
+    train_ai_parser.add_argument("--recurrence", type=int, default=1,
+                                 help="Number of time-steps gradient is backpropagated (default: 1). If > 1, a LSTM is added to the model to have memory.")
+
+    # list
+    subparsers.add_parser(
+        "list",
+        help="List all Diablo instances."
+    )
+
+    return parser
 
 def delayed_import(binary_path):
     import devilutionx_generator
@@ -386,11 +427,15 @@ def remap_movement_keys(keys):
 def get_radius(d, dunwin):
     height, width = dunwin.getmaxyx()
     dundim = diablo_state.dungeon_dim(d)
-    width = min(width, dundim[0])
-    height = min(height, dundim[1])
 
-    # Reduce the width by half to make the dungeon visually appear as
-    # an accurate square when displayed in a terminal
+    # Compensate for `R * 2 + _1_` (see `EnvRect`).
+    # We use `- 2` because of quarter
+    width = min(width, dundim[0]) - 2
+    height = min(height, dundim[1]) - 1
+
+    # Reduce the horizontal radius by half to make the dungeon
+    # visually appear as an accurate square when displayed in a
+    # terminal
     return np.array([width // 4, height // 2])
 
 def get_events_as_string(game, events):
@@ -465,8 +510,9 @@ def get_events_as_string(game, events):
 def display_matrix(dunwin, m):
     cols, rows = m.shape
 
-    # The width is reduced by half (see `get_radius()`), so in order
-    # to stretch the dungeon number of columns is multiplied by two
+    # The horizontal radius is reduced by half (see `get_radius()`),
+    # so in order to stretch the dungeon number of columns is
+    # multiplied by two
     cols *= 2
 
     # Get the screen size
@@ -490,7 +536,7 @@ def display_dungeon(d, stdscr, env_radius):
     height, width = stdscr.getmaxyx()
     dunwin = stdscr.subwin(height - (4 + 1), width, 4, 0)
     radius = get_radius(d, dunwin)
-    if env_radius is not None:
+    if env_radius:
         radius = np.minimum(radius, env_radius)
     surroundings = diablo_state.get_surroundings(d, radius)
 
@@ -553,7 +599,7 @@ def display_diablo_state(game, stdscr, events, envlog, missed_ticks, env_radius)
             _addstr(stdscr, h + i, width // 2 - len(msg) // 2, msg)
 
 
-def run_tui(stdscr, gameconfig):
+def run_tui(stdscr, args, gameconfig):
     global running
     global last_key
 
@@ -572,10 +618,10 @@ def run_tui(stdscr, gameconfig):
     while running:
         stdscr.clear()
 
-        if not gameconfig['no-env-log'] and envlog is None:
+        if not args.no_env_log and envlog is None:
             # Try to open a environment log, can be created later
             envlog = open_envlog(game)
-        env_radius = gameconfig['env-radius']
+        env_radius = args.env_radius
 
         display_diablo_state(game, stdscr, events, envlog, missed_ticks, env_radius)
 
@@ -595,213 +641,175 @@ def run_tui(stdscr, gameconfig):
 
         missed_ticks = game.update_ticks()
 
-def ai(args, gameconfig):
-    import torch
+def train_ai(args, gameconfig):
+    import tensorboardX
+    import rl.utils as utils
+    from rl.utils import device
+    from rl.model import ACModel
+    import torch_ac
 
-    from ray.rllib.callbacks.callbacks import RLlibCallback
-    from ray.rllib.algorithms.ppo import PPOConfig
-    from ray.rllib.connectors.env_to_module import FlattenObservations
-    from ray.rllib.callbacks.callbacks import RLlibCallback
-    from ray.rllib.utils.metrics import (
-        ENV_RUNNER_RESULTS,
-        EPISODE_RETURN_MEAN,
-        EPISODE_LEN_MEAN,
-    )
-    import ray
-    from ray import air, tune, train
-    from ray.air.constants import TRAINING_ITERATION
-    from ray.rllib.algorithms.ppo import PPO
-    from ray.tune.registry import register_env
-    from ray.tune.schedulers import create_scheduler
-    from ray.rllib.utils.test_utils import check_learning_achieved
+    env_name = "Diablo-v0"
 
-    class DiabloEnvCallback(RLlibCallback):
-        # New API
-        #def on_sample_end(self, *args, env_runner, metrics_logger, **kwargs):
-        def on_sample_end(self, worker, samples):
-            """Pause Diablo environment."""
-            worker.env.pause_game(True)
+    args.mem = args.recurrence > 1
 
-    # Register Diablo Gym environment
-    register_env("diablo", lambda cfg: diablo_env.DiabloEnv(cfg))
+    # Set run dir
 
-    # BEGIN CONFIG DUMP
-    # Prepare config
-    config = (
-        PPOConfig()
-        .environment("diablo", env_config=gameconfig)
-        .resources(
-            num_gpus=args['--gpus'],
-#            num_cpus_per_worker=1,
-#            num_gpus_per_worker=0,
-        )
-        .debugging(log_level='ERROR') # INFO, DEBUG, ERROR, WARN
-        .framework('torch')
-        .env_runners(
-            num_envs_per_env_runner=1,
-            num_env_runners=args['--env-runners'] if args['train-ai'] else 0,
-            # Observations are discrete (ints) -> We need to flatten (one-hot) them.
-            env_to_module_connector=lambda env: FlattenObservations(),
-        )
-        .callbacks(DiabloEnvCallback)
-        .training(
-            train_batch_size=args['--train-batch-size'],
-            # Reduce learning rate
-            lr=0.0001 if not args['--tune'] else tune.grid_search([0.01, 0.005, 0.003, 0.001, 0.0001]),
-            # Reduce batch size, large batch sizes causes instability.
-            # If batch is too large, the policy updates may be too slow to adapt,
-            # or bad updates amplified.
-#            train_batch_size_per_learner=4000,
-#            minibatch_size=512,
-            # Encourage exploration
-            entropy_coeff=0.025,
-        )
-        .evaluation(evaluation_num_env_runners=0)
-        .api_stack(enable_rl_module_and_learner=NEW_API_STACK,
-                   enable_env_runner_and_connector_v2=NEW_API_STACK)
-    )
-    # END CONFIG DUMP
+    date = datetime.datetime.now().strftime("%y-%m-%d-%H-%M-%S")
+    default_model_name = f"{env_name}_{args.algo}_seed{args.seed}_{date}"
 
-    if args['train-ai'] and args['--tune']:
-        print("RUN TUNE")
+    model_name = args.model or default_model_name
+    model_dir = utils.get_model_dir(model_name)
 
-        # ensure that checkpointing works.
-        pbt = create_scheduler(
-            "pbt",
-            perturbation_interval=1,  # To make perturb more often.
-            hyperparam_mutations={
-                "train_loop_config": {
-                    "lr": config.lr
-                },
-            },
-        )
+    # Load loggers and Tensorboard writer
 
-        # Get the best checkpoints from the trial, based on different metrics.
-        # Checkpoint with the lowest policy loss value:
-        if NEW_API_STACK:
-            policy_loss_key = f"{LEARNER_RESULTS}/{DEFAULT_MODULE_ID}/policy_loss"
-        else:
-            policy_loss_key = "info/learner/default_policy/learner_stats/policy_loss"
+    txt_logger = utils.get_txt_logger(model_dir)
+    csv_file, csv_logger = utils.get_csv_logger(model_dir)
+    tb_writer = tensorboardX.SummaryWriter(model_dir)
 
-        tuner = tune.Tuner(
-            "PPO",
-            param_space=config.to_dict(),
-            run_config=train.RunConfig(
-                #verbose=1,
-                stop={TRAINING_ITERATION: 1},
-            ),
-            tune_config=tune.TuneConfig(
-                num_samples=1,
-                metric=policy_loss_key,
-                mode="min",
-                scheduler=pbt,
-            ),
-        )
-        results = tuner.fit()
-        best_result = results.get_best_result()
-        best_config = best_result.config
+    # Log command and all script arguments
 
-        pl = best_result.metrics["info"]["learner"]["default_policy"]["learner_stats"]["policy_loss"]
+    txt_logger.info("{}\n".format(" ".join(sys.argv)))
+    txt_logger.info("{}\n".format(args))
 
-        print("TUNE FINISHED: lr=%f, policy_loss=%f" % (best_config['lr'], pl))
+    # Set seed for all randomness sources
 
-        config.lr = best_config['lr']
+    utils.seed(args.seed)
 
-    algo = config.build()
+    # Set device
 
-    CHECKPOINT_PATH = os.path.abspath("./diablo.ppo.checkpoint")
+    txt_logger.info(f"Device: {device}\n")
 
-    if not args['train-ai'] or \
-       args['--restore-from-checkpoint'] and os.path.exists(CHECKPOINT_PATH):
-        # Restore for play-ai mode or if told explicitly
-        algo.restore(CHECKPOINT_PATH)
+    # Load environments
 
-    if args['train-ai']:
-        if args['--save-to-checkpoint']:
-            os.makedirs(CHECKPOINT_PATH + "/state", exist_ok=True)
+    envs = []
+    for i in range(args.env_runners):
+        env_config = copy.deepcopy(gameconfig)
+        if not args.same_seed:
+            env_config['seed'] += i;
+        envs.append(utils.make_env(env_name, env_config))
+    txt_logger.info("Environments loaded\n")
 
-            now = datetime.datetime.now()
-            dt = now.strftime("#\n# %Y-%m-%d %H-%M-%S\n#")
+    # Load training status
 
-            # Dump exact command line for reproduction
-            with open(CHECKPOINT_PATH + "/state/cmdline.txt", "a") as f:
-                f.write(dt + "\n\n")
-                f.write(shlex.join(sys.argv) + "\n")
-                f.write("\n")
+    try:
+        status = utils.get_status(model_dir)
+    except OSError:
+        status = {"num_frames": 0, "update": 0}
+    txt_logger.info("Training status loaded\n")
 
-            # Dump git diff
-            dump_cmd_output_to_file(dt, "git diff --no-color",
-                                    CHECKPOINT_PATH + "/state/gitdiff.txt")
+    # Load observations preprocessor
 
-            # Dump git log
-            dump_cmd_output_to_file(dt, "git log -n 20 --no-color",
-                                    CHECKPOINT_PATH + "/state/gitlog.txt")
+    obs_space, preprocess_obss = utils.get_obss_preprocessor(envs[0].observation_space)
+    if "vocab" in status:
+        preprocess_obss.vocab.load_vocab(status["vocab"])
+    txt_logger.info("Observations preprocessor loaded")
 
-            # Dump gameconfig
-            dump_dict_to_file(dt, gameconfig,
-                              CHECKPOINT_PATH + "/state/gameconfig.json")
+    use_memory = True
+    use_text = False
 
-            # Dump algorithm config
-            dump_self_to_file(dt,
-                              "# BEGIN CONFIG DUMP",
-                              "# END CONFIG DUMP",
-                              CHECKPOINT_PATH + "/state/algoconfig.txt")
+    # Load model
+    acmodel = ACModel(obs_space, envs[0].action_space, use_memory, use_text)
+    if "model_state" in status:
+        acmodel.load_state_dict(status["model_state"])
+    acmodel.to(device)
+    txt_logger.info("Model loaded\n")
+    txt_logger.info("{}\n".format(acmodel))
 
-        for i in range(args['--train-iters']):
-            results = algo.train()
-            if args['--save-to-checkpoint']:
-                algo.save(CHECKPOINT_PATH)
+    # Load algo
 
-            reward = results[ENV_RUNNER_RESULTS][EPISODE_RETURN_MEAN]
-            len_mean = results[ENV_RUNNER_RESULTS][EPISODE_LEN_MEAN]
+    # Scale as in original BabyAI, otherwise success_rate never reaches 1,
+    # entropy never drops to 0, so everything is bad
+    reward_scale = 20.0
+    reshape_reward = lambda _0, _1, reward, _2: reward_scale * reward
 
-            print("Finished iter %d/%d; avg. reward %.2f, episode_len_mean=%.2f" %
-                  (i+1, args['--train-iters'], reward, len_mean))
-
-        # Stop the algorithm. Note, this is important for when
-        # defining `output_max_rows_per_file`. Otherwise,
-        # remaining episodes in the `EnvRunner`s buffer isn't written to disk.
-        algo.stop()
+    if args.algo == "a2c":
+        algo = torch_ac.A2CAlgo(envs, acmodel, device, args.frames_per_env_runner, args.discount, args.lr, args.gae_lambda,
+                                args.entropy_coef, args.value_loss_coef, args.max_grad_norm, args.recurrence,
+                                args.optim_alpha, args.optim_eps, preprocess_obss,
+                                reshape_reward)
+    elif args.algo == "ppo":
+        algo = torch_ac.PPOAlgo(envs, acmodel, device, args.frames_per_env_runner, args.discount, args.lr, args.gae_lambda,
+                                args.entropy_coef, args.value_loss_coef, args.max_grad_norm, args.recurrence,
+                                args.optim_eps, args.clip_eps, args.epochs, args.batch_size, preprocess_obss,
+                                reshape_reward)
     else:
-        # XXX This is a nasty kludge to prevent RLlib from spawning an extra runner
-        # XXX for training, even though we do evaluation. The `self-evaluation`
-        # XXX flag will be checked in the diablo_env.
-        gameconfig['self-evaluation'] = True
+        raise ValueError("Incorrect algorithm name: {}".format(args.algo))
 
-        env = diablo_env.DiabloEnv(gameconfig)
-        # Get the initial observation
-        obs, info = env.reset()
-        done = False
-        truncated = False
-        total_reward = 0.0
+    if "optimizer_state" in status:
+        algo.optimizer.load_state_dict(status["optimizer_state"])
+    txt_logger.info("Optimizer loaded\n")
 
-        while not done and not truncated:
-            action = algo.compute_single_action(obs)
-            obs, reward, done, truncated, info = env.step(action)
-            total_reward += reward
+    # Train model
 
-        print("Finished 1 episode, total-reward=%.3f" % (total_reward))
+    num_frames = status["num_frames"]
+    update = status["update"]
+    start_time = time.time()
+
+    while num_frames < args.frames:
+        # Update model parameters
+        update_start_time = time.time()
+        exps, logs1 = algo.collect_experiences()
+        logs2 = algo.update_parameters(exps)
+        logs = {**logs1, **logs2}
+        update_end_time = time.time()
+
+        num_frames += logs["num_frames"]
+        update += 1
+
+        # Print logs
+
+        if update % args.log_interval == 0:
+            fps = logs["num_frames"] / (update_end_time - update_start_time)
+            duration = int(time.time() - start_time)
+            return_per_episode = utils.synthesize(logs["return_per_episode"])
+            success_per_episode = utils.synthesize(
+                [1 if r > 0 else 0 for r in logs["return_per_episode"]])
+            rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
+            num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
+
+            header = ["update", "frames", "FPS", "duration"]
+            data = [update, num_frames, fps, duration]
+            header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
+            data += rreturn_per_episode.values()
+            header += ["success_rate"]
+            data += [success_per_episode['mean']]
+            header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
+            data += num_frames_per_episode.values()
+            header += ["entropy", "value", "policy_loss", "value_loss", "grad_norm"]
+            data += [logs["entropy"], logs["value"], logs["policy_loss"], logs["value_loss"], logs["grad_norm"]]
+
+            txt_logger.info(
+                "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | S {:.2f} | F:μσmM {:.1f} {:.1f} {} {} | H {:.3f} | V {:.3f} | pL {:.3f} | vL {:.3f} | ∇ {:.3f}"
+                .format(*data))
+
+            header += ["return_" + key for key in return_per_episode.keys()]
+            data += return_per_episode.values()
+
+            if status["num_frames"] == 0:
+                csv_logger.writerow(header)
+            csv_logger.writerow(data)
+            csv_file.flush()
+
+            for field, value in zip(header, data):
+                tb_writer.add_scalar(field, value, num_frames)
+
+        # Save status
+
+        if args.save_interval > 0 and update % args.save_interval == 0:
+            status = {"num_frames": num_frames, "update": update,
+                      "model_state": acmodel.state_dict(), "optimizer_state": algo.optimizer.state_dict()}
+            if hasattr(preprocess_obss, "vocab"):
+                status["vocab"] = preprocess_obss.vocab.vocab
+            utils.save_status(status, model_dir)
+            txt_logger.info("Status saved")
+
+def play_ai(args, gameconfig):
+    # TODO
+    pass
 
 def main():
-    args = docopt(__doc__, version=VERSION)
-
-    args["--seed"] = 0 if args["--seed"] is None \
-        else int(args["--seed"])
-    args["--train-batch-size"] = 200 if args["--train-batch-size"] is None \
-        else int(args["--train-batch-size"])
-    args["--train-iters"] = 3 if args["--train-iters"] is None \
-        else int(args["--train-iters"])
-    args["--env-runners"] = 1 if args["--env-runners"] is None \
-        else int(args["--env-runners"])
-    args["--gpus"] = 0 if args["--gpus"] is None \
-        else int(args["--gpus"])
-    args["--env-radius"] = None if args["--env-radius"] is None \
-        else int(args["--env-radius"])
-    args["--env-radius"] = None if args["--env-radius"] == 0 \
-        else args["--env-radius"]
-
-    args["--exploration-door-attraction"] = True if args["--exploration-door-backtrack-penalty"] \
-        else args["--exploration-door-attraction"]
+    parser = make_diablo_parser()
+    args = parser.parse_args()
 
     config = configparser.ConfigParser()
     config.read('diablo-ai.ini')
@@ -825,20 +833,28 @@ def main():
         "mshared-filename": diablo_mshared_filename,
         "diablo-bin-path": diablo_bin_path,
 
-        "train-ai": args["train-ai"],
-        "seed": args["--seed"],
-        "same-seed": args["--same-seed"],
-        "no-monsters": args["--no-monsters"],
-        "env-radius": args["--env-radius"],
-        "log-to-stdout": args["--log-to-stdout"],
-        "no-actions": args["--no-actions"],
-        "no-env-log": args["--no-env-log"],
-        "exploration-door-attraction": args["--exploration-door-attraction"],
-        "exploration-door-backtrack-penalty": args["--exploration-door-backtrack-penalty"],
+        # Common
+        "seed": args.seed,
+        "no-monsters": args.no_monsters,
+        "env-radius": args.env_radius,
+
+        # Train
+        "frames-per-env-runner": args.frames_per_env_runner \
+            if hasattr(args, "frames_per_env_runner") else 0,
+        "same-seed": args.same_seed \
+            if hasattr(args, "same_seed") else 0,
+        "log-to-stdout": args.log_to_stdout \
+            if hasattr(args, "log_to_stdout") else False,
+        "no-actions": args.no_actions \
+            if hasattr(args, "no_actions") else False,
+        "exploration-door-attraction": args.exploration_door_attraction \
+            if hasattr(args, "exploration_door_attraction") else False,
+        "exploration-door-backtrack-penalty": args.exploration_door_backtrack_penalty \
+            if hasattr(args, "exploration_door_backtrack_penalty") else False,
     }
 
-    if args['--attach']:
-        path_or_pid = args['--attach']
+    if args.attach:
+        path_or_pid = args.attach
 
         if re.match(r'^\d+$', path_or_pid):
             pid_or_index = int(path_or_pid)
@@ -870,14 +886,14 @@ def main():
                   path_or_pid)
             sys.exit(1)
 
-    if args['play']:
+    if args.command == 'play':
         # Run the curses application
-        curses.wrapper(lambda stdscr: run_tui(stdscr, gameconfig))
-    elif args['train-ai']:
-        ai(args, gameconfig)
-    elif args['play-ai']:
-        ai(args, gameconfig)
-    elif args['list']:
+        curses.wrapper(lambda stdscr: run_tui(stdscr, args, gameconfig))
+    elif args.command == 'train-ai':
+        train_ai(args, gameconfig)
+    elif args.command == 'play-ai':
+        play_ai(args, gameconfig)
+    elif args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
     else:

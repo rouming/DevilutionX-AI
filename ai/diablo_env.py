@@ -110,7 +110,12 @@ class DiabloEnv(gym.Env):
 
     @staticmethod
     def action_mask(d, env, what):
-        """Computes an action mask for the action space using the state information."""
+        """
+        Computes an action mask for the action space using the state information.
+        For example can be called to mask all actions to go to triggers:
+             DiabloEnv.action_mask(d, env,
+                                   DiabloEnv.ActionMask.MASK_TRIGGERS.value)
+        """
         mask = np.full(len(DiabloEnv.ActionEnum), 1, dtype=np.int8)
         player_pos = diablo_state.player_position(d)
 
@@ -122,8 +127,8 @@ class DiabloEnv(gym.Env):
                 continue
 
             if what & DiabloEnv.ActionMask.MASK_TRIGGERS.value and \
-               tile & diablo_state.EnvironmentFlag.Trigger.value:
-                # Block in the direction of any trigger, so forbid
+               tile & diablo_state.EnvironmentFlag.PrevTrigger.value:
+                # Block in the direction of previous trigger, so forbid
                 # escaping to the town
                 # TODO: this blocks all the trigger including stairs to the
                 # next level
@@ -143,16 +148,15 @@ class DiabloEnv(gym.Env):
 
         return mask
 
-    def __init__(self, env_config):
+    def __init__(self, env_config, **kwargs):
+        if env_config is None:
+            raise ValueError("env_config must be provided!")
         self.config = env_config
         self.seed = self.config['seed']
-        if self.config['train-ai'] and not self.config['same-seed']:
-            self.seed += env_config.worker_index - 1
-            # Update seed for further diablo run call
-            env_config["seed"] = self.seed
+        self.steps_per_update = self.config['frames-per-env-runner']
         self.paused = False
         self.env_radius = None
-        if self.config['env-radius'] is not None:
+        if self.config['env-radius']:
             radius = self.config['env-radius']
             self.env_radius = np.array([radius, radius])
 
@@ -207,25 +211,36 @@ class DiabloEnv(gym.Env):
 
         self.action_space = gym.spaces.Discrete(len(DiabloEnv.ActionEnum))
 
-        env_high = (1 << len(diablo_state.EnvironmentFlag)) - 1
-        # Don't forget to change dtype if does not fit max number of bits
-        assert env_high <= np.iinfo(env.dtype).max
+        nr_channels = len(diablo_state.EnvironmentFlag) + env_status.shape[0]
         self.observation_space = gym.spaces.Dict({
-                "env-status":  gym.spaces.Box(low=0,
-                                              high=0xffffff,
-                                              shape=env_status.shape,
-                                              dtype=env_status.dtype),
-                "environment": gym.spaces.Box(low=0,
-                                              high=env_high,
-                                              shape=env.shape,
-                                              dtype=env.dtype),
-            }
-        )
+            "image": gym.spaces.Box(low=0,
+                                    high=1,
+                                    shape=(*env.shape, nr_channels),
+                                    dtype=np.float32)
+        })
 
-        # XXX This is a nasty kludge to prevent RLlib from spawning
-        # XXX an extra runner for training, even though we do evaluation.
-        if not env_config['train-ai'] and 'self-evaluation' not in env_config:
-            self.game.stop_or_detach()
+    def observation_to_one_hot(self, env_status, env):
+        # Convert dungeon map bitset into binary channels
+        nr_bits = len(diablo_state.EnvironmentFlag)
+        # Represent environment as bits,
+        # i.e. (N, M) -> (N, M * sizeof(env.dtype) * 8)
+        bit_planes = np.unpackbits(env.view(np.uint8), bitorder='little', axis=-1)
+        # Split rows on the number of columns, i.e. M, and then stack
+        # the resulting arrays to have (N, M, sizeof(env.dtype) * 8)
+        bit_planes = np.stack(np.split(bit_planes, env.shape[-1], axis=-1), axis=1)
+        # Extract only used channels, i.e. (N, M, NR_BITS)
+        bit_planes = bit_planes[:, :, :nr_bits]
+
+        # Normalize env_status
+        env_status = env_status.astype(np.float32) / 0xfffff
+        assert not np.any(env_status > np.float32(1.))
+
+        # Repeat across entire environment, so resulting shape will be
+        # (N, M, env_status.shape)
+        env_status = np.tile(env_status, (*env.shape, 1))
+
+        # (N, M, bit_planes.shape[-1] + env_status.shape)
+        return np.concat([bit_planes, env_status], axis=-1)
 
     def pause_game(self, pause=True):
         if self.paused != pause:
@@ -303,17 +318,11 @@ class DiabloEnv(gym.Env):
         self.last_steps_cnt = 0
         self.steps_cnt = 0
 
-        init_obs = {
-            "env-status":  env_status,
-            "environment": env,
+        obss = {
+            "image": self.observation_to_one_hot(env_status, env)
         }
 
-        init_info = {
-            "action_mask": DiabloEnv.action_mask(d, env,
-                                   DiabloEnv.ActionMask.MASK_TRIGGERS.value)
-        }
-
-        return init_obs, init_info
+        return obss, {}
 
     def is_agent_stuck(self, d, was_exploring):
         p = diablo_state.player_position(d)
@@ -379,10 +388,6 @@ class DiabloEnv(gym.Env):
         return max(min_reward, reward)
 
     def evaluate_step(self, d, env, action):
-        # Mask triggers only, which are stairs to next level or to the town
-        action_mask = DiabloEnv.action_mask(d, env,
-                               DiabloEnv.ActionMask.MASK_TRIGGERS.value)
-
         obj_cnt = diablo_state.count_active_objects(d)
         closed_doors_ids = diablo_state.get_closed_doors_ids(d)
         items_cnt = diablo_state.count_active_items(d)
@@ -440,11 +445,9 @@ class DiabloEnv(gym.Env):
             done = True
             print("Death, R %.1f" % reward, file=self.log)
         elif d.player.plrlevel < self.start_dungeon_level:
-            # XXX: That's a cludge: I do not know how to make an
-            # XXX: action_mask for RLlib work, so we just done with this
-            # XXX: episode with negative reward if agent has stepped
-            # XXX: into a trigger to escape to the town
-            reward = -10.0
+            # Done with this episode with 0 reward if agent has
+            # stepped into a trigger to escape to the town
+            reward = 0.0
             done = True
             print("Escape, R %.1f" % reward, file=self.log)
         elif d.player.plrlevel > self.start_dungeon_level:
@@ -531,7 +534,7 @@ class DiabloEnv(gym.Env):
             # Penalty for NOP
             reward = -0.1
 
-        return reward, done, truncated, action_mask
+        return reward, done, truncated
 
     def step(self, action):
         self.steps_cnt += 1
@@ -560,18 +563,29 @@ class DiabloEnv(gym.Env):
         env_status = self.get_env_status(d)
         env = diablo_state.get_environment(d, radius=self.env_radius)
 
-        reward, done, truncated, action_mask = self.evaluate_step(d, env, action)
+        reward, done, truncated = self.evaluate_step(d, env, action)
         self.total_reward += reward
+
+        if self.steps_cnt % self.steps_per_update == 0:
+            # Pause the game if update was finished
+            self.pause_game(True)
 
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        next_obs = {
-            "env-status":  env_status,
-            "environment": env,
-        }
-        next_info = {
-            "action_mask": action_mask
+        obss = {
+            "image": self.observation_to_one_hot(env_status, env)
         }
 
-        return next_obs, reward, done, truncated, next_info
+        return obss, reward, done, truncated, {}
+
+
+from gymnasium.envs.registration import register
+
+def register_diablo_envs():
+    register(
+        id="Diablo-v0",
+        entry_point=DiabloEnv,
+    )
+
+register_diablo_envs()
