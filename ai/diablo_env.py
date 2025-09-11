@@ -147,6 +147,45 @@ class DiabloEnv(gym.Env):
 
         return mask
 
+    @staticmethod
+    def observation_to_one_hot(env_status, env):
+        """
+        Convert a dungeon observation into a one-hot style tensor.
+        Steps:
+        - Expand `env` bitfields into binary planes: (N, M, NR_BITS)
+        - Normalize and broadcast `env_status` across the grid: (N, M, S)
+        - Concatenate both along the channel axis: (N, M, NR_BITS + S)
+
+        Args:
+          env_status (np.ndarray): 1D environment status vector
+          env (np.ndarray): 2D dungeon map with bitfield-encoded flags
+
+        Returns:
+          np.ndarray: Combined observation tensor of shape
+                      (N, M, NR_BITS + env_status.shape[-1])
+        """
+        # Convert dungeon map bitset into binary channels
+        nr_bits = len(diablo_state.EnvironmentFlag)
+        # Represent environment as bits,
+        # i.e. (N, M) -> (N, M * sizeof(env.dtype) * 8)
+        bit_planes = np.unpackbits(env.view(np.uint8), bitorder='little', axis=-1)
+        # Split rows on the number of columns, i.e. M, and then stack
+        # the resulting arrays to have (N, M, sizeof(env.dtype) * 8)
+        bit_planes = np.stack(np.split(bit_planes, env.shape[-1], axis=-1), axis=1)
+        # Extract only used channels, i.e. (N, M, NR_BITS)
+        bit_planes = bit_planes[:, :, :nr_bits]
+
+        # Normalize env_status
+        env_status = env_status.astype(np.float32) / 0xfffff
+        assert not np.any(env_status > np.float32(1.))
+
+        # Repeat across entire environment, so resulting shape will be
+        # (N, M, env_status.shape)
+        env_status = np.tile(env_status, (*env.shape, 1))
+
+        # (N, M, bit_planes.shape[-1] + env_status.shape)
+        return np.concat([bit_planes, env_status], axis=-1)
+
     def __init__(self, env_config, **kwargs):
         if env_config is None:
             raise ValueError("env_config must be provided!")
@@ -188,29 +227,6 @@ class DiabloEnv(gym.Env):
 
         # Initialize the state
         self.reset()
-
-    def observation_to_one_hot(self, env_status, env):
-        # Convert dungeon map bitset into binary channels
-        nr_bits = len(diablo_state.EnvironmentFlag)
-        # Represent environment as bits,
-        # i.e. (N, M) -> (N, M * sizeof(env.dtype) * 8)
-        bit_planes = np.unpackbits(env.view(np.uint8), bitorder='little', axis=-1)
-        # Split rows on the number of columns, i.e. M, and then stack
-        # the resulting arrays to have (N, M, sizeof(env.dtype) * 8)
-        bit_planes = np.stack(np.split(bit_planes, env.shape[-1], axis=-1), axis=1)
-        # Extract only used channels, i.e. (N, M, NR_BITS)
-        bit_planes = bit_planes[:, :, :nr_bits]
-
-        # Normalize env_status
-        env_status = env_status.astype(np.float32) / 0xfffff
-        assert not np.any(env_status > np.float32(1.))
-
-        # Repeat across entire environment, so resulting shape will be
-        # (N, M, env_status.shape)
-        env_status = np.tile(env_status, (*env.shape, 1))
-
-        # (N, M, bit_planes.shape[-1] + env_status.shape)
-        return np.concat([bit_planes, env_status], axis=-1)
 
     def pause_game(self, pause=True):
         if self.paused != pause:
@@ -301,7 +317,7 @@ class DiabloEnv(gym.Env):
         # Starting dungeon level
         self.start_dungeon_level = d.player.plrlevel
 
-        obss = self.observation_to_one_hot(env_status, env)
+        obss = DiabloEnv.observation_to_one_hot(env_status, env)
 
         return obss, {}
 
@@ -550,7 +566,7 @@ class DiabloEnv(gym.Env):
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        obss = self.observation_to_one_hot(env_status, env)
+        obss = DiabloEnv.observation_to_one_hot(env_status, env)
 
         return obss, reward, done, truncated, {}
 

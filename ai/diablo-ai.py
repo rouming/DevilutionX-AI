@@ -845,6 +845,7 @@ def play_ai(args, gameconfig):
         model_dir = utils.get_model_dir(args.model)
     agent = utils.Agent(env.observation_space, env.action_space, model_dir,
                         args.cnn_arch, argmax=args.argmax,
+                        embedding_dim=args.embedding_dim,
                         use_memory=True, use_text=False)
     print("Agent loaded\n")
 
