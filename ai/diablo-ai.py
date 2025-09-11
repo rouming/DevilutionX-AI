@@ -166,7 +166,7 @@ def make_diablo_parser():
     # list
     subparsers.add_parser(
         "list",
-        help="List all Diablo instances."
+        help="List all Diablo instances grouped by parent ID of the test runner."
     )
 
     return parser
@@ -355,8 +355,8 @@ def dump_self_to_file(dt, begin, end, file_path):
 def list_devilution_processes(binary_path, mshared_filename):
     result = procutils.find_processes_with_mapped_file(binary_path, mshared_filename)
     if result:
-        for proc in result:
-            print("%s\t%s" % (proc['pid'], proc['mshared_path']))
+        for i, proc in enumerate(result):
+            print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
 
 def handle_keyboard(stdscr):
     global last_key

@@ -567,7 +567,7 @@ class DiabloGame:
                          mshared_filename=mshared_filename,
                          no_monsters=1 if config["no-monsters"] else 0)
 
-        prefix = "diablo-%d-" % config["seed"]
+        prefix = "diablo-%d-%d-" % (config["seed"], os.getpid())
         state_dir = tempfile.TemporaryDirectory(prefix=prefix)
         cfg_file = open(state_dir.name + "/diablo.ini", "w")
         cfg_file.write(cfg)
