@@ -95,7 +95,6 @@ class CNN3(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            # --- First ResidualBlock replaced ---
             # This layer doubles the channels (64->128) and halves the grid size (stride=2)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(128),
@@ -104,7 +103,6 @@ class CNN3(nn.Module):
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
 
-            # --- Second ResidualBlock replaced ---
             # This layer doubles the channels (128->256) and halves the grid size (stride=2)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(256),
@@ -117,6 +115,49 @@ class CNN3(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(256, output_dim)
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+class CNN32(nn.Module):
+    def __init__(self, in_channels=16, output_dim=512):
+        super(CNN32, self).__init__()
+
+        self.network = nn.Sequential(
+            # Initial convolution
+            nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+
+            # This layer doubles the channels (64->128) and halves the grid size (stride=2)
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # Downsamples
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1), # No downsampling
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+
+            # This layer doubles the channels (128->256) and halves the grid size (stride=2)
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # Downsamples
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), # No downsampling
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+
+            # This layer doubles the channels (256->512) and halves the grid size (stride=2)
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), # Downsamples
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1), # No downsampling
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+
+            # Head Part (untouched)
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(512, output_dim)
         )
 
     def forward(self, x):
@@ -301,9 +342,11 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
         elif self.cnn_arch == "cnn2":
             self.image_conv = CNN2(in_channels=in_channels, output_dim=embedding_dim)
 
-        elif self.cnn_arch == "cnn3" or \
-             self.cnn_arch == "cnn31":
+        elif self.cnn_arch in ("cnn3", "cnn31"):
             self.image_conv = CNN3(in_channels=in_channels, output_dim=embedding_dim)
+
+        elif self.cnn_arch == "cnn32":
+            self.image_conv = CNN32(in_channels=in_channels, output_dim=embedding_dim)
 
         elif self.cnn_arch == "cnn35":
             self.image_conv = CNN35(in_channels=in_channels, output_dim=embedding_dim)
@@ -412,7 +455,7 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
                 nn.ReLU(),
                 nn.Linear(256, 1)
             )
-        elif self.cnn_arch == "cnn35":
+        elif self.cnn_arch in ("cnn32", "cnn35"):
             # Define actor's model, which gradually reduces the feature
             # size for large embeddings, like:
             # 512 -> 256 -> action_space

@@ -84,8 +84,8 @@ def make_diablo_parser():
     # common_ai
     common_ai_parser = argparse.ArgumentParser(add_help=False)
     common_ai_parser.add_argument("--cnn-arch", required=True,
-                                  choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn35", "cnn4"],
-                                  help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn35 | cnn4")
+                                  choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn35", "cnn4"],
+                                  help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
     common_ai_parser.add_argument("--embedding-dim", type=int, default=256,
                                   help="dimension of embeddings (default: 256)")
 
