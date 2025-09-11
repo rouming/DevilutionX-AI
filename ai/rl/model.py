@@ -63,9 +63,9 @@ class ResidualBlock(nn.Module):
         out = self.relu(out)
         return out
 
-class CombinedCNN(nn.Module):
+class CNN2(nn.Module):
     def __init__(self, in_channels=16, output_dim=128):
-        super(CombinedCNN, self).__init__()
+        super(CNN2, self).__init__()
 
         self.network = nn.Sequential(
             # Feature Extraction Part
@@ -85,9 +85,9 @@ class CombinedCNN(nn.Module):
         # The forward pass is now just a single call
         return self.network(x)
 
-class SimpleCNN(nn.Module):
+class CNN3(nn.Module):
     def __init__(self, in_channels=16, output_dim=128):
-        super(SimpleCNN, self).__init__()
+        super(CNN3, self).__init__()
 
         self.network = nn.Sequential(
             # Initial convolution
@@ -122,9 +122,39 @@ class SimpleCNN(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-class RobustCNN(nn.Module):
+class CNN35(nn.Module):
+    def __init__(self, in_channels=16, output_dim=512):
+        super(CNN35, self).__init__()
+
+        self.network = nn.Sequential(
+            # Initial conv
+            nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Block 1: downsample (64->128)
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Block 2: downsample (128->256)
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Block 3: downsample (256->512)
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Pool to fixed size and flatten
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(512, output_dim)
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+class CNN4(nn.Module):
     def __init__(self, in_channels=16, output_dim=2048):
-        super(RobustCNN, self).__init__()
+        super(CNN4, self).__init__()
 
         self.network = nn.Sequential(
             # Initial convolution
@@ -269,13 +299,17 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
                 nn.ReLU()
             )
         elif self.cnn_arch == "cnn2":
-            self.image_conv = CombinedCNN(in_channels=in_channels, output_dim=embedding_dim)
+            self.image_conv = CNN2(in_channels=in_channels, output_dim=embedding_dim)
 
-        elif self.cnn_arch == "cnn3":
-            self.image_conv = SimpleCNN(in_channels=in_channels, output_dim=embedding_dim)
+        elif self.cnn_arch == "cnn3" or \
+             self.cnn_arch == "cnn31":
+            self.image_conv = CNN3(in_channels=in_channels, output_dim=embedding_dim)
+
+        elif self.cnn_arch == "cnn35":
+            self.image_conv = CNN35(in_channels=in_channels, output_dim=embedding_dim)
 
         elif self.cnn_arch == "cnn4":
-            self.image_conv = RobustCNN(in_channels=in_channels, output_dim=embedding_dim)
+            self.image_conv = CNN4(in_channels=in_channels, output_dim=embedding_dim)
 
         elif self.cnn_arch.startswith("expert_filmcnn"):
             if not self.use_text:
@@ -377,6 +411,45 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
                 nn.Linear(512, 256),
                 nn.ReLU(),
                 nn.Linear(256, 1)
+            )
+        elif self.cnn_arch == "cnn35":
+            # Define actor's model, which gradually reduces the feature
+            # size for large embeddings, like:
+            # 512 -> 256 -> action_space
+            self.actor = nn.Sequential(
+                nn.Linear(self.embedding_size, 256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Linear(128, action_space.n)
+            )
+
+            # Define critic's model, has the same funnel structure as the
+            # actor, but outputs a single value
+            self.critic = nn.Sequential(
+                nn.Linear(self.embedding_size, 256),
+                nn.ReLU(),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Linear(128, 1)
+            )
+        elif self.cnn_arch == "cnn31":
+            # Define actor's model
+            self.actor = nn.Sequential(
+                nn.Linear(self.embedding_size, 128),
+                nn.ReLU(),
+                nn.Linear(128, 128),
+                nn.ReLU(),
+                nn.Linear(128, action_space.n)
+            )
+
+            # Define critic's model
+            self.critic = nn.Sequential(
+                nn.Linear(self.embedding_size, 128),
+                nn.ReLU(),
+                nn.Linear(128, 128),
+                nn.ReLU(),
+                nn.Linear(128, 1)
             )
         else:
             # Define actor's model

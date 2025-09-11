@@ -81,19 +81,22 @@ def make_diablo_parser():
     play_parser.add_argument("--no-env-log", action="store_true",
                              help="Disable environment log on TUI screen.")
 
+    # common_ai
+    common_ai_parser = argparse.ArgumentParser(add_help=False)
+    common_ai_parser.add_argument("--cnn-arch", required=True,
+                                  choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn35", "cnn4"],
+                                  help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn35 | cnn4")
+    common_ai_parser.add_argument("--embedding-dim", type=int, default=256,
+                                  help="dimension of embeddings (default: 256)")
+
     # play-ai
-    play_ai_parser = subparsers.add_parser("play-ai", parents=[common_parser],
+    play_ai_parser = subparsers.add_parser("play-ai", parents=[common_parser, common_ai_parser],
                                            help="Let AI play Diablo.",
                                            formatter_class=IndentedHelpFormatter)
     play_ai_parser.add_argument("--env", required=True,
                                 help="name of the environment to be run (REQUIRED)")
     play_ai_parser.add_argument("--model", required=True,
                                 help="name of the trained model (REQUIRED)")
-    play_ai_parser.add_argument("--cnn-arch", required=True,
-                                choices=["cnn1", "cnn2", "cnn3", "cnn4"],
-                                help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn4")
-    play_ai_parser.add_argument("--embedding-dim", type=int, default=256,
-                                help="dimension of embeddings (default: 256)")
     play_ai_parser.add_argument("--argmax", action="store_true", default=False,
                                 help="select the action with highest probability (default: False)")
     play_ai_parser.add_argument("--pause", type=float, default=0.1,
@@ -102,7 +105,7 @@ def make_diablo_parser():
                                 help="number of episodes to evaluate (default: 1)")
 
     # train-ai
-    train_ai_parser = subparsers.add_parser("train-ai", parents=[common_parser],
+    train_ai_parser = subparsers.add_parser("train-ai", parents=[common_parser, common_ai_parser],
                                             help="Train the AI by creating new workers and Diablo instances (devilutionX processes), or attach to a single existing instance by providing the `--attach` option (convenient for debug purposes).",
                                             formatter_class=IndentedHelpFormatter)
     # General game env parameters
@@ -123,11 +126,6 @@ def make_diablo_parser():
                                  help="name of the environment to train on (REQUIRED)")
     train_ai_parser.add_argument("--model", default=None,
                                  help="Name of the model (default: {ENV}_{ALGO}_{TIME})")
-    train_ai_parser.add_argument("--cnn-arch", required=True,
-                                 choices=["cnn1", "cnn2", "cnn3", "cnn4"],
-                                 help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn4")
-    train_ai_parser.add_argument("--embedding-dim", type=int, default=256,
-                                 help="dimension of embeddings (default: 256)")
     train_ai_parser.add_argument("--log-interval", type=int, default=1,
                                  help="Number of updates between two logs (default: 1)")
     train_ai_parser.add_argument("--save-interval", type=int, default=10,
