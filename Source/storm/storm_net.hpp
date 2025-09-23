@@ -129,7 +129,7 @@ bool SNetGetOwnerTurnsWaiting(uint32_t *);
 bool SNetUnregisterEventHandler(event_type);
 bool SNetRegisterEventHandler(event_type, SEVTHANDLER);
 bool SNetSetBasePlayer(int);
-bool SNetInitializeProvider(uint32_t provider, struct GameData *gameData);
+bool SNetInitializeProvider(uint32_t provider, struct GameData *gameData, bool skipMenu = false);
 void SNetGetProviderCaps(struct _SNETCAPS *);
 
 bool DvlNet_SendInfoRequest();

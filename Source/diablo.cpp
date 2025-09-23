@@ -119,6 +119,7 @@ namespace devilution {
 uint32_t DungeonSeeds[NUMLEVELS];
 std::optional<uint32_t> LevelSeeds[NUMLEVELS];
 Point MousePosition;
+bool gbSkipMenu;
 bool gbRunGame;
 bool gbRunGameResult;
 bool ReturnToMainMenu;
@@ -861,9 +862,11 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys)
 		} else if (bit == RING_ENTRY_KEY_NEW) {
 			// Pretend the NEW key was injected
 			injected = true;
-			if (sdl_type == SDL_KEYDOWN)
+			if (sdl_type == SDL_KEYDOWN) {
 				// Exit current game loop if new game is requested
 				gbRunGame = false;
+				gbSkipMenu = true;
+			}
 			continue;
 		} else if (bit == RING_ENTRY_KEY_LOAD) {
 			sdl_sym  = SDLK_F3;
@@ -2660,10 +2663,11 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 		gbLoadGame = false;
 
-		if (!NetInit(bSinglePlayer)) {
+		if (!NetInit(bSinglePlayer, gbSkipMenu)) {
 			gbRunGameResult = true;
 			break;
 		}
+		gbSkipMenu = false;
 
 		// Save 2.8 MiB of RAM by freeing all main menu resources
 		// before starting the game.

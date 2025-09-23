@@ -122,14 +122,16 @@ bool SNetLeaveGame(int type)
  * @brief Called by engine for single, called by ui for multi
  * @param provider BNET, IPXN, MODM, SCBL or UDPN
  * @param gameData The game data
+ * @param skipMenu start default hero class if is @true
  */
-bool SNetInitializeProvider(uint32_t provider, struct GameData *gameData)
+bool SNetInitializeProvider(uint32_t provider, struct GameData *gameData,
+							bool skipMenu)
 {
 #ifndef NONET
 	std::lock_guard<SdlMutex> lg(storm_net_mutex);
 #endif
 	dvlnet_inst = net::abstract_net::MakeNet(provider);
-	if (HeadlessMode && !demo::IsRunning()) {
+	if (skipMenu || (HeadlessMode && !demo::IsRunning())) {
 		devilution::_uidefaultstats defaults;
 		devilution::_uiheroinfo heroInfo;
 		HeroClass heroClass = HeroClass::Warrior;
