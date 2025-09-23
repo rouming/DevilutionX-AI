@@ -2517,10 +2517,11 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 		gbLoadGame = false;
 
-		if (!NetInit(bSinglePlayer)) {
+		if (!NetInit(bSinglePlayer, gbSkipMenu)) {
 			gbRunGameResult = true;
 			break;
 		}
+		gbSkipMenu = false;
 
 		// Save 2.8 MiB of RAM by freeing all main menu resources
 		// before starting the game.

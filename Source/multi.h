@@ -76,7 +76,7 @@ bool multi_handle_delta();
 void multi_process_network_packets();
 void multi_send_zero_packet(uint8_t pnum, _cmd_id bCmd, const std::byte *data, size_t size);
 void NetClose();
-bool NetInit(bool bSinglePlayer);
+bool NetInit(bool bSinglePlayer, bool skipMenu);
 void recv_plrinfo(Player &player, const TCmdPlrInfoHdr &header, bool recv);
 
 } // namespace devilution

@@ -448,11 +448,11 @@ void UnregisterNetEventHandlers()
 	}
 }
 
-bool InitSingle(GameData *gameData)
+bool InitSingle(GameData *gameData, bool skipMenu)
 {
 	Players.resize(1);
 
-	if (!SNetInitializeProvider(SELCONN_LOOPBACK, gameData)) {
+	if (!SNetInitializeProvider(SELCONN_LOOPBACK, gameData, skipMenu)) {
 		return false;
 	}
 
@@ -764,7 +764,7 @@ void NetClose()
 	}
 }
 
-bool NetInit(bool bSinglePlayer)
+bool NetInit(bool bSinglePlayer, bool skipMenu)
 {
 	while (true) {
 		SetRndSeed(0);
@@ -779,7 +779,7 @@ bool NetInit(bool bSinglePlayer)
 		memset(sgwPackPlrOffsetTbl, 0, sizeof(sgwPackPlrOffsetTbl));
 		SNetSetBasePlayer(0);
 		if (bSinglePlayer) {
-			if (!InitSingle(&sgGameInitInfo))
+			if (!InitSingle(&sgGameInitInfo, skipMenu))
 				return false;
 		} else {
 			if (!InitMulti(&sgGameInitInfo))
