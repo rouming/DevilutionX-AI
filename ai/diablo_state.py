@@ -646,7 +646,8 @@ class DiabloGame:
         # pulls in pygame, which modifies the current environment and
         # sets `SDL_AUDIODRIVER=dsp`. This change removes the variable
         # and helps to init SDL properly in a child app (devilutionx).
-        del env["SDL_AUDIODRIVER"]
+        if "SDL_AUDIODRIVER" in env:
+            del env["SDL_AUDIODRIVER"]
         proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
         state_path = state_dir.name
         mshared_path = os.path.abspath(state_dir.name + "/" + mshared_filename)

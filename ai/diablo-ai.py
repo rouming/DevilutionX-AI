@@ -22,6 +22,7 @@ import time
 
 import numpy as np
 import procutils
+import sprout
 from rl import utils
 
 VERSION='Diablo AI Tool v1.3'
@@ -102,6 +103,12 @@ def make_diablo_parser():
     # See also `incompatible_options`
     common_parser.add_argument("--fixed-seed", action="store_true",
                                help="Every new game starts with the same seed, so the game world (dungeon) is identical each time.")
+
+    # sprout: reuse sprout's parser
+    sprout_parser = sprout.build_parser(prog="diablo-ai.py sprout",
+                                        suppress_working_dir=True, add_help=False)
+    sprout_parser = subparsers.add_parser("sprout", parents=[sprout_parser],
+                                          help="Access AI models through Sprout snapshot manager")
 
     # play
     play_parser = subparsers.add_parser("play", parents=[common_parser],
@@ -200,7 +207,7 @@ def make_diablo_parser():
         help="List all Diablo instances grouped by parent ID of the test runner."
     )
 
-    return incompatible_options, parser
+    return incompatible_options, parser, train_ai_parser
 
 def delayed_import(binary_path):
     import devilutionx_generator
@@ -694,7 +701,6 @@ def train_ai(args, gameconfig):
     from rl.utils import device
     from rl.model import ACModel
     from rl import torch_ac
-    from sprout import Sprout
 
     # The model is essentially just a folder, and it depends on how
     # you open a snapshot in Sprout. Therefore, skip the model to
@@ -705,20 +711,17 @@ def train_ai(args, gameconfig):
     params_str = " ".join(f"{k}={v}" for k, v in vars(args).items() if k not in skip_keys)
 
     # Create a new run or snapshot previous
-    sprout = Sprout(utils.get_models_dir())
+    s = sprout.Sprout(utils.get_models_dir())
     if not os.path.isdir(model_dir):
         # Create model state
-        sprout.create(group=args.env,
-                      head=args.model,
-                      params_str=params_str)
+        s.create(group=args.env, head=args.model, params_str=params_str)
     elif not args.cont:
         # Create a snapshot of a model state
-        sprout.create(from_head=args.model,
-                      params_str=params_str)
+        s.create(from_head=args.model, params_str=params_str)
     else:
         # Continue in the current head, but be careful; firstly, check
         # if the environment has changed
-        run, _ = sprout.get_run(head=args.model)
+        run, _ = s.get_run(head=args.model)
         params = run.get("params", {})
         env = params.get("env", "")
         if env != args.env:
@@ -733,8 +736,7 @@ def train_ai(args, gameconfig):
 
         # Change parameters for the existing model and continue
         # training without creating a snapshot
-        sprout.edit(head=args.model,
-                    params_str=params_str)
+        s.edit(head=args.model, params_str=params_str)
 
     args.mem = args.recurrence > 1
 
@@ -908,7 +910,7 @@ def main():
     # Set big enough limits
     set_rlimits()
 
-    incompatible_options, parser = make_diablo_parser()
+    incompatible_options, parser, train_ai_parser = make_diablo_parser()
     args = parser.parse_args()
 
     # Check if some options are incompatible
@@ -941,6 +943,11 @@ def main():
     diablo_bin_path = str(diablo_build_path / "devilutionx")
     delayed_import(diablo_bin_path)
 
+    if args.command == "sprout":
+        # re-run through sprout.main(), but pass sys.argv after "sprout"
+        sprout_args = ['--working', utils.get_models_dir()]
+        sprout_args += sys.argv[sys.argv.index("sprout")+1:]
+        return sprout.main(argv=sprout_args, default_parser=train_ai_parser)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)

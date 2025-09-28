@@ -134,6 +134,92 @@ def decode_escapes(s: Optional[str]) -> Optional[str]:
     except Exception:
         return s
 
+def extract_arg_defs(parser: argparse.ArgumentParser):
+    """Extract definitions from argparse (not parsed values)"""
+    arg_defs = {}
+    for action in parser._actions:
+        if action.dest == "help":
+            continue
+        arg_defs[action.dest] = {
+            "default": action.default,
+            "required": action.required,
+            "option_strings": action.option_strings,
+            "action": action,
+        }
+    return arg_defs
+
+def make_cli_opts(arg_defs, new_params):
+    """Compare new parameters with argparse defaults and required
+    values, and return a list of CLI options"""
+    opts = []
+    missing = []
+
+    for name, meta in arg_defs.items():
+        default_val = meta["default"]
+        required = meta["required"]
+        new_val = new_params.get(name, None)
+
+        # Handle required params: add with special marker if missing
+        if required and new_val is None:
+            opt_string = meta["option_strings"][0]
+            if isinstance(default_val, bool):
+                missing.append(f"{opt_string}-MISSING")
+            else:
+                missing.append(f"{opt_string} MISSING")
+
+        # Include if new param overrides default
+        elif new_val is not None and new_val != default_val:
+            opt_string = meta["option_strings"][0]
+            if isinstance(default_val, bool):
+                if new_val:
+                    opts.append(opt_string)
+            else:
+                opts.append(f"{opt_string} {new_val}")
+
+        # Still output if params is required
+        elif required:
+            opt_string = meta["option_strings"][0]
+            if isinstance(default_val, bool):
+                if default_val:
+                    opts.append(opt_string)
+            else:
+                opts.append(f"{opt_string} {default_val}")
+
+    return opts + missing
+
+def format_cli_opts(cli_opts, prefix=""):
+    if not sys.stdout.isatty():
+        width = 80
+    else:
+        width = shutil.get_terminal_size((80, 20)).columns
+
+    lines, current = [], prefix
+    for opt in cli_opts:
+        piece = ("" if current == prefix else " ") + opt
+        if len(current) + len(piece) > width:
+            # close current line with backslash
+            lines.append(current + " \\")
+            current = prefix + opt
+        else:
+            current += piece
+    if current:
+        lines.append(current)
+
+    return "\n".join(lines)
+
+def color(text, rgb=(255, 255, 255), bold=False):
+    """Colorize text with RGB truecolor (default: white)."""
+    if not sys.stdout.isatty():
+        return text
+    codes = []
+    if bold:
+        codes.append("1")
+    if rgb:
+        r, g, b = rgb
+        codes.append(f"38;2;{r};{g};{b}")
+    prefix = f"\033[{';'.join(codes)}m" if codes else ""
+    return f"{prefix}{text}\033[0m"
+
 # -------------------------
 # File lock uses flock()
 # -------------------------
@@ -979,21 +1065,12 @@ def cli_tree(args, sprout: Sprout) -> int:
             branch = "└─" if is_last else "├─"
 
             if headnames:
-                # Bold head name
-                if sys.stdout.isatty():
-                    dot = "\033[32m●\033[0m"
-                    heads_display = " ".join([f"\033[1m{h}\033[0m" for h in headnames])
-                else:
-                    dot = "●"
-                    heads_display = " ".join(headnames)
+                # light green
+                dot = color("●", rgb=(0, 255, 0), bold=True)
+                heads_display = " ".join([color(h, bold=True) for h in headnames])
                 line = f"{prefix}{branch} {dot} {heads_display}{alias} {params_str}{ts}"
             else:
-                # Bold rin id name
-                if sys.stdout.isatty():
-                    rid_display = f"\033[1m{rid}\033[0m"
-                else:
-                    rid_display = rid
-
+                rid_display = color(rid, bold=True)
                 line = f"{prefix}{branch} {rid_display}{alias} {params_str}{ts}"
 
             print(line)
@@ -1008,12 +1085,8 @@ def cli_tree(args, sprout: Sprout) -> int:
         for ig, g in enumerate(groups):
             if ig:
                 print()
-            if sys.stdout.isatty():
-                group_display = f"\033[1m▶ {g}\033[0m"
-            else:
-                group_display = f"▶ {g}"
-
-            print(f"{group_display}")
+            group_display = color(f"▶ {g}", bold=True)
+            print(group_display)
             roots_for_group = [rid for rid in roots if runs[rid]["group"] == g]
             for i, root in enumerate(roots_for_group):
                 is_last = i == (len(roots_for_group) - 1)
@@ -1025,7 +1098,14 @@ def cli_tree(args, sprout: Sprout) -> int:
         return 2
 
 
-def cli_log(args, sprout: Sprout) -> int:
+def cli_log(args,
+            sprout: Sprout,
+            default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+
+    arg_defs = None
+    if default_parser:
+        arg_defs = extract_arg_defs(default_parser)
+
     # renamed history: show ancestry diffs for run or head
     try:
         _, heads, _ = sprout.get_tree()
@@ -1044,15 +1124,16 @@ def cli_log(args, sprout: Sprout) -> int:
         chain = sprout.history_chain(run_id)
         params: Dict[str, str] = {}
         for i, (rid, r) in enumerate(chain):
+            run_params = r["params"]
             diffs = {}
-            for k, v in r["params"].items():
+            for k, v in run_params.items():
                 if k not in params:
                     diffs[k] = repr(v)
                 else:
                     old = params[k]
                     if old != v:
                         diffs[k] = f"{old} -> {v}"
-            params.update(r["params"])
+            params.update(run_params)
             alias = f" ({r['alias']})" if r.get("alias") else ""
             ts = to_local(r["created_at"])
             active_heads = [h for h, run in heads.items() if run == rid]
@@ -1061,12 +1142,14 @@ def cli_log(args, sprout: Sprout) -> int:
             else:
                 rid_or_head = rid
             title = f"> {rid_or_head}{alias} at {ts}"
-            # Bold title
-            if sys.stdout.isatty():
-                title = f"\033[1m{title}\033[0m"
             if i > 0:
                 print()
-            print(title)
+            print(color(title, bold=True))
+            if arg_defs:
+                cli_opts = make_cli_opts(arg_defs, run_params)
+                opts = format_cli_opts(cli_opts, prefix="  ")
+                print(f"{opts}")
+                print()
             if i == 0:
                 if diffs:
                     print("  Initial params:")
@@ -1085,6 +1168,7 @@ def cli_log(args, sprout: Sprout) -> int:
                 print(fmt % (k, " " * (max_len - len(k)), " = " + v))
             description = r["description"]
             if description:
+                print()
                 print("  Description:")
                 for d in description.split("\n"):
                     print(f"    {d}")
@@ -1093,15 +1177,14 @@ def cli_log(args, sprout: Sprout) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
-
-# -------------------------
-# CLI entrypoint
-# -------------------------
-
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="sprout", description="Sprout CLI (heads + borg)")
-    parser.add_argument("--working", required=True, help="Working directory (contains .borg and .heads)")
-    parser.add_argument("--seed", type=int, default=time.time_ns(), help="Initial seed for random generator (default: time)")
+def build_parser(prog, suppress_working_dir=False, add_help=True):
+    parser = argparse.ArgumentParser(prog=prog, description="Sprout CLI", add_help=add_help)
+    if suppress_working_dir:
+        # Do not require --working and suppress help for it, expecting
+        # it will be passed anyway in main()
+        parser.add_argument("--working", help=argparse.SUPPRESS)
+    else:
+        parser.add_argument("--working", required=True, help="Sprout working directory")
     parser.add_argument("--debug", action="store_true", help="Enables debug output")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -1117,7 +1200,7 @@ def main() -> int:
 
     # persist
     pp = sub.add_parser("persist")
-    pp.add_argument("head", nargs="?", help="Persist this head; omit to persist all heads")
+    pp.add_argument("head", nargs="?", help="Persist a head or all heads")
 
     # remove
     pr = sub.add_parser("remove")
@@ -1145,13 +1228,25 @@ def main() -> int:
     pl.add_argument("--run", help="Run id")
     pl.add_argument("--head", help="Head name")
 
-    args = parser.parse_args()
+    return parser
+
+# -------------------------
+# CLI entrypoint
+# -------------------------
+
+def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+    parser = build_parser("sprout")
+    args = parser.parse_args(argv)
 
     global DEBUG
     DEBUG = args.debug
 
+    seed = os.environ.get("SEED")
+    if seed:
+        seed = int(seed)
+
     try:
-        sprout = Sprout(args.working, args.seed)
+        sprout = Sprout(args.working, seed=seed)
     except Exception as e:
         print(f"ERROR initializing Sprout: {e}", file=sys.stderr)
         return 2
@@ -1170,7 +1265,7 @@ def main() -> int:
         elif args.cmd == "tree":
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
-            ret = cli_log(args, sprout)
+            ret = cli_log(args, sprout, default_parser=default_parser)
         else:
             parser.print_help()
             return 1
@@ -1200,7 +1295,7 @@ class SproutCLITests(unittest.TestCase):
 
     def run_sprout(self, args):
         """Run sprout CLI command and return (returncode, stdout, stderr)."""
-        return self.run_cmd(f"python3 {__file__} --working {self.tmpdir} --seed 1 " + args)
+        return self.run_cmd(f"SEED=1 python3 {__file__} --working {self.tmpdir} " + args)
 
     def test_create_remove(self):
         # create group
