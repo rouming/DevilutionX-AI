@@ -34,23 +34,23 @@ def set_rlimits():
     new_soft = min(65535, hard)
     resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
 
+def parse_int_with_suffix(value: str) -> int:
+    """Parse integer with optional k, M, G suffix or scientific notation."""
+    value = value.strip().upper()
+    if value.endswith('K'):
+        return int(float(value[:-1]) * 1_000)
+    if value.endswith('M'):
+        return int(float(value[:-1]) * 1_000_000)
+    if value.endswith('G'):
+        return int(float(value[:-1]) * 1_000_000_000)
+    return int(float(value))  # handles 50e6, 1e3, etc.
+
 def make_diablo_parser():
     class IndentedHelpFormatter(argparse.RawTextHelpFormatter):
         def __init__(self, *args, **kwargs):
             # Width controls line wrapping; max_help_position controls indent
             kwargs['max_help_position'] = 8
             super().__init__(*args, **kwargs)
-
-    def parse_int_with_suffix(value: str) -> int:
-        """Parse integer with optional k, M, G suffix or scientific notation."""
-        value = value.strip().upper()
-        if value.endswith('K'):
-            return int(float(value[:-1]) * 1_000)
-        if value.endswith('M'):
-            return int(float(value[:-1]) * 1_000_000)
-        if value.endswith('G'):
-            return int(float(value[:-1]) * 1_000_000_000)
-        return int(float(value))  # handles 50e6, 1e3, etc.
 
     # Define incompatible options
     incompatible_options = {
@@ -170,7 +170,7 @@ def make_diablo_parser():
                                  help="Number of updates between two saves (default: 10, 0 means no saving)")
     train_ai_parser.add_argument("--env-runners", type=int, default=1,
                                  help="Number of environment runners or processes (default: 1)")
-    train_ai_parser.add_argument("--frames", type=parse_int_with_suffix, default='10M',
+    train_ai_parser.add_argument("--frames", type=str, default='10M',
                                  help="Number of frames of training (default: 10M)")
 
     # Parameters for main RL algorithm
@@ -809,7 +809,10 @@ def train_ai(args, gameconfig):
     update = status["update"]
     start_time = time.time()
 
-    while num_frames < args.frames:
+    # Convert the shorter string form of '10M' to an integer
+    frames = parse_int_with_suffix(args.frames)
+
+    while num_frames < frames:
         # Update model parameters
         update_start_time = time.time()
         exps, logs1 = algo.collect_experiences()

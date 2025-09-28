@@ -36,6 +36,7 @@ import sys
 import tempfile
 import time
 import unittest
+import yaml
 
 DEBUG = False
 
@@ -163,9 +164,9 @@ def make_cli_opts(arg_defs, new_params):
         if required and new_val is None:
             opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
-                missing.append(f"{opt_string}-MISSING")
+                missing.append(f"{opt_string}-REQUIRED")
             else:
-                missing.append(f"{opt_string} MISSING")
+                missing.append(f"{opt_string} ${name.upper()}")
 
         # Include if new param overrides default
         elif new_val is not None and new_val != default_val:
@@ -748,10 +749,10 @@ class Sprout:
              head: Optional[str] = None,
              params_str: Optional[str] = None,
              description_str: Optional[str] = None,
-             alias_str: Optional[str] = None) -> str:
+             alias_str: Optional[str] = None,
+             created_str: Optional[str] = None) -> str:
         """
         Edit metadata for a run. None means don't touch. Empty string clears.
-        Note: description_str expected as a final string (caller may decode escapes or open editor).
         """
         meta = self._load_meta()
         run, run_id = self.get_run(run=run, head=head, meta=meta)
@@ -765,6 +766,9 @@ class Sprout:
 
         if alias_str is not None:
             run["alias"] = alias_str
+
+        if created_str is not None:
+            run["created_at"] = created_str
 
         self._save_meta(meta)
         return run_id
@@ -957,43 +961,123 @@ def cli_remove(args, sprout: Sprout) -> int:
         return 2
     return 0
 
-
-def cli_edit(args, sprout: Sprout) -> int:
+def cli_edit(args, sprout: Sprout,
+             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
     try:
         meta = sprout._load_meta()
 
-        # Handle the description editor behavior: argparse sets
-        # args.description to "" when provided without a value, so
-        # raise a text editor in this case.
-        description_final = None
-        if args.description is None:
-            pass
-        elif args.description == "":
-            # open editor
+        alias_str = args.alias
+        params_str = args.params
+        description_str = args.description
+        created_str = None
+
+        if not (params_str or alias_str or description_str):
+            description_template = ["# Enter description here", "# Keep indentation"]
+
             run, _ = sprout.get_run(run=args.run, head=args.head, meta=meta)
-            current = run.get("description", "")
+
+            # Prepare params
+            params = run.get("params", {})
+            max_len = 0
+            for k, v in params.items():
+                max_len = max(max_len, len(k))
+            fmt = "    %s%s%s"
+            params_list = []
+            for k, v in params.items():
+                params_list.append(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
+            params_str = "\n".join(params_list)
+
+            # Prepare CLI opts
+            opts_str = ""
+            if default_parser:
+                arg_defs = extract_arg_defs(default_parser)
+                cli_opts = make_cli_opts(arg_defs, params)
+                opts_str = format_cli_opts(cli_opts, prefix="# ")
+
+            # Prepare description
+            description = run.get("description", "").rstrip()
+            if not description:
+                description = "\n".join(description_template)
+            description = "    " + "\n    ".join(line for line in description.splitlines())
+
+            # Content
+            content = \
+f"""{opts_str}
+
+created: {run.get("created_at", "")}
+alias: {run.get("alias", "")}
+params: |
+{params_str}
+
+description: |
+{description}
+"""
+
+            # Write content
             with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tf:
-                tf.write(current)
+                tf.write(content)
                 tf.flush()
                 tmp = os.path.abspath(tf.name)
-            editor = os.environ.get("EDITOR", "nano")
+
+            # Open editor
             try:
+                editor = os.environ.get("EDITOR", "nano")
                 sh(f"{editor} {shlex.quote(tmp)}")
             except subprocess.CalledProcessError as e:
                 os.unlink(tmp)
                 print(f"ERROR: editor failed: {e}", file=sys.stderr)
                 return 2
+
+            # Read back
             with open(tmp, "r") as f:
-                description_final = f.read()
+                edited = f.read()
+
             os.unlink(tmp)
-        else:
-            description_final = args.description
+
+            # Strip CLI comment lines
+            cleaned = "\n".join(line for line in edited.splitlines() if not line.startswith("#"))
+
+            # Parse YAML back
+            try:
+                data = yaml.safe_load(cleaned)
+                if not data:
+                    data = {}
+            except yaml.YAMLError as e:
+                print(f"ERROR: YAML parsing error: {e}", file=sys.stderr)
+                return 2
+
+            # Update variables
+            alias_str = data.get("alias", "") or ""
+            created_str = str(data.get("created", "")) or ""
+
+            # Handle params
+            params_str = data.get("params", "") or ""
+            # Split into lines, drop empty ones
+            params_lines = [line.strip() for line in params_str.splitlines() if line.strip()]
+
+            # Split each line on '=', strip both sides, reformat
+            pairs = []
+            for line in params_lines:
+                if "=" in line:
+                    k, v = line.split("=", 1)  # split only once
+                    pairs.append(f"{k.strip()}={v.strip()}")
+            # Join into a single string
+            params_str = " ".join(pairs)
+
+            # Handle description
+            description_str = data.get("description", "") or ""
+            description_str = description_str.rstrip()
+            if description_str.strip() == "\n".join(description_template):
+                # strip away if unchanged template
+                description_str = ""
 
         sprout.edit(run=args.run,
                     head=args.head,
-                    params_str=args.params,
-                    description_str=description_final,
-                    alias_str=args.alias)
+                    params_str=params_str,
+                    description_str=description_str,
+                    alias_str=alias_str,
+                    created_str=created_str)
+
         if args.run:
             print(f"Edited run {args.run}")
         else:
@@ -1038,7 +1122,7 @@ def cli_tree(args, sprout: Sprout) -> int:
 
             prefix = "\n" + prefix
             if has_siblings and not has_children:
-                prefix += "│    ↳ "
+                prefix += "│    ⇾ "
             elif has_siblings and has_children:
                 prefix += "│  │ ⇾ "
             elif not has_siblings and has_children:
@@ -1070,7 +1154,7 @@ def cli_tree(args, sprout: Sprout) -> int:
                 heads_display = " ".join([color(h, bold=True) for h in headnames])
                 line = f"{prefix}{branch} {dot} {heads_display}{alias} {params_str}{ts}"
             else:
-                rid_display = color(rid, bold=True)
+                rid_display = color(rid)
                 line = f"{prefix}{branch} {rid_display}{alias} {params_str}{ts}"
 
             print(line)
@@ -1214,8 +1298,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     group = pe.add_mutually_exclusive_group(required=True)
     group.add_argument("--run", help="Run id to edit")
     group.add_argument("--head", help="Head name to edit")
-    pe.add_argument("--params", default=None, help="Set params; None = unchanged; empty string clears")
-    pe.add_argument("--description", nargs="?", const="", help="Set description; omit value to open editor")
+    pe.add_argument("--params", default=None, help="Set params")
+    pe.add_argument("--description", default=None, help="Set description")
     pe.add_argument("--alias", default=None, help="Set alias")
 
     # tree
@@ -1261,7 +1345,7 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
         elif args.cmd == "remove":
             ret = cli_remove(args, sprout)
         elif args.cmd == "edit":
-            ret = cli_edit(args, sprout)
+            ret = cli_edit(args, sprout, default_parser=default_parser)
         elif args.cmd == "tree":
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
