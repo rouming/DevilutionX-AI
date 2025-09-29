@@ -53,12 +53,13 @@ class SproutError(Exception):
 # Helpers
 # -------------------------
 
-def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def now_iso() -> str:
+    dt = datetime.now().astimezone()
+    return dt.replace(microsecond=0).isoformat()
 
-def to_local(ts: str) -> str:
-    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+def to_iso(ts: str) -> str:
+    dt = datetime.fromisoformat(ts)
+    return dt.replace(microsecond=0).isoformat()
 
 def sh(cmd: str) -> None:
     """Run a shell command. Let exceptions bubble up to caller."""
@@ -438,7 +439,7 @@ class Sprout:
             "params": old_run.get("params", {}),
             "alias": old_run.get("alias", ""),
             "description": old_run.get("description", ""),
-            "created_at": now_utc()
+            "created_at": now_iso()
         }
 
         runs[snap_id] = snap_entry
@@ -598,7 +599,7 @@ class Sprout:
             "params": params or {},
             "alias": alias_str or "",
             "description": description or "",
-            "created_at": now_utc()
+            "created_at": now_iso()
         }
         self._save_meta(meta)
 
@@ -1000,12 +1001,20 @@ def cli_edit(args, sprout: Sprout,
                 description = "\n".join(description_template)
             description = "    " + "\n    ".join(line for line in description.splitlines())
 
+            # Prepare created
+            created = run.get("created_at", "") or ""
+            if created:
+                created = to_iso(created)
+
+            # Prepare alias
+            alias = run.get("alias", "") or ""
+
             # Content
             content = \
 f"""{opts_str}
 
-created: {run.get("created_at", "")}
-alias: {run.get("alias", "")}
+created: {created}
+alias: {alias}
 params: |
 {params_str}
 
@@ -1021,7 +1030,7 @@ description: |
 
             # Open editor
             try:
-                editor = os.environ.get("EDITOR", "nano")
+                editor = os.environ.get("EDITOR", "vim")
                 sh(f"{editor} {shlex.quote(tmp)}")
             except subprocess.CalledProcessError as e:
                 os.unlink(tmp)
@@ -1048,7 +1057,9 @@ description: |
 
             # Update variables
             alias_str = data.get("alias", "") or ""
-            created_str = str(data.get("created", "")) or ""
+            created_str = data.get("created", "") or ""
+            if created_str:
+                created_str = to_iso(str(created_str))
 
             # Handle params
             params_str = data.get("params", "") or ""
@@ -1140,7 +1151,7 @@ def cli_tree(args, sprout: Sprout) -> int:
             alias = f" ({r.get('alias')})" if r.get("alias") else ""
             if args.verbose:
                 params_str = json.dumps(r.get("params", {}))
-                ts = " " + to_local(r["created_at"])
+                ts = " " + to_iso(r["created_at"])
             else:
                 params_str = diff_params(r, parent_r, prefix,
                                          bool(children), not is_last)
@@ -1219,7 +1230,7 @@ def cli_log(args,
                         diffs[k] = f"{old} -> {v}"
             params.update(run_params)
             alias = f" ({r['alias']})" if r.get("alias") else ""
-            ts = to_local(r["created_at"])
+            ts = to_iso(r["created_at"])
             active_heads = [h for h, run in heads.items() if run == rid]
             if active_heads:
                 rid_or_head = active_heads[0]
