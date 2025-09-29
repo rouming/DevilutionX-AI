@@ -887,7 +887,7 @@ def train_ai(args, gameconfig):
                 best_success_rate = success_rate
                 src_path = utils.get_status_path(model_dir)
                 dst_path = utils.get_best_status_path(model_dir)
-                shutil.copy(src_path, dst_path)
+                shutil.copyfile(src_path, dst_path)
                 txt_logger.info("Success rate {: .2f}; best model is saved".format(success_rate))
 
                 # Save info about best status backup into Sprout as custom dict
