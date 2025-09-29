@@ -16,6 +16,7 @@ import json
 import os
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import time
@@ -25,7 +26,7 @@ import procutils
 import sprout
 from rl import utils
 
-VERSION='Diablo AI Tool v1.3'
+VERSION='Diablo AI Tool v1.4'
 
 def set_rlimits():
     # Get current limits
@@ -711,17 +712,17 @@ def train_ai(args, gameconfig):
     params_str = " ".join(f"{k}={v}" for k, v in vars(args).items() if k not in skip_keys)
 
     # Create a new run or snapshot previous
-    s = sprout.Sprout(utils.get_models_dir())
+    spr = sprout.Sprout(utils.get_models_dir())
     if not os.path.isdir(model_dir):
         # Create model state
-        s.create(group=args.env, head=args.model, params_str=params_str)
+        spr.create(group=args.env, head=args.model, params_str=params_str)
     elif not args.cont:
         # Create a snapshot of a model state
-        s.create(from_head=args.model, params_str=params_str)
+        spr.create(from_head=args.model, params_str=params_str)
     else:
         # Continue in the current head, but be careful; firstly, check
         # if the environment has changed
-        run, _ = s.get_run(head=args.model)
+        run, _ = spr.get_run(head=args.model)
         params = run.get("params", {})
         env = params.get("env", "")
         if env != args.env:
@@ -736,7 +737,7 @@ def train_ai(args, gameconfig):
 
         # Change parameters for the existing model and continue
         # training without creating a snapshot
-        s.edit(head=args.model, params_str=params_str)
+        spr.edit(head=args.model, params_str=params_str)
 
     args.mem = args.recurrence > 1
 
@@ -808,6 +809,7 @@ def train_ai(args, gameconfig):
     num_frames = status["num_frames"]
     update = status["update"]
     start_time = time.time()
+    best_success_rate = 0
 
     # Convert the shorter string form of '10M' to an integer
     frames = parse_int_with_suffix(args.frames)
@@ -823,13 +825,15 @@ def train_ai(args, gameconfig):
         num_frames += logs["num_frames"]
         update += 1
 
+        success_per_episode = utils.synthesize(
+            [1 if r > 0 else 0 for r in logs["return_per_episode"]])
+        success_rate = success_per_episode['mean']
+
         # Print logs
         if update % args.log_interval == 0:
             fps = logs["num_frames"] / (update_end_time - update_start_time)
             duration = int(time.time() - start_time)
             return_per_episode = utils.synthesize(logs["return_per_episode"])
-            success_per_episode = utils.synthesize(
-                [1 if r > 0 else 0 for r in logs["return_per_episode"]])
             rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
 
@@ -838,7 +842,7 @@ def train_ai(args, gameconfig):
             header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
             data += rreturn_per_episode.values()
             header += ["success_rate"]
-            data += [success_per_episode['mean']]
+            data += [success_rate]
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
             data += num_frames_per_episode.values()
             header += ["entropy", "value", "policy_loss", "value_loss", "kl", "grad_norm"]
@@ -867,6 +871,18 @@ def train_ai(args, gameconfig):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
             txt_logger.info("Status saved")
+
+            if success_rate > best_success_rate:
+                best_success_rate = success_rate
+                src_path = utils.get_status_path(model_dir)
+                dst_path = utils.get_best_status_path(model_dir)
+                shutil.copy(src_path, dst_path)
+                txt_logger.info("Success rate {: .2f}; best model is saved".format(success_rate))
+
+                # Save info about best status backup into Sprout as custom dict
+                best = { 'best': { 'frames': num_frames, 'success_rate': success_rate }}
+                spr.edit(head=args.model, custom_dict=best)
+
 
     return 0
 

@@ -20,6 +20,10 @@ def get_status_path(model_dir):
     return os.path.join(model_dir, "status.pt")
 
 
+def get_best_status_path(model_dir):
+    return os.path.join(model_dir, "best-status.pt")
+
+
 def get_status(model_dir):
     path = get_status_path(model_dir)
     return torch.load(path, map_location=device)
