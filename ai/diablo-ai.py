@@ -766,6 +766,15 @@ def train_ai(args, gameconfig):
         status = utils.get_status(model_dir)
     except OSError:
         status = {"num_frames": 0, "update": 0}
+
+    # Load best training status if exists
+    best_success_rate = 0.0
+    try:
+        best_status = utils.get_best_status(model_dir)
+        best_success_rate = best_status.get("success_rate", 0.0)
+    except OSError:
+        pass
+
     txt_logger.info("Training status loaded\n")
 
     # Load observations preprocessor
@@ -809,7 +818,6 @@ def train_ai(args, gameconfig):
     num_frames = status["num_frames"]
     update = status["update"]
     start_time = time.time()
-    best_success_rate = 0
 
     # Convert the shorter string form of '10M' to an integer
     frames = parse_int_with_suffix(args.frames)
@@ -865,8 +873,11 @@ def train_ai(args, gameconfig):
 
         # Save status
         if args.save_interval > 0 and update % args.save_interval == 0:
-            status = {"num_frames": num_frames, "update": update,
-                      "model_state": acmodel.state_dict(), "optimizer_state": algo.optimizer.state_dict()}
+            status = {"num_frames": num_frames,
+                      "update": update,
+                      "success_rate": success_rate,
+                      "model_state": acmodel.state_dict(),
+                      "optimizer_state": algo.optimizer.state_dict()}
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)

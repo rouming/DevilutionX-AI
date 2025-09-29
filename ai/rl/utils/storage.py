@@ -29,6 +29,11 @@ def get_status(model_dir):
     return torch.load(path, map_location=device)
 
 
+def get_best_status(model_dir):
+    path = get_best_status_path(model_dir)
+    return torch.load(path, map_location=device)
+
+
 def save_status(status, model_dir):
     path = get_status_path(model_dir)
     torch.save(status, path)
