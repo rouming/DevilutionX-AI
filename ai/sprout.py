@@ -34,6 +34,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 import yaml
@@ -221,6 +222,14 @@ def color(text, rgb=(255, 255, 255), bold=False):
         codes.append(f"38;2;{r};{g};{b}")
     prefix = f"\033[{';'.join(codes)}m" if codes else ""
     return f"{prefix}{text}\033[0m"
+
+def flatten(d, prefix=""):
+    for k, v in d.items():
+        path = f"{prefix}/{k}" if prefix else k
+        if isinstance(v, dict):
+            yield from flatten(v, path)
+        else:
+            yield f"{path}: {v}"
 
 # -------------------------
 # File lock uses flock()
@@ -751,7 +760,8 @@ class Sprout:
              params_str: Optional[str] = None,
              description_str: Optional[str] = None,
              alias_str: Optional[str] = None,
-             created_str: Optional[str] = None) -> str:
+             created_str: Optional[str] = None,
+             custom_dict: Optional[dict] = None) -> str:
         """
         Edit metadata for a run. None means don't touch. Empty string clears.
         """
@@ -770,6 +780,12 @@ class Sprout:
 
         if created_str is not None:
             run["created_at"] = created_str
+
+        if custom_dict is not None:
+            if custom_dict:
+                run["custom"] = custom_dict
+            elif "custom" in run:
+                del run["custom"]
 
         self._save_meta(meta)
         return run_id
@@ -999,7 +1015,7 @@ def cli_edit(args, sprout: Sprout,
             description = run.get("description", "").rstrip()
             if not description:
                 description = "\n".join(description_template)
-            description = "    " + "\n    ".join(line for line in description.splitlines())
+            description = textwrap.indent(description, " " * 4)
 
             # Prepare created
             created = run.get("created_at", "") or ""
@@ -1008,6 +1024,13 @@ def cli_edit(args, sprout: Sprout,
 
             # Prepare alias
             alias = run.get("alias", "") or ""
+
+            # Prepare custom
+            custom_str = ""
+            custom_dict = run.get("custom", {}) or {}
+            if custom_dict:
+                custom_yaml = yaml.dump(custom_dict, indent=4)
+                custom_str = "\n\n# CUSTOM FIELDS\n\n" + custom_yaml
 
             # Content
             content = \
@@ -1019,7 +1042,7 @@ params: |
 {params_str}
 
 description: |
-{description}
+{description}{custom_str}
 """
 
             # Write content
@@ -1082,12 +1105,18 @@ description: |
                 # strip away if unchanged template
                 description_str = ""
 
+            # Handle custom
+            known_keys = ['created', 'alias', 'params', 'description']
+            custom_keys = data.keys() - set(known_keys)
+            custom_dict = {k: data[k] for k in custom_keys}
+
         sprout.edit(run=args.run,
                     head=args.head,
                     params_str=params_str,
                     description_str=description_str,
                     alias_str=alias_str,
-                    created_str=created_str)
+                    created_str=created_str,
+                    custom_dict=custom_dict)
 
         if args.run:
             print(f"Edited run {args.run}")
@@ -1113,35 +1142,46 @@ def cli_tree(args, sprout: Sprout) -> int:
         for h, rid in heads.items():
             run_to_heads[rid].append(h)
 
-        def diff_params(r: dict, parent_r: dict, prefix: str,
-                        has_children: bool, has_siblings: bool):
-            if parent_r is None:
-                return "[all params]"
-            params = parent_r["params"]
-            diffs = []
-            for k, v in r["params"].items():
-                if k not in params:
-                    diffs.append(f"{k}:{v}")
-                else:
-                    old = params[k]
-                    if old != v:
-                        diffs.append(f"{k}: {old} -> {v}")
-            if not r["params"]:
-                return "∅"
-            if not diffs:
-                return "Δ ∅"
-
+        def diff_params_and_custom_dict(r: dict, parent_r: dict, prefix: str,
+                                        has_children: bool, has_siblings: bool):
             prefix = "\n" + prefix
-            if has_siblings and not has_children:
-                prefix += "│    ⇾ "
-            elif has_siblings and has_children:
-                prefix += "│  │ ⇾ "
-            elif not has_siblings and has_children:
-                prefix += "   │ ⇾ "
-            else:
-                prefix += "     ⇾ "
+            def tree_prefix(ch):
+                if has_siblings and not has_children:
+                    return f"│    {ch} "
+                if has_siblings and has_children:
+                    return f"│  │ {ch} "
+                if not has_siblings and has_children:
+                    return f"   │ {ch} "
+                return f"     {ch} "
 
-            return prefix + prefix.join(diffs)
+            diffs = []
+            out_str = "[all params]"
+            if parent_r:
+                params = parent_r["params"]
+                for k, v in r["params"].items():
+                    if k not in params:
+                        diffs.append(f"{k}:{v}")
+                    else:
+                        old = params[k]
+                        if old != v:
+                            diffs.append(f"{k}: {old} -> {v}")
+                if not r["params"]:
+                    out_str = "∅"
+                elif not diffs:
+                    out_str = "Δ ∅"
+                else:
+                    params_prefix = prefix + tree_prefix("⇾")
+                    params_str = params_prefix + params_prefix.join(diffs)
+                    out_str = params_str
+
+            custom_dict = r.get("custom", {}) or {}
+            if custom_dict:
+                custom_list = list(flatten(custom_dict))
+                custom_prefix = prefix + tree_prefix("≡")
+                custom_str = custom_prefix + custom_prefix.join(custom_list)
+                out_str += custom_str
+
+            return out_str
 
         def print_node(rid: str, prefix: str, is_last: bool) -> None:
             r = runs[rid]
@@ -1153,8 +1193,8 @@ def cli_tree(args, sprout: Sprout) -> int:
                 params_str = json.dumps(r.get("params", {}))
                 ts = " " + to_iso(r["created_at"])
             else:
-                params_str = diff_params(r, parent_r, prefix,
-                                         bool(children), not is_last)
+                params_str = diff_params_and_custom_dict(r, parent_r, prefix,
+                                                         bool(children), not is_last)
                 ts = ""
 
             branch = "└─" if is_last else "├─"
@@ -1261,12 +1301,22 @@ def cli_log(args,
             fmt = "    %s%s%s"
             for k, v in diffs.items():
                 print(fmt % (k, " " * (max_len - len(k)), " = " + v))
+
             description = r["description"]
             if description:
+                description = textwrap.indent(description, " " * 4)
                 print()
                 print("  Description:")
-                for d in description.split("\n"):
-                    print(f"    {d}")
+                print(description)
+
+            custom_dict = r.get("custom", {}) or {}
+            if custom_dict:
+                custom_yaml = yaml.dump(custom_dict, indent=4)
+                custom_yaml = textwrap.indent(custom_yaml, " " * 4)
+                print()
+                print("  Custom fields:")
+                print(custom_yaml)
+
         return 0
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
