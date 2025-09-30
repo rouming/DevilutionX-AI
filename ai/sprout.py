@@ -67,11 +67,14 @@ def to_iso(ts: str) -> str:
     dt = datetime.fromisoformat(ts)
     return dt.replace(microsecond=0).isoformat()
 
-def sh(cmd: str, env: Optional[dict] = {}) -> str:
+def sh(cmd: str, env: Optional[dict] = {}, no_output: Optional[bool] = False) -> str:
     """Run a shell command. Exceptions are handled by a caller."""
     if DEBUG:
         print(f"- {cmd}")
     env = os.environ | env
+    if no_output:
+        subprocess.check_call(cmd, shell=True, text=True, env=env)
+        return None
     return subprocess.check_output(cmd, shell=True, text=True, env=env)
 
 def rmtree(path: str) -> None:
@@ -1083,7 +1086,7 @@ description: |
             # Open editor
             try:
                 editor = os.environ.get("EDITOR", "vim")
-                sh(f"{editor} {shlex.quote(tmp)}")
+                sh(f"{editor} {shlex.quote(tmp)}", no_output=True)
             except subprocess.CalledProcessError as e:
                 os.unlink(tmp)
                 print(f"ERROR: editor failed: {e}", file=sys.stderr)
