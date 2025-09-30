@@ -1355,7 +1355,7 @@ def cli_log(args,
         return 2
 
 
-def cli_rsync(args, sprout: Sprout):
+def cli_fetch(args, sprout: Sprout):
 
     src_host = args.src_host
     if not src_host.endswith("/"):
@@ -1424,8 +1424,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pl.add_argument("--run", help="Run id")
     pl.add_argument("--head", help="Head name")
 
-    # rsync
-    prs = sub.add_parser("rsync", help="Rsyncs remote repo with the current one")
+    # fetch
+    prs = sub.add_parser("fetch", help="Fetches run states and heads from the remote repo")
     prs.add_argument("src_host", help="The remote source host for copying, can be specified in the user@host:/path format")
 
     return parser
@@ -1466,8 +1466,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
-        elif args.cmd == "rsync":
-            ret = cli_rsync(args, sprout)
+        elif args.cmd == "fetch":
+            ret = cli_fetch(args, sprout)
         else:
             parser.print_help()
             return 1
