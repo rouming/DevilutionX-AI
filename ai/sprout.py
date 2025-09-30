@@ -448,9 +448,9 @@ class Sprout:
             "params": old_run.get("params", {}),
             "alias": old_run.get("alias", ""),
             "description": old_run.get("description", ""),
+            "custom": old_run.get("custom", {}),
             "created_at": now_iso()
         }
-
         runs[snap_id] = snap_entry
 
         # update old run parent -> snap_id (insert snapshot above the active run)
@@ -507,11 +507,6 @@ class Sprout:
         if head in heads:
             raise SproutError(f"head {head} already exists")
 
-        # parse params/description/alias
-        # params parsing returns None if not provided
-        params = parse_params_string(params_str)
-        description = decode_escapes(description_str) if description_str is not None else None
-
         # determine source run (if any)
         src_run = None
         if from_head:
@@ -523,6 +518,12 @@ class Sprout:
 
         if src_run and src_run not in runs:
             raise SproutError(f"run '{src_run}' not found")
+
+        # parse params/description/alias
+        # params parsing returns None if not provided
+        params = parse_params_string(params_str)
+        description = decode_escapes(description_str) if description_str is not None else None
+        custom_dict = {}
 
         # if the source run exists and is active (any head points to it), snapshot it first
         parent_for_new = None
@@ -573,12 +574,14 @@ class Sprout:
                     rmtree(parent_active_dir)
 
             # Inherit a few fields from parent
+            parent_run = runs[parent_for_new]
             if params is None:
-                params = runs[parent_for_new]["params"]
+                params = parent_run["params"]
             if alias_str is None:
-                alias_str = runs[parent_for_new]["alias"]
+                alias_str = parent_run["alias"]
             if description is None:
-                description = runs[parent_for_new]["description"]
+                description = parent_run["description"]
+            custom_dict = parent_run.get("custom", {})
 
         # create borg archive for the new run (archive name is run id)
         self._borg_create(new_run_id)
@@ -608,6 +611,7 @@ class Sprout:
             "params": params or {},
             "alias": alias_str or "",
             "description": description or "",
+            "custom": custom_dict,
             "created_at": now_iso()
         }
         self._save_meta(meta)
@@ -782,10 +786,7 @@ class Sprout:
             run["created_at"] = created_str
 
         if custom_dict is not None:
-            if custom_dict:
-                run["custom"] = custom_dict
-            elif "custom" in run:
-                del run["custom"]
+            run["custom"] = custom_dict
 
         self._save_meta(meta)
         return run_id
