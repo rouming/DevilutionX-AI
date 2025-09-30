@@ -73,12 +73,5 @@ RUN wget -nc https://github.com/diasurgical/devilutionx-assets/releases/download
           -P /root/devel/DevilutionX-AI/build
 
 
-##
-## Once `sprout.py` is used for the first time, Borg complains with
-## the following: "Warning: Attempting to access a previously unknown
-## unencrypted repository!"
-##
-ENV BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes
-
 # Start new detached tmux session and run bash
 CMD ["/bin/bash", "-c", "tmux new-session -d && exec bash"]

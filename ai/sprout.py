@@ -41,6 +41,11 @@ import yaml
 
 DEBUG = False
 
+## Once Sprout is used for the first time, Borg complains with the
+## following: "Warning: Attempting to access a previously unknown
+## unencrypted repository!". Suppress that.
+BORG_ENV = {'BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK': 'yes'}
+
 # -------------------------
 # Exceptions
 # -------------------------
@@ -62,11 +67,12 @@ def to_iso(ts: str) -> str:
     dt = datetime.fromisoformat(ts)
     return dt.replace(microsecond=0).isoformat()
 
-def sh(cmd: str) -> None:
-    """Run a shell command. Let exceptions bubble up to caller."""
+def sh(cmd: str, env: Optional[dict] = {}) -> str:
+    """Run a shell command. Exceptions are handled by a caller."""
     if DEBUG:
         print(f"- {cmd}")
-    subprocess.check_call(cmd, shell=True)
+    env = os.environ | env
+    return subprocess.check_output(cmd, shell=True, text=True, env=env)
 
 def rmtree(path: str) -> None:
     if DEBUG:
@@ -309,14 +315,8 @@ class Sprout:
 
         with scoped_lock(self.lock):
             # initialize borg if needed
-            # note: raising subprocess.CalledProcessError if borg missing or init fails
             if not is_dir(self.repo_path):
-                try:
-                    # borg init expects a repo path; use --encryption=none shorthand -e none
-                    sh(f"borg init {shlex.quote(self.repo_path)} -e none")
-                except subprocess.CalledProcessError:
-                    # if already initialized this will fail; ignore that
-                    pass
+                self._borg_init()
 
             # metadata file inside repo
             self.meta_file = os.path.join(self.working_path, ".metadata.json")
@@ -348,10 +348,40 @@ class Sprout:
     # Borg helpers
     # -------------------------
 
-    def _borg_delete(self, run_id: str) -> None:
-        """Delete a borg archive if present (suppress non-error output)."""
+    def _borg_init(self) -> None:
+        """Init a borg archive with --encryption none"""
         try:
-            sh(f"borg delete {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} --force --error")
+            sh(f"borg init {shlex.quote(self.repo_path)} -e none", env=BORG_ENV)
+        except subprocess.CalledProcessError:
+            pass
+
+    def _borg_repo_id(self) -> str:
+        """Returns current repo ID"""
+        try:
+            out = sh(f"borg config {shlex.quote(self.repo_path)} id", env=BORG_ENV)
+            return out.strip()
+        except subprocess.CalledProcessError:
+            return None
+
+    def _borg_list(self) -> str:
+        """List archives in borg archive, suppress non-error output"""
+        try:
+            return sh(f"borg list {shlex.quote(self.repo_path)} --error 2>/dev/null", env=BORG_ENV)
+        except subprocess.CalledProcessError:
+            return ""
+
+    def _borg_delete(self, run_id: str) -> None:
+        """Delete a borg archive if present, suppress non-error output"""
+        try:
+            sh(f"borg delete {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} --force --error", env=BORG_ENV)
+        except subprocess.CalledProcessError:
+            # ignore if archive not present
+            pass
+
+    def _borg_delete_repo_cache(self) -> None:
+        """Delete cache-only from borg's repo"""
+        try:
+            sh(f"borg delete --cache-only {shlex.quote(self.repo_path)}", env=BORG_ENV)
         except subprocess.CalledProcessError:
             # ignore if archive not present
             pass
@@ -364,14 +394,14 @@ class Sprout:
         """
         # remove existing archive if any (suppress error)
         try:
-            sh(f"borg delete {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} --force --error")
+            sh(f"borg delete {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} --force --error", env=BORG_ENV)
         except subprocess.CalledProcessError:
             pass
 
         rel_archive_dir = os.path.join(".heads", run_id)
 
         # cd into working_path so extraction returns paths under working_path
-        sh(f"cd {shlex.quote(self.working_path)} && borg create {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} {shlex.quote(rel_archive_dir)}")
+        sh(f"cd {shlex.quote(self.working_path)} && borg create {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} {shlex.quote(rel_archive_dir)}", env=BORG_ENV)
 
     def _borg_extract(self, run_id: str) -> None:
         """
@@ -379,7 +409,7 @@ class Sprout:
         We rely on borg to restore relative paths correctly.
         """
         # run in working_path so extraction restores files into the correct tree
-        sh(f"cd {shlex.quote(self.working_path)} && borg extract {shlex.quote(self.repo_path)}::{shlex.quote(run_id)}")
+        sh(f"cd {shlex.quote(self.working_path)} && borg extract {shlex.quote(self.repo_path)}::{shlex.quote(run_id)}", env=BORG_ENV)
 
     # -------------------------
     # Main methods
@@ -879,9 +909,7 @@ class Sprout:
         heads = meta.get("heads", {})
 
         # 1. Check borg archives
-        out = subprocess.check_output(
-            ["borg", "list", self.repo_path], text=True
-        )
+        out = self._borg_list()
         borg_ids = {line.split()[0] for line in out.strip().splitlines()}
         meta_ids = set(runs.keys())
         if borg_ids != meta_ids:
@@ -1323,6 +1351,25 @@ def cli_log(args,
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+
+def cli_rsync(args, sprout: Sprout):
+
+    src_host = args.src_host
+    if not src_host.endswith("/"):
+        src_host += "/"
+
+    repo_id = sprout._borg_repo_id()
+    if repo_id:
+        # Prevent this fatal error: "Cache is newer than repository -
+        # do you have multiple, independently updated repos with same
+        # ID?" with the procedure taken from here:
+        # https://borgbackup.readthedocs.io/en/stable/faq.html#this-is-either-an-attack-or-unsafe-warning
+        sprout._borg_delete_repo_cache()
+        sh(f"rm -f ~/.config/borg/security/{repo_id}/manifest-timestamp")
+
+    out = sh(f"rsync -avz --delete --ignore-errors --inplace --partial {src_host} {args.working} || true")
+    print(out)
+
 def build_parser(prog, suppress_working_dir=False, add_help=True):
     parser = argparse.ArgumentParser(prog=prog, description="Sprout CLI", add_help=add_help)
     if suppress_working_dir:
@@ -1374,6 +1421,10 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pl.add_argument("--run", help="Run id")
     pl.add_argument("--head", help="Head name")
 
+    # rsync
+    prs = sub.add_parser("rsync", help="Rsyncs remote repo with the current one")
+    prs.add_argument("src_host", help="The remote source host for copying, can be specified in the user@host:/path format")
+
     return parser
 
 # -------------------------
@@ -1412,6 +1463,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
+        elif args.cmd == "rsync":
+            ret = cli_rsync(args, sprout)
         else:
             parser.print_help()
             return 1
