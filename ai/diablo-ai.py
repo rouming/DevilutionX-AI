@@ -125,6 +125,8 @@ def make_diablo_parser():
                                   help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
     common_ai_parser.add_argument("--embedding-dim", type=int, default=256,
                                   help="dimension of embeddings (default: 256)")
+    common_ai_parser.add_argument("--no-actions", action="store_true",
+                                  help="Disable agent actions (manual play mode).")
 
     # play-ai
     play_ai_parser = subparsers.add_parser("play-ai", parents=[common_parser, common_ai_parser],
@@ -148,8 +150,6 @@ def make_diablo_parser():
     # General game env parameters
     train_ai_parser.add_argument("--log-to-stdout", action="store_true",
                                  help="Write logs to stdout instead of env.log.")
-    train_ai_parser.add_argument("--no-actions", action="store_true",
-                                 help="Disable agent actions (manual play mode).")
     train_ai_parser.add_argument("--exploration-door-attraction", action="store_true",
                                  help="Reward for approaching unexplored doors.")
     train_ai_parser.add_argument("--exploration-door-backtrack-penalty", action="store_true",
