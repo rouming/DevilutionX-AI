@@ -49,9 +49,12 @@ class PPOAlgo(BaseAlgo):
                 batch_loss = 0
                 batch_kl = 0
 
-                # Initialize memory
-
+                # If model is recurrent, load the stored hidden
+                # states.  Mmemory state is detached from the
+                # backpropagation (see the last few lines memory
+                # related in the recurrence loop)
                 if self.acmodel.recurrent:
+                    # memory shape: (seqs_per_mb, hidden_size)
                     memory = exps.memory[inds]
 
                 for i in range(self.recurrence):
@@ -59,25 +62,36 @@ class PPOAlgo(BaseAlgo):
 
                     sb = exps[inds + i]
 
+                    # sb.obs: tensor [S, ...]  (S = sequences_per_subbatch = batch_size // recurrence)
+                    # sb.action, sb.log_prob, sb.advantage, sb.returnn, sb.value are all aligned [S, ...]
+
                     # Compute loss
 
                     if self.acmodel.recurrent:
+                        # Recurrent chain through memory
                         dist, value, memory = self.acmodel(sb.obs, memory * sb.mask)
                     else:
                         dist, value = self.acmodel(sb.obs)
 
+                    # Entropy (scalar) averaged over this sub-batch (S)
                     entropy = dist.entropy().mean()
 
+                    # PPO ratio: exp(log pi_theta(a|s) - log pi_old(a|s))
+                    # shapes: dist.log_prob(sb.action) -> [S], sb.log_prob -> [S]
                     ratio = torch.exp(dist.log_prob(sb.action) - sb.log_prob)
+
+                    # Surrogate objectives (per-sample) and final policy loss (scalar)
                     surr1 = ratio * sb.advantage
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
                     policy_loss = -torch.min(surr1, surr2).mean()
 
+                    # Value loss with clipping (PPO-style)
                     value_clipped = sb.value + torch.clamp(value - sb.value, -self.clip_eps, self.clip_eps)
                     surr1 = (value - sb.returnn).pow(2)
                     surr2 = (value_clipped - sb.returnn).pow(2)
                     value_loss = torch.max(surr1, surr2).mean()
 
+                    # Scalar loss for this timestep
                     loss = policy_loss - self.entropy_coef * entropy + self.value_loss_coef * value_loss
 
                     # Kullback-Leibler (KL) divergence
@@ -92,8 +106,18 @@ class PPOAlgo(BaseAlgo):
                     batch_loss += loss
                     batch_kl += kl.item()
 
-                    # Update memories for next epoch
-
+                    # Save detached memory for the future recurrence
+                    # step. What is important is that memory is saved
+                    # in the experience and never read back. It is
+                    # taken from the experience only once, when
+                    # recrrence window starts (see a few blocks above
+                    # where memory is inited), which means that these
+                    # updates never cross the recurrence or epoch
+                    # boundary and do not influence the training of
+                    # subsequent epochs.
+                    #
+                    # This is executed for ALL steps except the last
+                    # step in the recurrence window
                     if self.acmodel.recurrent and i < self.recurrence - 1:
                         exps.memory[inds + i + 1] = memory.detach()
 
