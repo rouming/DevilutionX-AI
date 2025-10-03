@@ -134,8 +134,7 @@ class PPOAlgo(BaseAlgo):
 
                 self.optimizer.zero_grad()
                 batch_loss.backward()
-                grad_norm = sum(p.grad.data.norm(2).item() ** 2 for p in self.acmodel.parameters()) ** 0.5
-                torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
                 # Update log values
@@ -145,7 +144,7 @@ class PPOAlgo(BaseAlgo):
                 log_policy_losses.append(batch_policy_loss)
                 log_value_losses.append(batch_value_loss)
                 log_kls.append(batch_kl)
-                log_grad_norms.append(grad_norm)
+                log_grad_norms.append(grad_norm.item())
 
         # Log some values
 
