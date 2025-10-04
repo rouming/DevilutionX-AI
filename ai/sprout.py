@@ -705,24 +705,26 @@ class Sprout:
 
         return persisted
 
-    def remove_run_recursive(self, run_id: str, meta: dict, force: bool = False) -> None:
+    def remove_run_recursive(self, run_id: str, run: dict, meta: dict, whole_branch: bool = False) -> None:
         """
         Remove run and optionally its children. Mutates meta but does not save it.
         """
-        if run_id not in meta.get("runs", {}):
-            return
+        runs = meta.get("runs", {})
+        heads = meta.get("heads", {})
+        parent = run.get("parent")
 
         # find children
-        children = [rid for rid, r in meta["runs"].items() if r.get("parent") == run_id]
-        if children and not force:
-            raise SproutError(f"run '{run_id}' has children; use --force to remove branch")
-
-        # recursively remove children
-        for c in list(children):
-            self.remove_run_recursive(c, meta, force=True)
+        children = [(rid, r) for rid, r in runs.items() if r.get("parent") == run_id]
+        for ch_rid, ch in children:
+            if whole_branch:
+                # recursively remove children
+                self.remove_run_recursive(ch_rid, ch, meta, whole_branch=True)
+            else:
+                # reparent children
+                ch["parent"] = parent
 
         # remove heads mapping and folders pointing to this run
-        heads_pointing = [h for h, rid in meta.get("heads", {}).items() if rid == run_id]
+        heads_pointing = [h for h, rid in heads.items() if rid == run_id]
         for h in heads_pointing:
             symlink_path = os.path.join(self.active_path, h)
             if os.path.islink(symlink_path):
@@ -730,7 +732,7 @@ class Sprout:
                     unlink(symlink_path)
                 except OSError:
                     pass
-            meta.get("heads", {}).pop(h, None)
+            heads.pop(h, None)
 
         # delete borg archive (ignore errors)
         try:
@@ -744,14 +746,14 @@ class Sprout:
             rmtree(head_dir)
 
         # remove metadata entry
-        meta.get("runs", {}).pop(run_id, None)
+        runs.pop(run_id, None)
 
     @locked
     def remove(self,
                group: Optional[str] = None,
                run: Optional[str] = None,
                head: Optional[str] = None,
-               force: bool = False) -> dict:
+               whole_branch: bool = False) -> dict:
         """
         Remove:
           - group: all runs for the group,
@@ -771,11 +773,11 @@ class Sprout:
         heads = meta.get("heads", {})
 
         if group:
-            to_delete = [rid for rid, r in runs.items() if r.get("group") == group]
+            to_delete = [(rid, r) for rid, r in runs.items() if r.get("group") == group]
             if not to_delete:
                 raise SproutError(f"group '{group}' not found")
-            for rid in list(to_delete):
-                self.remove_run_recursive(rid, meta, force=True)
+            for rid, r in to_delete:
+                self.remove_run_recursive(rid, r, meta, whole_branch=True)
             self._save_meta(meta)
             return to_delete
 
@@ -784,9 +786,11 @@ class Sprout:
                 raise SproutError(f"head '{head}' not found")
             run = heads[head]
 
-        if run not in runs:
+        r = runs.get(run, {})
+        if not r:
             raise SproutError(f"run '{run}' not found")
-        self.remove_run_recursive(run, meta, force=force)
+
+        self.remove_run_recursive(run, r, meta, whole_branch=whole_branch)
         self._save_meta(meta)
         return [run]
 
@@ -994,10 +998,10 @@ def cli_persist(args, sprout: Sprout) -> int:
 def cli_remove(args, sprout: Sprout) -> int:
     try:
         if args.group:
-            _ = sprout.remove(group=args.group, force=args.force)
+            _ = sprout.remove(group=args.group, whole_branch=args.whole_branch)
             print(f"Removed group {args.group}")
         elif args.run:
-            _ = sprout.remove(run=args.run, force=args.force)
+            _ = sprout.remove(run=args.run, whole_branch=args.whole_branch)
             print(f"Removed run {args.run}")
         elif args.head:
             _ = sprout.remove(head=args.head)
@@ -1403,7 +1407,7 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pr.add_argument("--group", help="Remove whole group and all runs")
     pr.add_argument("--run", dest="run", help="Remove run id")
     pr.add_argument("--head", help="Remove head and active state")
-    pr.add_argument("--force", action="store_true", help="Force remove branch")
+    pr.add_argument("--whole-branch", action="store_true", help="Removes the entire branch along with its children")
 
     # edit
     pe = sub.add_parser("edit")
@@ -1800,16 +1804,29 @@ class SproutCLITests(unittest.TestCase):
         rc, out, err = self.run_cmd(f"cd {self.tmpdir}/active/A && cat md5sum.txt | awk '{{print $2}}' | sort | xargs")
         self.assertEqual(out, "FILE1 FILE3 FILE4\n", msg=err)
 
-        # can't remove branch, no --force specified
-        rc, out, err = self.run_sprout("remove --run fc27ffe9")
-        self.assertEqual(rc, 2, msg=err)
+        # remove node, reparent children
+        rc, out, err = self.run_sprout("remove --run 4a60cce4")
+        self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['0ffd83bf'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe']})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], 'fc27ffe9': ['ce6cdcbc', '0ffd83bf'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe']})
         self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0'})
 
+        """
+        Group: GroupA
+        ├─ 2ca5a9eb params=∅
+        │  ├─ 5ed00be8 params=∅
+        │  └─ 49049a55 params=∅
+        │     └─ fc27ffe9 params=∅
+        │        ├─ ce6cdcbc params=∅
+        │        │  └─ ● B params=∅
+        │        └─ 0ffd83bf params=∅
+        │           └─ ● A params=∅
+        └─ 20c9a09f params=∅
+        """
+
         # remove the whole branch
-        rc, out, err = self.run_sprout("remove --run fc27ffe9 --force")
+        rc, out, err = self.run_sprout("remove --run fc27ffe9 --whole-branch")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
