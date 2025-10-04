@@ -67,14 +67,63 @@ def to_iso(ts: str) -> str:
     dt = datetime.fromisoformat(ts)
     return dt.replace(microsecond=0).isoformat()
 
-def sh(cmd: str, env: Optional[dict] = {}, no_output: Optional[bool] = False) -> str:
+def sh_stream(cmd: str, env: Optional[dict] = {}) -> Optional[Iterator[str]]:
+    """
+    Run a shell command and stream output as it arrives.
+    """
+
+    if DEBUG:
+        print(f"- {cmd}")
+
+    env = os.environ | env
+
+    proc = subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,  # unbuffered
+        text=True,
+        env=env,
+    )
+    def _gen():
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            yield line.strip()
+
+    return _gen
+
+def sh(cmd: str,
+       env: Optional[dict] = {},
+       no_output: Optional[bool] = False,
+       stream: Optional[bool] = False,) -> str:
     """Run a shell command. Exceptions are handled by a caller."""
+    assert not (no_output and stream)
     if DEBUG:
         print(f"- {cmd}")
     env = os.environ | env
     if no_output:
         subprocess.check_call(cmd, shell=True, text=True, env=env)
         return None
+    if stream:
+        proc = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,  # unbuffered
+            text=True,
+            env=env,
+        )
+        def _gen():
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                yield line.strip()
+        return _gen()
     return subprocess.check_output(cmd, shell=True, text=True, env=env)
 
 def rmtree(path: str) -> None:
@@ -1374,8 +1423,9 @@ def cli_fetch(args, sprout: Sprout):
         sprout._borg_delete_repo_cache()
         sh(f"rm -f ~/.config/borg/security/{repo_id}/manifest-timestamp")
 
-    out = sh(f"rsync -avz --delete --ignore-errors --inplace --partial {src_host} {args.working} || true")
-    print(out)
+    cmd = f"rsync -avz --delete --ignore-errors --inplace --partial {src_host} {args.working} || true"
+    for out in sh(cmd, stream=True):
+        print(out)
 
 def build_parser(prog, suppress_working_dir=False, add_help=True):
     parser = argparse.ArgumentParser(prog=prog, description="Sprout CLI", add_help=add_help)
