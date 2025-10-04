@@ -387,6 +387,9 @@ def get_surroundings(d, radius, goal_pos):
     return surroundings
 
 def pick_random_empty_tile_pos(env):
+    """Randomly select a tile in a random room. Since all rooms vary
+    in size, we first select a room with equal probability and then
+    randomly choose a tile coordinate within that room."""
     # 1 - empty, not occupied cell
     # 0 - everything else
     empty_env = \
@@ -396,7 +399,14 @@ def pick_random_empty_tile_pos(env):
         (env == (EnvironmentFlag.Explored.value | \
                  EnvironmentFlag.Visible.value))
 
-    xs, ys = np.where(empty_env != 0)
+    # Label independent regions (rooms)
+    labeled_regions, num_regions = maze.detect_regions(empty_env)
+
+    # Randomly select a region
+    region_nr = np.random.randint(num_regions) + 1
+
+    xs, ys = np.where(labeled_regions == region_nr)
+    # Randomly select a position in the labeled region
     i = np.random.randint(len(xs))
     return (xs[i], ys[i])
 
