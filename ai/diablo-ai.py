@@ -593,6 +593,162 @@ def display_matrix(dunwin, m):
             # square in a terminal
             _addch(dunwin, row + y_off, col + x_off + 1, ' ')
 
+############
+
+import maze
+
+class FindRandomGoal_Bot:
+    def __init__(self, d, goal_pos=None, step_pause=0.1):
+        env_whole = diablo_state.get_environment(d, show_invisible=True,
+                                                 show_unexplored=True)
+        if goal_pos is None:
+            self.goal_pos = diablo_state.pick_random_empty_tile_pos(env_whole)
+        else:
+            self.goal_pos = goal_pos
+        self.explored = np.zeros(env_whole.shape, dtype=np.int32)
+        self.step_pause = step_pause
+        self.goal_found = False
+        self.step_ts = 0
+        self.d = d
+
+    def step(self) -> tuple[bool, int]:
+        if time.time() - self.step_ts < self.step_pause:
+            # Too early, repeat
+            return False, 0
+
+        self.step_ts = time.time()
+
+        player_pos = diablo_state.player_position(self.d)
+        env_whole = diablo_state.get_environment(self.d, show_invisible=True,
+                                                 show_unexplored=True)
+
+        # Get cloud of visible tiles and frontier
+        visible, frontier = \
+            maze.visibility_frontier(env_whole,
+                                     diablo_state.EnvironmentFlag.Visible.value,
+                                     player_pos)
+
+        # Mark visible cloud as explored
+        vr, vc = np.array(list(visible)).T
+        self.explored[vr, vc] = 1
+
+        for p in list(frontier):
+            if not self.explored[p]:
+                tile = env_whole[p]
+                if tile & diablo_state.EnvironmentFlag.Door.value:
+                    self.explored[p] = 3
+                elif tile == (diablo_state.EnvironmentFlag.Explored.value |
+                              diablo_state.EnvironmentFlag.Visible.value):
+                    self.explored[p] = 2
+
+        unexplored_mask = self.explored > 1
+
+        if False:
+            # Label independent unexplored regions
+            labeled_regions, num_regions = maze.detect_regions(unexplored_mask)
+            unexplored_points = []
+            for i in range(num_regions):
+                region = labeled_regions == i+1
+                centroid = maze.find_centroid(region)
+                unexplored_points.append(centroid)
+        else:
+            # Each unresolved point
+            y, x = np.where(unexplored_mask)
+            unexplored_points = np.column_stack((y, x))
+
+        if self.goal_found or env_whole[self.goal_pos] & diablo_state.EnvironmentFlag.Visible.value:
+            unexplored_points = [self.goal_pos]
+            # The target may momentarily disappear from the agent's view,
+            # causing it to return to unexplored points. This can create
+            # an endless loop: the agent sees the target, moves towards
+            # the target, loses sight of the target, moves to an
+            # unexplored point, sees the target, moves towards the
+            # target... To prevent the loop, mark the goal as found.
+            self.goal_found = True
+        else:
+            dist = lambda p: (p[0] - player_pos[0])**2 + (p[1] - player_pos[1])**2
+            unexplored_points = sorted(unexplored_points, key=dist)
+
+        empty_env = (
+            (env_whole == 0) |
+            (env_whole == diablo_state.EnvironmentFlag.Explored.value) |
+            (env_whole == diablo_state.EnvironmentFlag.Visible.value) |
+            (env_whole == (diablo_state.EnvironmentFlag.Explored.value |
+                           diablo_state.EnvironmentFlag.Visible.value)) |
+            # Consider a tile with a door, barrel, and item as
+            # unoccupied. The door can be opened, the barrel can be
+            # broken, and the item can be picked up.
+            ((env_whole & (diablo_state.EnvironmentFlag.Door.value |
+                           diablo_state.EnvironmentFlag.Barrel.value |
+                           diablo_state.EnvironmentFlag.Item.value) != 0)))
+
+        if not unexplored_points:
+            # Hey, nothing to explore? Wasn't a goal found?
+            return True, 0
+
+        # Pick the first unexplored point
+        unexplored_point = tuple(unexplored_points[0])
+        path = maze.shortest_path(empty_env, player_pos, unexplored_point)
+        if not path:
+            # A few helpers to figure out the problem
+            ee = empty_env.astype(int)
+            ee[player_pos] = 2
+            ee[unexplored_point] = 3
+            np.savetxt("dungeon.txt", ee.T, fmt="%d")
+        assert path
+        if len(path) == 1:
+            # Goal is reached
+            return True, 0
+
+        step_point = path[1]
+        move_dir = tuple(np.array(step_point) - np.array(player_pos))
+        r, c = player_pos
+        nr, nc = step_point
+
+        barrel_or_item = (diablo_state.EnvironmentFlag.Barrel.value |
+                          diablo_state.EnvironmentFlag.Item.value)
+        next_tile = env_whole[step_point]
+        key = 0
+
+        if (sum(np.abs(move_dir)) == 2 and
+            (env_whole[r][nc] & barrel_or_item or
+             env_whole[nr][c] & barrel_or_item)):
+            # Diagonal move. Find nearby objects like barrels
+            # (which should be broken to pass through) or
+            # items (just pick them up)
+            key = (ring.RingEntryType.RING_ENTRY_KEY_X)
+        elif (next_tile & diablo_state.EnvironmentFlag.Door.value and
+            not (next_tile & diablo_state.EnvironmentFlag.Open.value)):
+            key = (ring.RingEntryType.RING_ENTRY_KEY_X)
+        elif (next_tile & diablo_state.EnvironmentFlag.Barrel.value):
+            key = (ring.RingEntryType.RING_ENTRY_KEY_X)
+        elif (next_tile & diablo_state.EnvironmentFlag.Item.value):
+            key = (ring.RingEntryType.RING_ENTRY_KEY_X)
+        elif move_dir == (-1, 1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_DOWN |
+                       ring.RingEntryType.RING_ENTRY_KEY_LEFT)
+        elif move_dir == (0, 1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_DOWN)
+        elif move_dir == (1, 1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_DOWN |
+                       ring.RingEntryType.RING_ENTRY_KEY_RIGHT)
+        elif move_dir == (-1, 0):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_LEFT)
+        elif move_dir == (1, 0):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_RIGHT)
+        elif move_dir == (-1, -1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_UP |
+                       ring.RingEntryType.RING_ENTRY_KEY_LEFT)
+        elif move_dir == (0, -1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_UP)
+        elif move_dir == (1, -1):
+                key = (ring.RingEntryType.RING_ENTRY_KEY_UP |
+                       ring.RingEntryType.RING_ENTRY_KEY_RIGHT)
+        else:
+            assert 0, "Unreachable line"
+
+        return False, key
+
 def display_dungeon(d, stdscr, view_radius, goal_pos):
     height, width = stdscr.getmaxyx()
     dunwin = stdscr.subwin(height - (4 + 1), width, 4, 0)
@@ -669,16 +825,31 @@ def run_tui(stdscr, args, gameconfig):
     events = EventsQueue()
     envlog = None
 
+    #XXX
+    bot = FindRandomGoal_Bot(game.safe_state, step_pause=0)
+    goal_pos = bot.goal_pos
+
+    display = True
+    steps = 0
+
     # Main loop
     while RUNNING:
-        stdscr.clear()
+        #XXX
+        if display:
+            stdscr.clear()
 
-        if not args.no_env_log and envlog is None:
-            # Try to open a environment log, can be created later
-            envlog = open_envlog(game)
-        view_radius = args.view_radius
+            if not args.no_env_log and envlog is None:
+                # Try to open a environment log, can be created later
+                envlog = open_envlog(game)
+            view_radius = args.view_radius
 
-        display_diablo_state(game, stdscr, events, envlog, view_radius)
+            display_diablo_state(game, stdscr, events, envlog, view_radius)
+
+        done, LAST_KEY = bot.step()
+        if done:
+            break
+
+        steps += 1
 
         if LAST_KEY:
             # Compensate dungeon 45CW rotation
@@ -686,6 +857,10 @@ def run_tui(stdscr, args, gameconfig):
             key |= ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
             game.submit_key(key)
             LAST_KEY = 0
+
+        #XXX
+        if not display:
+            continue
 
         # Refresh the screen to show the content
         stdscr.refresh()
