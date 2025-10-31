@@ -1,17 +1,40 @@
-import os
-import json
-import numpy
-import re
-import torch
-import rl.torch_ac as torch_ac
 import gymnasium as gym
+import json
+import math
+import numpy
+import os
+import re
+import rl.torch_ac as torch_ac
+import torch
 
 import rl.utils as utils
 
 
 def get_obss_preprocessor(obs_space):
+    # Check if it is a Diablo observation space
+    if (isinstance(obs_space, gym.spaces.Dict) and
+        {"env", "env-status"} <= set(obs_space.spaces)):
+
+        env_space = obs_space.spaces["env"]
+        env_status_space = obs_space.spaces["env-status"]
+        nr_env_channels = int(math.log2(env_space.high.max() + 1))
+        env_status_space_high = env_status_space.high.max()
+        nr_channels = nr_env_channels + env_status_space.shape[-1]
+        obs_space = { "image": (*env_space.shape, nr_channels) }
+
+        def preprocess_obss(obss, device=None):
+            env = numpy.array([obs["env"] for obs in obss])
+            env_status = numpy.array([obs["env-status"] for obs in obss])
+            return torch_ac.DictList({
+                "image": batch_dungeon_observations_to_one_hot(env,
+                                                               env_status,
+                                                               nr_env_channels,
+                                                               env_status_space_high,
+                                                               device=device),
+            })
+
     # Check if obs_space is an image space
-    if isinstance(obs_space, gym.spaces.Box):
+    elif isinstance(obs_space, gym.spaces.Box):
         obs_space = {"image": obs_space.shape}
 
         def preprocess_obss(obss, device=None):
@@ -37,6 +60,36 @@ def get_obss_preprocessor(obs_space):
         raise ValueError("Unknown observation space: " + str(obs_space))
 
     return obs_space, preprocess_obss
+
+
+def batch_dungeon_observations_to_one_hot(env, env_status,
+                                          nr_env_channels,
+                                          env_status_space_high,
+                                          device=None):
+    """
+    Convert a batch of dungeon observations into a one-hot style tensor.
+
+    Batch args:
+      env_status (np.ndarray): 1D environment status vector
+      env (np.ndarray): 2D dungeon map with bitfield-encoded flags
+
+    Returns:
+      torch.tensor: combined observation tensor
+    """
+
+    # (B, H, W)
+    env_t = torch.as_tensor(env, dtype=torch.int64, device=device)
+    # (B, S)
+    env_status_t = torch.as_tensor(env_status, dtype=torch.float32, device=device)
+
+    bit_indices = torch.arange(nr_env_channels, device=device, dtype=torch.int64)
+    # (B, H, W, C)
+    bit_planes = ((env_t.unsqueeze(-1) >> bit_indices) & 1).to(torch.float32)
+    # (B, 1, 1, S)
+    env_status_t = torch.clamp(env_status_t / env_status_space_high, 0.0, 1.0).unsqueeze(1).unsqueeze(2)
+    # (B, H, W, S)
+    env_status_t = env_status_t.expand(-1, env.shape[1], env.shape[2], -1)
+    return torch.cat([bit_planes, env_status_t], dim=-1)
 
 
 def preprocess_images(images, device=None):

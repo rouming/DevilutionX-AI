@@ -148,43 +148,6 @@ class DiabloEnv(gym.Env):
 
         return mask
 
-    @staticmethod
-    def observation_to_one_hot(env_status, env, nr_env_channels):
-        """
-        Convert a dungeon observation into a one-hot style tensor.
-        Steps:
-        - Expand `env` bitfields into binary planes: (N, M, NR_ENV_CHANNELS)
-        - Normalize and broadcast `env_status` across the grid: (N, M, S)
-        - Concatenate both along the channel axis: (N, M, NR_ENV_CHANNELS + S)
-
-        Args:
-          env_status (np.ndarray): 1D environment status vector
-          env (np.ndarray): 2D dungeon map with bitfield-encoded flags
-
-        Returns:
-          np.ndarray: Combined observation tensor of shape
-                      (N, M, NR_ENV_CHANNELS + env_status.shape[-1])
-        """
-        # Represent environment as bits,
-        # i.e. (N, M) -> (N, M * sizeof(env.dtype) * 8)
-        bit_planes = np.unpackbits(env.view(np.uint8), bitorder='little', axis=-1)
-        # Split rows on the number of columns, i.e. M, and then stack
-        # the resulting arrays to have (N, M, sizeof(env.dtype) * 8)
-        bit_planes = np.stack(np.split(bit_planes, env.shape[-1], axis=-1), axis=1)
-        # Extract only used channels, i.e. (N, M, NR_ENV_CHANNELS)
-        bit_planes = bit_planes[:, :, :nr_env_channels]
-
-        # Normalize env_status
-        env_status = env_status.astype(np.float32) / 0xfffff
-        assert not np.any(env_status > np.float32(1.))
-
-        # Repeat across entire environment, so resulting shape will be
-        # (N, M, env_status.shape)
-        env_status = np.tile(env_status, (*env.shape, 1))
-
-        # (N, M, bit_planes.shape[-1] + env_status.shape)
-        return np.concat([bit_planes, env_status], axis=-1)
-
     def __init__(self, env_config, **kwargs):
         if env_config is None:
             raise ValueError("env_config must be provided!")
@@ -222,11 +185,20 @@ class DiabloEnv(gym.Env):
 
         self.action_space = gym.spaces.Discrete(len(DiabloEnv.ActionEnum))
 
-        nr_channels = self.nr_env_channels + env_status.shape[0]
-        self.observation_space = gym.spaces.Box(low=0,
-                                                high=1,
-                                                shape=(*env.shape, nr_channels),
-                                                dtype=np.float32)
+        env_space = gym.spaces.Box(low=0,
+                                   high=(1 << self.nr_env_channels) - 1,
+                                   shape=env.shape,
+                                   dtype=np.uint32)
+        env_status_space = gym.spaces.Box(low=0,
+                                          high=0xfffff,
+                                          shape=env_status.shape,
+                                          dtype=np.uint32)
+
+        self.observation_space = gym.spaces.Dict({
+            "env": env_space,
+            "env-status": env_status_space,
+        })
+
 
     @property
     def nr_env_channels(self):
@@ -263,7 +235,7 @@ class DiabloEnv(gym.Env):
         hp = d.player._pHitPoints
         mode = d.player._pmode
         player_pos = diablo_state.player_position(d)
-        return np.array([monsters_cnt, hp, mode, *player_pos])
+        return np.array([monsters_cnt, hp, mode, *player_pos], dtype=np.uint32)
 
     def init_goal(self, d):
         # Environment of the whole dungeon
@@ -340,8 +312,10 @@ class DiabloEnv(gym.Env):
         # Starting dungeon level
         self.start_dungeon_level = d.player.plrlevel
 
-        obss = DiabloEnv.observation_to_one_hot(env_status, env, self.nr_env_channels)
-
+        obss = {
+            "env": env,
+            "env-status": env_status
+        }
         return obss, {}
 
     def is_agent_stuck(self, d, was_exploring):
@@ -597,8 +571,10 @@ class DiabloEnv(gym.Env):
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        obss = DiabloEnv.observation_to_one_hot(env_status, env, self.nr_env_channels)
-
+        obss = {
+            "env": env,
+            "env-status": env_status
+        }
         return obss, reward, done, truncated, {}
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
