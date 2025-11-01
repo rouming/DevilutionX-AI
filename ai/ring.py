@@ -2,9 +2,9 @@
 """
 ring.py - Lock-Free Ring Queue for Shared Memory Input Events
 
-Implements a fixed-size lock-free ring buffer using ctypes and
-DevilutionX's `ring_queue` layout. Supports submitting and retrieving
-entries without locks.
+Implements a fixed-size lock-free ring buffer using DevilutionX's
+`ring_queue` layout. Supports submitting and retrieving entries
+without locks.
 
 WARNING:
     This code assumes x86-64 memory ordering. On architectures
@@ -20,16 +20,25 @@ WARNING:
 Author: Roman Penyaev <r.peniaev@gmail.com>
 """
 
-import ctypes
+import numpy as np
 import futex
 import devilutionx as dx
 
+
+def offsetof(cls, field):
+    return cls.fields[field][1]
+
+def addr(obj):
+    # https://numpy.org/devdocs/reference/generated/numpy.ndarray.ctypes.html
+    return obj.__array_interface__['data'][0]
+
+
 # Define constants
-RING_QUEUE_CAPACITY = dict(dx.ring_queue._fields_)["array"]._length_
+RING_QUEUE_CAPACITY = dx.ring_queue.fields['array'][0].shape[0]
 RING_QUEUE_MASK = RING_QUEUE_CAPACITY - 1
 
 # Define the ring_entry_type enum
-class RingEntryType(ctypes.c_int):
+class RingEntryType:
     RING_ENTRY_KEY_LEFT  = 1<<0
     RING_ENTRY_KEY_RIGHT = 1<<1
     RING_ENTRY_KEY_UP    = 1<<2
@@ -53,6 +62,7 @@ class RingEntryType(ctypes.c_int):
     # Common flags
     RING_ENTRY_FLAGS	 = (RING_ENTRY_F_SINGLE_TICK_PRESS)
 
+
 def init(ring):
     ring.write_idx = 0
     ring.read_idx = 0
@@ -74,15 +84,17 @@ def submit(ring):
     # TODO: for architectures other than x86-64 we need
     # __atomic_store_n(&write_idx, write_idx + 1, __ATOMIC_RELEASE)
     ring.write_idx += 1
-    addr_write_idx = ctypes.addressof(ring) + dx.ring_queue.write_idx.offset
+
+    addr_write_idx = addr(ring) + offsetof(dx.ring_queue, 'write_idx')
     futex.wake(addr_write_idx)
 
 def wait_all_retrieved(ring, read_idx=None):
     """Wait for all retrieved. Called on the producer side"""
     if read_idx is None:
         read_idx = ring.read_idx
+    base_addr = addr(ring)
     while ring.write_idx != read_idx:
-        addr_read_idx = ctypes.addressof(ring) + dx.ring_queue.read_idx.offset
+        addr_read_idx = base_addr + offsetof(dx.ring_queue, 'read_idx')
         futex.wait(addr_read_idx, read_idx)
         read_idx = ring.read_idx
 
@@ -100,17 +112,19 @@ def get_entry_to_retrieve(ring, read_idx=None):
 def retrieve(ring):
     """Mark the current entry as retrieved."""
     ring.read_idx += 1
-    addr_read_idx = ctypes.addressof(ring) + dx.ring_queue.read_idx.offset
+    base_addr = addr(ring)
+    addr_read_idx = base_addr + offsetof(dx.ring_queue, 'read_idx')
     futex.wake(addr_read_idx)
 
 def wait_any_submitted(ring, read_idx=None):
     """Wait for anything submitted. Called on the consimer side"""
     if read_idx is None:
         read_idx = ring.read_idx
+    base_addr = addr(ring)
     while ring.write_idx == read_idx:
         # Pass `read_idx` as expected value to avoid a race, since
         # `write_idx` can be increased by the producer
-        addr_write_idx = ctypes.addressof(ring) + dx.ring_queue.write_idx.offset
+        addr_write_idx = base_addr + offsetof(dx.ring_queue, 'write_idx')
         futex.wait(addr_write_idx, read_idx)
 
 # Example Usage
@@ -120,10 +134,13 @@ if __name__ == "__main__":
     import time
 
     # Create shared memory for the ring queue
-    mm = mmap.mmap(-1, ctypes.sizeof(dx.ring_queue))
+    mm = mmap.mmap(-1, dx.ring_queue.itemsize)
 
-    # Initialize ring_queue with the shared memory address
-    ring = dx.ring_queue.from_buffer(mm)
+    # Create a 1-element view and return the scalar object. The
+    # `view(np.recarray)` is needed to allow access using dot
+    # notation.
+    rings = np.frombuffer(mm, dtype=dx.ring_queue, count=1).view(np.recarray)
+    ring = rings[0]
 
     # Initialize the ring queue
     init(ring)
@@ -138,7 +155,7 @@ if __name__ == "__main__":
     i = 0
     while has_capacity_to_submit(ring):
         entry = get_entry_to_submit(ring)
-        entry.type = i
+        entry.en_type = i
         submit(ring)
         i += 1
     assert i == RING_QUEUE_CAPACITY
@@ -149,7 +166,7 @@ if __name__ == "__main__":
         entry = get_entry_to_retrieve(ring)
         if entry == None:
             break
-        assert entry.type == i
+        assert entry.en_type == i
         retrieve(ring)
         i += 1
     assert i == RING_QUEUE_CAPACITY
@@ -157,19 +174,21 @@ if __name__ == "__main__":
     # Get an entry to submit and submit it
     entry = get_entry_to_submit(ring)
     assert entry is not None
-    entry.type = 0x666
-    entry.data = 0x555
+    entry.en_type = 0x666
+    entry.en_data = 0x555
     submit(ring)
 
     # Retrieve the entry after submitting
     entry = get_entry_to_retrieve(ring)
     assert entry is not None
-    assert entry.type == 0x666
-    assert entry.data == 0x555
+    assert entry.en_type == 0x666
+    assert entry.en_data == 0x555
 
     # Retrieve the next entry, it should be the same as the previous one
     entry2 = get_entry_to_retrieve(ring)
-    assert ctypes.addressof(entry) == ctypes.addressof(entry2)
+    base_addr1 = addr(entry)
+    base_addr2 = addr(entry2)
+    assert base_addr1 == base_addr2
 
     # Now retrieve the entry from the ring queue
     retrieve(ring)
@@ -190,8 +209,8 @@ if __name__ == "__main__":
         # Retrieve the submitted entry
         entry = get_entry_to_retrieve(ring)
         assert entry is not None
-        assert entry.type == 0x111
-        assert entry.data == 0x111
+        assert entry.en_type == 0x111
+        assert entry.en_data == 0x111
         print("child:  retrieved from parent")
         retrieve(ring)
 
@@ -203,8 +222,8 @@ if __name__ == "__main__":
         # Get an entry to submit and submit it
         entry = get_entry_to_submit(ring)
         assert entry is not None
-        entry.type = 0x222
-        entry.data = 0x222
+        entry.en_type = 0x222
+        entry.en_data = 0x222
         print("child:  submitted to parent")
         submit(ring)
         wait_all_retrieved(ring);
@@ -216,8 +235,8 @@ if __name__ == "__main__":
         # Get an entry to submit and submit it
         entry = get_entry_to_submit(ring)
         assert entry is not None
-        entry.type = 0x111
-        entry.data = 0x111
+        entry.en_type = 0x111
+        entry.en_data = 0x111
         print("parent: submitted to child")
         submit(ring)
 
@@ -233,8 +252,8 @@ if __name__ == "__main__":
         # Retrieve the submitted entry
         entry = get_entry_to_retrieve(ring)
         assert entry is not None
-        assert entry.type == 0x222
-        assert entry.data == 0x222
+        assert entry.en_type == 0x222
+        assert entry.en_data == 0x222
         print("parent: retrieved from child")
         retrieve(ring)
 

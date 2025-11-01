@@ -499,7 +499,7 @@ def get_radius(d, dunwin):
 def get_events_as_string(game, events):
     advance_progress = False
     while (event := game.retrieve_event()) is not None:
-        keys = event.type
+        keys = event.en_type
         k = None
 
         if keys == 0:
@@ -612,7 +612,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     msg = "Diablo ticks: %4d; Kills: %003d; HP: %d; Pos: %d:%d; State: %-18s" % \
         (game.ticks(d),
-         np.sum(d.MonsterKillCounts_np),
+         np.sum(d.MonsterKillCounts),
          d.player._pHitPoints,
          pos[0], pos[1],
          dx.PLR_MODE(d.player._pmode).name)

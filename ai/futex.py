@@ -17,7 +17,7 @@ def wait(addr, expected):
     return libc.syscall(SYS_futex,
                         ctypes.c_void_p(addr),
                         FUTEX_WAIT,
-                        expected,
+                        ctypes.c_uint32(expected),
                         0, 0, 0)
 
 def wake(addr, n=INT_MAX):

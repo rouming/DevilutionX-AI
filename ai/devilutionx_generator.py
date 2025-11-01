@@ -1,7 +1,7 @@
 """
 devilutionx_generate.py - Generator of the devilutionx.py module
 """
-import dbg2ctypes
+import dbg2numpy
 
 DEVILUTIONX_VARS = [
     "devilution::shared::input_queue",
@@ -52,7 +52,7 @@ DEVILUTIONX_VARS = [
 
 def generate(binary_path):
     module_path = "devilutionx.py"
-    content, regenerate = dbg2ctypes.generate_ctypes_module(
+    content, regenerate = dbg2numpy.generate_numpy_module(
         DEVILUTIONX_VARS, binary_path, module_path)
     if regenerate:
         open(module_path, "w").writelines(content)

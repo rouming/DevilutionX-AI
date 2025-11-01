@@ -12,7 +12,6 @@ Author: Roman Penyaev <r.peniaev@gmail.com>
 """
 
 from types import SimpleNamespace
-import ctypes
 import copy
 import enum
 import mmap
@@ -22,16 +21,16 @@ import subprocess
 import tempfile
 import time
 
-import dbg2ctypes
+import dbg2numpy
 import devilutionx as dx
 import maze
 import procutils
 import ring
 
-class AgentState(ctypes.Structure):
-    _fields_ = [
+
+AgentState = np.dtype([
 	("goal_pos", dx.PointOf_int_),
-    ]
+], align=True)
 
 class DoorState(enum.Enum):
     DOOR_CLOSED   = 0
@@ -43,19 +42,11 @@ def round_up_int(i, d):
     assert type(d) == int
     return (i + d - 1) // d * d
 
-def get_ctypes_array_shape(array):
-    shape = []
-    t = type(array)
-    while issubclass(t, ctypes.Array):
-        shape.append(t._length_)
-        t = t._type_
-    return tuple(shape)
-
 def dungeon_dim(d):
-    return get_ctypes_array_shape(d.dObject)
+    return d.dObject.shape
 
 def to_object(d, pos):
-    obj_id = d.dObject_np[pos]
+    obj_id = d.dObject[pos]
     if obj_id != 0:
         return d.Objects[abs(obj_id) - 1]
     return None
@@ -102,17 +93,17 @@ def is_sarcophagus(obj):
                           dx._object_id.OBJ_L5SARC.value)
 
 def is_floor(d, pos):
-    return not (d.SOLData[d.dPiece_np[pos]] & \
+    return not (d.SOLData[d.dPiece[pos]] & \
                 (dx.TileProperties.Solid.value | dx.TileProperties.BlockMissile.value))
 
 def is_arch(d, pos):
-    return d.dSpecial_np[pos] > 0
+    return d.dSpecial[pos] > 0
 
 def is_wall(d, pos):
     return not is_floor(d, pos) and not is_arch(d, pos)
 
 def to_trigger(d, pos):
-    for trig in d.trigs[:d.numtrigs.value]:
+    for trig in d.trigs[:d.numtrigs]:
         if trig.position.x == pos[0] and trig.position.y == pos[1]:
             return trig
     return None
@@ -127,7 +118,7 @@ def is_trigger_warp(trig):
     return trig._tmsg == dx.interface_mode.WM_DIABTWARPUP.value
 
 def is_game_paused(d):
-    return d.PauseMode.value != 0
+    return d.PauseMode != 0
 
 def is_player_dead(d):
     return d.player._pmode == dx.PLR_MODE.PM_DEATH.value
@@ -158,17 +149,17 @@ def get_closed_doors_ids(d):
     return closed_doors
 
 def count_active_items(d):
-    return d.ActiveItemCount.value
+    return d.ActiveItemCount
 
 def count_active_monsters(d):
-    return d.ActiveMonsterCount.value
+    return d.ActiveMonsterCount
 
 def count_active_monsters_total_hp(d):
     return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
 
 def count_explored_tiles(d):
     bits = dx.DungeonFlag.Explored.value
-    return np.sum((d.dFlags_np & bits) == bits)
+    return np.sum((d.dFlags & bits) == bits)
 
 def find_trigger(d, tmsg):
     for trig in d.trigs:
@@ -258,9 +249,9 @@ def get_environment(d, radius=None, goal_pos=None,
             trig = to_trigger(d, spos)
             s = 0
 
-            if d.dFlags_np[spos] & dx.DungeonFlag.Explored.value:
+            if d.dFlags[spos] & dx.DungeonFlag.Explored.value:
                 s |= EnvironmentFlag.Explored.value
-            if d.dFlags_np[spos] & dx.DungeonFlag.Visible.value:
+            if d.dFlags[spos] & dx.DungeonFlag.Visible.value:
                 s |= EnvironmentFlag.Visible.value
 
             if show_unexplored or s & EnvironmentFlag.Explored.value:
@@ -280,9 +271,9 @@ def get_environment(d, radius=None, goal_pos=None,
             if show_invisible or s & EnvironmentFlag.Visible.value:
                 if goal_pos and spos == goal_pos:
                     s |= EnvironmentFlag.Goal.value
-                if d.dFlags_np[spos] & dx.DungeonFlag.Missile.value:
+                if d.dFlags[spos] & dx.DungeonFlag.Missile.value:
                     s |= EnvironmentFlag.Missile.value
-                if d.dMonster_np[spos] > 0:
+                if d.dMonster[spos] > 0:
                     s |= EnvironmentFlag.Monster.value
 
                 if obj is not None:
@@ -308,7 +299,7 @@ def get_environment(d, radius=None, goal_pos=None,
                         s |= EnvironmentFlag.UnknownObject.value
                         if is_interactable(obj):
                             s |= EnvironmentFlag.Interactable.value
-                if d.dItem_np[spos] > 0:
+                if d.dItem[spos] > 0:
                     s |= EnvironmentFlag.Item.value
 
             if spos == player_position(d):
@@ -455,12 +446,17 @@ def get_dungeon_graph_and_path(env, start, goal):
     return regions_doors, labeled_regions, regions_path, path_doors
 
 def map_agent_state(path):
-    size = ctypes.sizeof(AgentState)
+    size = AgentState.itemsize
     f = open(path, "a+b")
     f.truncate(size)
     mmapped = mmap.mmap(f.fileno(), 0)
     f.close()
-    state = AgentState.from_buffer(mmapped)
+
+    # Create a 1-element view and return the scalar object. The
+    # `view(np.recarray)` is needed to allow access using dot
+    # notation.
+    state_array = np.frombuffer(mmapped, dtype=AgentState, count=1).view(np.recarray)
+    state = state_array[0]
 
     return state
 
@@ -473,15 +469,19 @@ def map_devilutionx_state(path, offset):
 
     for var in dx.VARS:
         addr = var['addr']
-        assert offset <= addr
-        obj = var['type'].from_buffer(mmapped, addr - offset)
-        name = dbg2ctypes.strip_namespaces(var['name'])
-        vars_dict[name] = obj
+        dtype = var['type']
+        assert offset <= addr, "Address offset is larger than variable address"
+        var_offset = addr - offset
 
-        if isinstance(obj, ctypes.Array):
-            # Add numpy array view
-            np_view = np.ctypeslib.as_array(obj)
-            vars_dict[name + "_np"] = np_view
+        # Create a 1-element NumPy array view at the specified offset
+        # This view points directly into the mmap buffer. The
+        # `view(np.recarray)` is needed to allow access using dot
+        # notation.
+        obj_array = np.frombuffer(mmapped, dtype=dtype, count=1, offset=var_offset).view(np.recarray)
+        # Get the scalar object from the 1-element array
+        obj = obj_array[0]
+        name = dbg2numpy.strip_namespaces(var['name'])
+        vars_dict[name] = obj
 
     state = SimpleNamespace(**vars_dict)
 
@@ -517,7 +517,7 @@ class DiabloGame:
 
         if game_ticks_per_step is None:
             # Read shared option in case of the attach
-            self.game_ticks_per_step = self.state.GameTicksPerStep.value
+            self.game_ticks_per_step = self.state.GameTicksPerStep
         else:
             self.game_ticks_per_step = game_ticks_per_step
 
@@ -560,7 +560,7 @@ class DiabloGame:
             self.state_dir.cleanup()
 
     def ticks(self, d=None):
-        t = self.state.game_ticks.value if d is None else d.game_ticks.value
+        t = self.state.game_ticks if d is None else d.game_ticks
         return t
 
     def update_ticks(self):
@@ -584,8 +584,8 @@ class DiabloGame:
         request_tag = (time.time_ns() & 0xffffffff)
         assert ring.has_capacity_to_submit(self.state.input_queue)
         entry = ring.get_entry_to_submit(self.state.input_queue)
-        entry.type = key
-        entry.data = request_tag
+        entry.en_type = key
+        entry.en_data = request_tag
 
         # Submit key
         ring.submit(self.state.input_queue)
@@ -605,10 +605,10 @@ class DiabloGame:
             entry = ring.get_entry_to_retrieve(self.state.events_queue, read_idx)
             read_idx += 1
             assert entry != None
-            if entry.data == request_tag:
+            if entry.en_data == request_tag:
                 event_type = feedback_events[event_idx]
                 event_idx += 1
-                assert entry.type == event_type
+                assert entry.en_type == event_type
 
                 if not self.game_ticks_per_step:
                     # For run-time mode we receive only released keys

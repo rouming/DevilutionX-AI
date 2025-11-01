@@ -967,7 +967,7 @@ static bool update_shared_state(int timeout_ms, bool retrieve_input,
 			injected = inject_sdl_events(&keys_state, 0);
 		} else if (retrieve_input &&
 				   (entry = ring_queue_get_entry_to_retrieve(&shared::input_queue))) {
-			uint32_t keys = entry->type;
+			uint32_t keys = entry->en_type;
 
 			should_release_keys = (keys & RING_ENTRY_F_SINGLE_TICK_PRESS);
 			keys &= ~RING_ENTRY_FLAGS;
@@ -977,15 +977,15 @@ static bool update_shared_state(int timeout_ms, bool retrieve_input,
 
 			injected = inject_sdl_events(&keys_state, keys);
 			if (injected && request_tag)
-				*request_tag = entry->data;
+				*request_tag = entry->en_data;
 			ring_queue_retrieve(&shared::input_queue);
 		}
 
 		if (released_keys) {
 			// Reply with release key event
 			entry = ring_queue_get_entry_to_submit(&shared::events_queue);
-			entry->type = released_keys;
-			entry->data = request_tag ? *request_tag : 0;
+			entry->en_type = released_keys;
+			entry->en_data = request_tag ? *request_tag : 0;
 			ring_queue_submit(&shared::events_queue);
 		}
 	}
@@ -1116,8 +1116,8 @@ void RunGameLoop(interface_mode uMsg)
 				// Reply with step finished event
 				struct ring_entry *entry;
 				entry = ring_queue_get_entry_to_submit(&shared::events_queue);
-				entry->type = RING_ENTRY_EVENT_STEP_FINISHED;
-				entry->data = request_tag;
+				entry->en_type = RING_ENTRY_EVENT_STEP_FINISHED;
+				entry->en_data = request_tag;
 				ring_queue_submit(&shared::events_queue);
 			}
 

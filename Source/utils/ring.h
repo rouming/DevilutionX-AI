@@ -40,8 +40,8 @@ enum ring_entry_type {
 };
 
 struct ring_entry {
-	uint32_t type;
-	uint32_t data;
+	uint32_t en_type;
+	uint32_t en_data;
 };
 
 struct ring_queue {
@@ -166,7 +166,7 @@ int main()
 	i = 0;
 	while (ring_queue_has_capacity_to_submit(ring)) {
 		entry = ring_queue_get_entry_to_submit(ring);
-		entry->type = i;
+		entry->en_type = i;
 		ring_queue_submit(ring);
 		i++;
 	}
@@ -178,7 +178,7 @@ int main()
 		entry = ring_queue_get_entry_to_retrieve(ring);
 		if (!entry)
 			break;
-		assert(entry->type == i);
+		assert(entry->en_type == i);
 		ring_queue_retrieve(ring);
 		i++;
 	}
@@ -186,12 +186,12 @@ int main()
 
 	entry = ring_queue_get_entry_to_submit(ring);
 	assert(entry != NULL);
-	entry->type = 666;
+	entry->en_type = 666;
 
 	ring_queue_submit(ring);
 	entry = ring_queue_get_entry_to_retrieve(ring);
 	assert(entry != NULL);
-	assert(entry->type == 666);
+	assert(entry->en_type == 666);
 
 	entry2 = ring_queue_get_entry_to_retrieve(ring);
 	assert(entry == entry2);
@@ -212,8 +212,8 @@ int main()
 		/* Retrieve the submitted entry */
 		entry = ring_queue_get_entry_to_retrieve(ring);
 		assert(entry != NULL);
-		assert(entry->type == 0x111);
-		assert(entry->data == 0x111);
+		assert(entry->en_type == 0x111);
+		assert(entry->en_data == 0x111);
 		printf("child:	retrieved from parent\n");
 		ring_queue_retrieve(ring);
 
@@ -225,8 +225,8 @@ int main()
 		/* Get an entry to submit and submit it */
 		entry = ring_queue_get_entry_to_submit(ring);
 		assert(entry != NULL);
-		entry->type = 0x222;
-		entry->data = 0x222;
+		entry->en_type = 0x222;
+		entry->en_data = 0x222;
 		printf("child:	submitted to parent\n");
 		ring_queue_submit(ring);
 		ring_queue_wait_all_retrieved(ring, -1);
@@ -238,8 +238,8 @@ int main()
 		/* Get an entry to submit and submit it */
 		entry = ring_queue_get_entry_to_submit(ring);
 		assert(entry != NULL);
-		entry->type = 0x111;
-		entry->data = 0x111;
+		entry->en_type = 0x111;
+		entry->en_data = 0x111;
 		printf("parent: submitted to child\n");
 		ring_queue_submit(ring);
 
@@ -255,8 +255,8 @@ int main()
 		/* Retrieve the submitted entry */
 		entry = ring_queue_get_entry_to_retrieve(ring);
 		assert(entry != NULL);
-		assert(entry->type == 0x222);
-		assert(entry->data == 0x222);
+		assert(entry->en_type == 0x222);
+		assert(entry->en_data == 0x222);
 		printf("parent: retrieved from child\n");
 		ring_queue_retrieve(ring);
 

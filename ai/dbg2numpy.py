@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-dbg2ctypes.py
+dbg2numpy.py
 
-A utility and module that generates a Python `ctypes` module from C
+A utility and module that generates a Python `numpy.dtype` module from C
 static variables and type information extracted from a binary with
 embedded debug symbols.
 
@@ -12,7 +12,7 @@ This tool uses GDB with Python scripting to:
   variables.
 
 - Traverse and convert complex C type definitions (structs, enums,
-  typedefs, arrays, etc.)  into equivalent Python `ctypes`
+  typedefs, arrays, etc.) into equivalent Python `numpy.dtype`
   declarations.
 
 - Automatically order type definitions to satisfy interdependencies
@@ -23,18 +23,19 @@ Inputs:
   - A list of static/global variable names to be accessed from Python.
 
 Output:
-  - A standalone Python module that defines all required `ctypes`
-    types and structures, provides named access to the specified
-    variables via `ctypes` mapped to their static addresses.
+  - A standalone Python module that defines all required `numpy.dtype`
+    objects and `enum.Enum` classes, and provides a VARS list
+    mapping variable names to their static addresses and dtypes.
 
 Example use case:
-  - Interact with memory-mapped shared objects in-place.
+  - Create numpy array views on memory-mapped shared objects in-place.
   - Inspect and manipulate static C structures from a live process
     (e.g., devilutionX-AI project).
 
 Requirements:
   - GDB with Python scripting support.
   - Python 3.x
+  - NumPy
 
 Note: this tool assumes that the binary is not stripped and includes
   sufficient DWARF debug information.
@@ -49,23 +50,23 @@ except:
     pass
 
 from graphlib import TopologicalSorter
-import ctypes
 import hashlib
 import os
 import pprint
 import re
 import sys
 import traceback
+import numpy as np
 
 def type_code_to_str(code):
     typecode_to_str = {
-        gdb.TYPE_CODE_PTR:     'pointer',
-        gdb.TYPE_CODE_ARRAY:   'array',
-        gdb.TYPE_CODE_STRUCT:  'struct',
-        gdb.TYPE_CODE_INT:     'integer',
-        gdb.TYPE_CODE_CHAR:    'integer',
-        gdb.TYPE_CODE_BOOL:    'integer',
-        gdb.TYPE_CODE_ENUM:    'enum',
+        gdb.TYPE_CODE_PTR:    'pointer',
+        gdb.TYPE_CODE_ARRAY:  'array',
+        gdb.TYPE_CODE_STRUCT: 'struct',
+        gdb.TYPE_CODE_INT:    'integer',
+        gdb.TYPE_CODE_CHAR:   'integer',
+        gdb.TYPE_CODE_BOOL:   'integer',
+        gdb.TYPE_CODE_ENUM:   'enum',
         gdb.TYPE_CODE_TYPEDEF: 'typedef',
     }
     if code in typecode_to_str:
@@ -251,22 +252,35 @@ def lookup_types_names(names):
 
     return sorted_type_names, type_infos_dict
 
-def type_name_to_ctypes_primitive(typename):
+def type_name_to_numpy_primitive(typename):
+    """Maps a C primitive type name to a NumPy dtype string."""
     # Primitive type mapping
-    ctypes_primitives = {
-        'int':            'ctypes.c_int32',
-        'unsigned int':   'ctypes.c_uint32',
-        'short':          'ctypes.c_int16',
-        'unsigned short': 'ctypes.c_uint16',
-        'long':           'ctypes.c_int64',
-        'unsigned long':  'ctypes.c_uint64',
-        'char':           'ctypes.c_int8',
-        'unsigned char':  'ctypes.c_uint8',
-        'bool':           'ctypes.c_bool',
+    numpy_primitives = {
+        'int':            'np.int32',
+        'unsigned int':   'np.uint32',
+        'short':          'np.int16',
+        'unsigned short': 'np.uint16',
+        'long':           'np.int64',
+        'unsigned long':  'np.uint64',
+        'long long':      'np.int64',
+        'unsigned long long': 'np.uint64',
+        'char':           'np.int8',
+        'unsigned char':  'np.uint8',
+        'bool':           'np.uint8',
+        'float':          'np.float32',
+        'double':         'np.float64',
+        'int8_t':         'np.int8',
+        'uint8_t':        'np.uint8',
+        'int16_t':        'np.int16',
+        'uint16_t':       'np.uint16',
+        'int32_t':        'np.int32',
+        'uint32_t':       'np.uint32',
+        'int64_t':        'np.int64',
+        'uint64_t':       'np.uint64',
     }
     # Remove const and signed
     typename = re.sub(r'(\s+|^)(const|signed)(\s+|$)', ' ', typename).strip()
-    typename = ctypes_primitives.get(typename, None)
+    typename = numpy_primitives.get(typename, None)
     return typename
 
 def strip_namespaces(s):
@@ -278,7 +292,7 @@ def strip_namespaces(s):
     s = re.sub(r"^None$", "None_", s)
     return s
 
-def generate_type(type_info, type_infos_dict):
+def generate_numpy_type(type_info, type_infos_dict):
     def of_type(type_info, t):
         if type_info['class'] == t:
             return True
@@ -291,38 +305,46 @@ def generate_type(type_info, type_infos_dict):
         # Skip all CPP standard classes
         return type_info['name'].startswith("std::")
 
-    def to_ctypes(type_info, type_infos_dict):
+    def to_numpy_field_str(type_info, type_infos_dict):
         comment = ""
         if blacklisted(type_info):
             # Some types can be blacklisted, so we don't expose them and just
             # specify the number of bytes.
             comment = f" # Opaque \"{type_info['name']}\""
-            typename = f"ctypes.c_uint8 * {type_info['sizeof']}"
+            if type_info['sizeof'] == 8:
+                typename = "np.uint64"
+            elif type_info['sizeof'] == 4:
+                typename = "np.uint32"
+            else:
+                typename = f"(np.uint8, {type_info['sizeof']})"
         elif of_type(type_info, 'pointer'):
             # This handles all pointers as 'integer', otherwise types
             # can't be represented as numpy arrays, and the following
             # error is raised: "Unknown PEP 3118 data type specifier
             # ..."
             # TODO: make smarter
-            sz = ctypes.sizeof(ctypes.c_void_p)
+            sz = type_info['sizeof']
             if sz == 8:
-                typename = "ctypes.c_uint64"
+                typename = "np.uint64"
             elif sz == 4:
-                typename = "ctypes.c_uint32"
+                typename = "np.uint32"
             else:
                 assert 0, f"Unsupported arch with a pointer type of size '{sz}'"
-        elif of_type(type_info, 'integer'):
+        elif of_type(type_info, 'integer') or of_type(type_info, 'float'):
             # This handles all primitives, which are either declared
             # directly by the 'integer' base type, or through the
             # target type, like 'typedef', 'enum' or 'array'.
-            if type_info['class'] == 'integer':
-                typename = type_info['name']
+            if type_info['class'] in ('integer', 'float'):
+                typename_str = type_info['name']
             else:
-                typename = type_info['target_name']
-            typename = type_name_to_ctypes_primitive(typename)
+                typename_str = type_info['target_name']
+            typename = type_name_to_numpy_primitive(typename_str)
+            if not typename:
+                 raise TypeError(f"Could not map primitive type '{typename_str}' to NumPy")
+
             if 'num_elems' in type_info:
                 assert type_info['class'] == 'array'
-                typename += f" * {type_info['num_elems']}"
+                typename = f"({typename}, {type_info['num_elems']})"
             elif type_info['class'] == 'enum':
                 # Enum as integer, but use a comment to emphasize
                 comment = f" # enum {type_info['name']}"
@@ -339,7 +361,7 @@ def generate_type(type_info, type_infos_dict):
                     # This is the only place with recursion limited to
                     # one level of nesting to extract the target
                     # 'enum' type.
-                    typename, comment = to_ctypes(target_type_info, type_infos_dict)
+                    typename, comment = to_numpy_field_str(target_type_info, type_infos_dict)
                 elif type_info['target_class'] == 'struct':
                     typename = strip_namespaces(type_info['target_name'])
                 elif type_info['target_class'] == 'array':
@@ -347,7 +369,7 @@ def generate_type(type_info, type_infos_dict):
                 else:
                     # TODO: do not expect any other arrays
                     assert 0, "Support only 'array' of a 'struct', 'enum' or 'array'"
-                typename += f" * {type_info['num_elems']}"
+                typename = f"({typename}, {type_info['num_elems']})"
             else:
                 typename = strip_namespaces(type_info['name'])
 
@@ -368,25 +390,28 @@ def generate_type(type_info, type_infos_dict):
             val_name = strip_namespaces(val['name'])
             out.append(f"\t{val_name} = {val['value']}")
     elif type_info['class'] == 'struct':
-        out.append(f"class {class_name}(ctypes.Structure):")
+        out.append(f"{class_name} = np.dtype([")
         fields = type_info['fields']
         assert(len(fields))
 
-        out.append("\t_fields_ = [")
         for f in fields:
             field_name = strip_namespaces(f['name'])
-            field_type, field_comment = to_ctypes(f['type'], type_infos_dict)
-            out.append(f'\t\t("{field_name}", {field_type}),{field_comment}')
-        out.append("\t]")
+            field_type, field_comment = to_numpy_field_str(f['type'], type_infos_dict)
+            out.append(f'\t("{field_name}", {field_type}),{field_comment}')
+        out.append("], align=True)")
     elif type_info['class'] == 'typedef':
-        typename, comment = to_ctypes(type_info, type_infos_dict)
-        out.append(f"class {class_name}({typename}): pass")
+        typename, comment = to_numpy_field_str(type_info, type_infos_dict)
+        out.append(f"{class_name} = {typename}{comment}")
     elif type_info['class'] == 'array':
-        typename, comment = to_ctypes(type_info, type_infos_dict)
-        out.append(f"class {class_name}({typename}): pass")
+        typename, comment = to_numpy_field_str(type_info, type_infos_dict)
+        out.append(f"{class_name} = np.dtype({typename}){comment}")
     elif type_info['class'] == 'integer':
-        # Primitive types are replaced on ctypes alternatives,
-        # see the `type_name_to_ctypes_primitive()`
+        # Primitive types are replaced on numpy alternatives,
+        # see the `type_name_to_numpy_primitive()`
+        pass
+    elif type_info['class'] == 'float':
+        # Primitive types are replaced on numpy alternatives,
+        # see the `type_name_to_numpy_primitive()`
         pass
     elif type_info['class'] == 'pointer':
         # Pointers just ignored, we don't expect variables with
@@ -400,45 +425,67 @@ def generate_type(type_info, type_infos_dict):
 def validate_generated_env(env, type_infos_dict):
     """Validates the created environment by comparing the `sizeof` the
     real, extracted structures and the `offsetof` of their fields with
-    the generated structures."
+    the generated numpy.dtype objects."
     """
     # Copy of the type_infos dictionary, but with stripped type name. Sigh.
     env_type_infos_dict = {strip_namespaces(n): v for n, v in type_infos_dict.items()}
 
-    for env_name, env_cls in env.items():
-        if not isinstance(env_cls, type):
+    for env_name, env_obj in env.items():
+        # We only care about validating the np.dtype objects
+        if not isinstance(env_obj, np.dtype):
             continue
-        if not hasattr(env_cls, "_fields_"):
-            continue
+
+        if env_name not in env_type_infos_dict:
+            continue # e.g. a primitive alias or something, not a main struct
 
         type_info = env_type_infos_dict[env_name]
 
         if type_info['class'] == 'typedef':
             # Get actual struct from typedef declaration
-            assert type_info['target_class'] == 'struct'
+            if type_info['target_class'] != 'struct':
+                continue # Only validate typedefs to structs
             type_info = type_infos_dict[type_info['target_name']]
+        
+        if type_info['class'] == 'array':
+            # Check array dtype size
+            assert type_info['sizeof'] == env_obj.itemsize, f"Size mismatch for array {env_name}: GDB {type_info['sizeof']} != NumPy {env_obj.itemsize}"
+            continue
 
-        cls_sizeof = ctypes.sizeof(env_cls)
+        if type_info['class'] != 'struct':
+            continue # Only validate structs
+
+        cls_itemsize = env_obj.itemsize
         # For classes with pointers, the overall size of the class may
-        # be naturally aligned, which is not the case for the ctypes
-        # structure, where we make a pointer opaque. However, we are
-        # lucky here because what actually matters is offsetof, which
-        # should match.
-        #assert type_info['sizeof'] == cls_sizeof
-        for i, env_field in enumerate(env_cls._fields_):
-            env_f_offset = getattr(env_cls, env_field[0]).offset
-            env_f_sizeof = ctypes.sizeof(env_field[1])
+        # be naturally aligned, which is not the case for the objects,
+        # where we make a pointer opaque. However, we are lucky here
+        # because what actually matters is offsetof, which should
+        # match.
 
-            field = type_info['fields'][i]
-            assert field['offsetof'] == env_f_offset
+        np_fields = env_obj.fields
+        if not np_fields:
+            if type_info['fields']:
+                assert 0, "GDB has fields but NumPy dtype is empty"
+            continue # Empty struct
+
+        for i, gdb_field in enumerate(type_info['fields']):
+            gdb_field_name = strip_namespaces(gdb_field['name'])
+
+            assert gdb_field_name in np_fields, f"Field {gdb_field_name} missing from NumPy dtype {env_name}"
+
+            np_field_info = np_fields[gdb_field_name]
+            np_field_dtype = np_field_info[0]
+            np_field_offset = np_field_info[1]
+            np_field_size = np_field_dtype.itemsize
+
+            assert gdb_field['offsetof'] == np_field_offset, f"Offset mismatch for {env_name}.{gdb_field_name}: GDB {gdb_field['offsetof']} != NumPy {np_field_offset}"
             # Why? See the comment above.
-            #assert field['type']['sizeof'] == env_f_sizeof
+            # assert gdb_field['type']['sizeof'] == np_field_size
 
 def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
     content = []
     for n in sorted_type_names:
         ti = type_infos_dict[n]
-        lines = generate_type(ti, type_infos_dict)
+        lines = generate_numpy_type(ti, type_infos_dict)
         if lines and content:
             content.append("")
         for line in lines:
@@ -448,15 +495,17 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
         def __repr__(self):
             return self
 
-    def to_ctypes_or_strip(typename):
-        name = type_name_to_ctypes_primitive(typename)
+    def to_numpy_or_strip(typename):
+        name = type_name_to_numpy_primitive(typename)
         if name:
             return name
         return strip_namespaces(typename)
 
     # Represent the class name without quotes so that it becomes a
     # real class instance in the `exec` block
-    vars_list = [{**v, 'type': Unquoted(to_ctypes_or_strip(v['type_name']))} \
+    vars_list = [{**v,
+                  'short_name': strip_namespaces(v['name']),
+                  'type': Unquoted(to_numpy_or_strip(v['type_name']))} \
                  for v in variables]
 
     # Do pretty formatting for the variables list
@@ -488,7 +537,7 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
     # whose purpose is to control whether the content of this file
     # is no longer up-to-date and should be regenerated:
     #
-    # 1. If the dbg2ctypes.py (actual generator) has been changed, the
+    # 1. If the dbg2numpy.py (actual generator) has been changed, the
     #    GENERATOR_SHA256 variable number won't match.
     #
     # 2. If the source binary has been changed, then the SHA256 of the
@@ -497,8 +546,8 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
     # 3. If variable names do not match with VARS.
     #
 
-    import ctypes
     import enum
+    import numpy as np
     """
     bottom_content = f"""
     GENERATOR_SHA256 = '{generator_sha256}'
@@ -559,7 +608,7 @@ def is_module_actual(variables_names, binary_path, module_path):
     except:
         return None
 
-def generate_ctypes_module(variables_names, binary_path, module_path=None):
+def generate_numpy_module(variables_names, binary_path, module_path=None):
     if (content := is_module_actual(variables_names, binary_path, module_path)):
         # Great, nothing to do. Regeneration is not required, thus False
         return content, False
@@ -599,18 +648,18 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Generate ctypes bindings from debug info using GDB.")
+        description="Generate numpy.dtype bindings from debug info using GDB.")
     parser.add_argument("-b", "--binary", required=True,
-                   help="Path to the source binary with debug information.")
+                        help="Path to the source binary with debug information.")
     parser.add_argument("-o", "--output",
                         help="Output Python module file. If not specified, output goes to stdout.")
     parser.add_argument("-f", "--force", action="store_true",
                         help="Force regeneration even if output exists or appears up-to-date.")
     parser.add_argument("variables", nargs="+",
-                        help="One or more variable names to extract ctypes structure definitions for.")
+                        help="One or more variable names to extract numpy.dtype definitions for.")
     args = parser.parse_args()
 
-    content, regenerate = generate_ctypes_module(
+    content, regenerate = generate_numpy_module(
         args.variables, args.binary,
         module_path=None if args.force else args.output)
 
