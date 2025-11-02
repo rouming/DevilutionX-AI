@@ -33,9 +33,8 @@ class Agent:
             self.preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
     def get_actions(self, obss):
-        preprocessed_obss = self.preprocess_obss(obss, device=device)
-
         with torch.no_grad():
+            preprocessed_obss = self.preprocess_obss(obss, device=device)
             if self.acmodel.recurrent:
                 dist, _, self.memories = self.acmodel(preprocessed_obss, self.memories)
             else:
