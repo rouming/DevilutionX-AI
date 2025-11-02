@@ -127,8 +127,8 @@ class BaseAlgo(ABC):
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
 
-            preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             with torch.no_grad():
+                preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
                 if self.acmodel.recurrent:
                     dist, value, memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
                 else:
@@ -177,8 +177,8 @@ class BaseAlgo(ABC):
 
         # Add advantage and return to experiences
 
-        preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
         with torch.no_grad():
+            preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             if self.acmodel.recurrent:
                 _, next_value, _ = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
             else:
