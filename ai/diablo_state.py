@@ -21,11 +21,42 @@ import subprocess
 import tempfile
 import time
 
+from numba import types, njit
+from numba.experimental import jitclass, structref
+
 import dbg2numpy
 import devilutionx as dx
 import maze
 import procutils
 import ring
+
+
+# Define a StructRef used in njit. `structref.register` associates the
+# type with the default data model.  This will also install getters
+# and setters to the fields of the StructRef.
+@structref.register
+class DevilutionStateType(types.StructRef):
+    def preprocess_fields(self, fields):
+        # This method is called by the type constructor for additional
+        # preprocessing on the fields.
+        # Here, we don't want the struct to take Literal types.
+        return tuple((name, types.unliteral(typ)) for name, typ in fields)
+
+# Define a Python type that can be use as a proxy to the StructRef
+# used inside njit.
+class DevilutionState(structref.StructRefProxy):
+    def __new__(cls, vars_dict):
+        this = structref.StructRefProxy.__new__(cls, *vars_dict.values())
+        # Set attributes to access vars_dict from Python code
+        for k, v in vars_dict.items():
+            setattr(this, k, v)
+        return this
+
+
+# This associates the proxy with DevilutionStateType for the given set
+# of fields
+structref.define_proxy(DevilutionState, DevilutionStateType,
+                       [var['short_name'] for var in dx.VARS])
 
 
 AgentState = np.dtype([
@@ -37,35 +68,44 @@ class DoorState(enum.Enum):
     DOOR_OPEN     = 1
     DOOR_BLOCKED  = 2
 
+@njit(cache=True)
 def round_up_int(i, d):
     assert type(i) == int
     assert type(d) == int
     return (i + d - 1) // d * d
 
+@njit(cache=True)
 def dungeon_dim(d):
     return d.dObject.shape
 
+@njit(cache=True)
 def to_object(d, pos):
     obj_id = d.dObject[pos]
     if obj_id != 0:
         return d.Objects[abs(obj_id) - 1]
     return None
 
+@njit(cache=True)
 def is_interactable(obj):
     return obj.selectionRegion != 0
 
+@njit(cache=True)
 def is_breakable(obj):
     return obj._oBreak == 1
 
+@njit(cache=True)
 def is_door_closed(obj):
     return obj._oVar4 == DoorState.DOOR_CLOSED.value
 
+@njit(cache=True)
 def is_door_open(obj):
     return obj._oVar4 == DoorState.DOOR_OPEN.value
 
+@njit(cache=True)
 def is_door(obj):
     return obj._oDoorFlag
 
+@njit(cache=True)
 def is_barrel(obj):
     return obj._otype in (dx._object_id.OBJ_BARREL.value,
                           dx._object_id.OBJ_BARRELEX.value,
@@ -74,11 +114,13 @@ def is_barrel(obj):
                           dx._object_id.OBJ_URN.value,
                           dx._object_id.OBJ_URNEX.value)
 
+@njit(cache=True)
 def is_crucifix(obj):
     return obj._otype in (dx._object_id.OBJ_CRUX1.value,
                           dx._object_id.OBJ_CRUX2.value,
                           dx._object_id.OBJ_CRUX3.value)
 
+@njit(cache=True)
 def is_chest(obj):
     return obj._otype in (dx._object_id.OBJ_CHEST1.value,
                           dx._object_id.OBJ_CHEST2.value,
@@ -88,41 +130,53 @@ def is_chest(obj):
                           dx._object_id.OBJ_TCHEST3.value,
                           dx._object_id.OBJ_SIGNCHEST.value)
 
+@njit(cache=True)
 def is_sarcophagus(obj):
     return obj._otype in (dx._object_id.OBJ_SARC.value,
                           dx._object_id.OBJ_L5SARC.value)
 
+@njit(cache=True)
 def is_floor(d, pos):
     return not (d.SOLData[d.dPiece[pos]] & \
                 (dx.TileProperties.Solid.value | dx.TileProperties.BlockMissile.value))
 
+@njit(cache=True)
 def is_arch(d, pos):
     return d.dSpecial[pos] > 0
 
+@njit(cache=True)
 def is_wall(d, pos):
     return not is_floor(d, pos) and not is_arch(d, pos)
 
+
+@njit(cache=True)
 def to_trigger(d, pos):
     for trig in d.trigs[:d.numtrigs.value]:
         if trig.position.x == pos[0] and trig.position.y == pos[1]:
             return trig
     return None
 
+@njit(cache=True)
 def is_trigger_to_prev_level(trig):
     return trig._tmsg == dx.interface_mode.WM_DIABPREVLVL.value
 
+@njit(cache=True)
 def is_trigger_to_next_level(trig):
     return trig._tmsg == dx.interface_mode.WM_DIABNEXTLVL.value
 
+@njit(cache=True)
 def is_trigger_warp(trig):
     return trig._tmsg == dx.interface_mode.WM_DIABTWARPUP.value
 
+@njit(cache=True)
 def is_game_paused(d):
     return d.PauseMode.value != 0
 
+@njit(cache=True)
 def is_player_dead(d):
     return d.player._pmode == dx.PLR_MODE.PM_DEATH.value
 
+@njit(cache=True)
 def player_position(d):
     return (d.player.position.tile.x, d.player.position.tile.y)
 
@@ -140,6 +194,7 @@ def count_active_objects(d):
         return 0
     return sum(map(interesting_objects, d.ActiveObjects))
 
+@njit(cache=True)
 def get_closed_doors_ids(d):
     closed_doors = []
     for oid in d.ActiveObjects:
@@ -148,48 +203,68 @@ def get_closed_doors_ids(d):
             closed_doors.append(oid)
     return closed_doors
 
+@njit(cache=True)
 def count_active_items(d):
     return d.ActiveItemCount.value
 
+@njit(cache=True)
 def count_active_monsters(d):
     return d.ActiveMonsterCount.value
 
 def count_active_monsters_total_hp(d):
     return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
 
+@njit(cache=True)
 def count_explored_tiles(d):
     bits = dx.DungeonFlag.Explored.value
     return np.sum((d.dFlags & bits) == bits)
 
+@njit(cache=True)
 def find_trigger(d, tmsg):
     for trig in d.trigs:
         if trig._tmsg == tmsg.value:
             return trig
     return None
 
-class Rect:
-    # Top left
-    lt = None
-    width  = 0
-    height = 0
 
+spec = [ ('lt', types.uint64[:]) ]
+@jitclass(spec)
+class Rect:
+    lt: np.ndarray
+    width: int
+    height: int
+
+    def __init__(self):
+        self.lt = np.zeros(2, dtype=np.uint64)
+        self.width = 0
+        self.height = 0
+
+
+@jitclass
 class EnvRect:
     # Source rectangle
-    srect = Rect()
+    srect: Rect
     # Destination rectangle
-    drect = Rect()
+    drect: Rect
 
-    def __init__(self, d, radius=None):
+    def __init__(self, d, radius_=None):
+        # Source rectangle
+        self.srect = Rect()
+        # Destination rectangle
+        self.drect = Rect()
+
         dundim = dungeon_dim(d)
-        if radius is not None:
-            pos = player_position(d)
+        if radius_ is not None:
+            # Safe cast
+            radius = radius_.view(np.uint64)
+            pos = np.array(player_position(d), dtype=np.uint64)
 
             x_min = max(pos[0] - radius[0], 0)
             x_max = min(pos[0] + radius[0] + 1, dundim[0])
             y_min = max(pos[1] - radius[1], 0)
             y_max = min(pos[1] + radius[1] + 1, dundim[1])
 
-            self.srect.lt     = np.array([x_min, y_min])
+            self.srect.lt     = np.array([x_min, y_min], dtype=np.uint64)
             self.srect.width  = x_max - self.srect.lt[0]
             self.srect.height = y_max - self.srect.lt[1]
 
@@ -202,6 +277,7 @@ class EnvRect:
             self.srect.width  = dundim[0]
             self.srect.height = dundim[1]
             self.drect        = self.srect
+
 
 # Do not change the order of environment bits, as this is likely to break
 # the pretrained model. All new flags should be only appended and carefully
@@ -227,6 +303,8 @@ class EnvironmentFlag(enum.Enum):
     Open           = 1<<17
     Goal           = 1<<18
 
+
+@njit(cache=True)
 def get_environment(d, radius=None, goal_pos=None,
                     show_invisible=False, show_unexplored=False):
     """Returns the environment, either the whole dungeon or windowed
@@ -485,12 +563,10 @@ def map_devilutionx_state(path, offset):
         # `dbg2numpy` should handle this.
         obj_array = np.frombuffer(mmapped, dtype=dtype, count=1, offset=var_offset).view(np.recarray)
         obj = obj_array[0]
-        name = dbg2numpy.strip_namespaces(var['name'])
-        vars_dict[name] = obj
+        vars_dict[var['short_name']] = obj
 
-    state = SimpleNamespace(**vars_dict)
+    return DevilutionState(vars_dict)
 
-    return state
 
 def map_devilutionx_state_by_pid(pid, mshared_path):
     for attempt in range(0, 50):
