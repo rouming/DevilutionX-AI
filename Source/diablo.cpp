@@ -2900,9 +2900,9 @@ void LoadGameLevelFirstFlagEntry()
 {
 	CloseInventory();
 	qtextflag = false;
+	ClearUniqueItemFlags();
 	if (!HeadlessMode) {
 		InitInv();
-		ClearUniqueItemFlags();
 		InitQuestText();
 		InitInfoBoxGfx();
 		InitHelp();
