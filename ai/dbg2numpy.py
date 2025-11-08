@@ -252,35 +252,45 @@ def lookup_types_names(names):
 
     return sorted_type_names, type_infos_dict
 
-def type_name_to_numpy_primitive(typename):
+def type_name_to_numpy_primitive(typename, structured_primitive=False):
     """Maps a C primitive type name to a NumPy dtype string."""
     # Primitive type mapping
     numpy_primitives = {
-        'int':            'np.int32',
-        'unsigned int':   'np.uint32',
-        'short':          'np.int16',
-        'unsigned short': 'np.uint16',
-        'long':           'np.int64',
-        'unsigned long':  'np.uint64',
-        'long long':      'np.int64',
+        'int':                'np.int32',
+        'unsigned int':       'np.uint32',
+        'short':              'np.int16',
+        'unsigned short':     'np.uint16',
+        'long':               'np.uint64',
+        'unsigned long':      'np.uint64',
+        'long long':          'np.int64',
         'unsigned long long': 'np.uint64',
-        'char':           'np.int8',
-        'unsigned char':  'np.uint8',
-        'bool':           'np.uint8',
-        'float':          'np.float32',
-        'double':         'np.float64',
-        'int8_t':         'np.int8',
-        'uint8_t':        'np.uint8',
-        'int16_t':        'np.int16',
-        'uint16_t':       'np.uint16',
-        'int32_t':        'np.int32',
-        'uint32_t':       'np.uint32',
-        'int64_t':        'np.int64',
-        'uint64_t':       'np.uint64',
+        'char':               'np.int8',
+        'unsigned char':      'np.uint8',
+        'bool':               'np.uint8',
+        'float':              'np.float32',
+        'double':             'np.float64',
+        'int8_t':             'np.int8',
+        'uint8_t':            'np.uint8',
+        'int16_t':            'np.int16',
+        'uint16_t':           'np.uint16',
+        'int32_t':            'np.int32',
+        'uint32_t':           'np.uint32',
+        'int64_t':            'np.uint64',
+        'uint64_t':           'np.uint64',
     }
     # Remove const and signed
     typename = re.sub(r'(\s+|^)(const|signed)(\s+|$)', ' ', typename).strip()
     typename = numpy_primitives.get(typename, None)
+
+    if typename and structured_primitive:
+        # NumPy treats structured scalars differently from plain
+        # numeric scalars. A structured scalar carries a reference to
+        # the underlying array memory for all its fields. Therefore,
+        # if there is a need to keep a reference to the original
+        # memory buffer (no copy is made), a structured primitive must
+        # be used.
+        typename = f"np.dtype([('value', {typename})], align=True)"
+
     return typename
 
 def strip_namespaces(s):
@@ -496,7 +506,10 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
             return self
 
     def to_numpy_or_strip(typename):
-        name = type_name_to_numpy_primitive(typename)
+        # We need a structured primitive that keeps a reference to
+        # the original memory buffer so that no copy is made. Otherwise,
+        # all fields will be copies and no sharing will occur.
+        name = type_name_to_numpy_primitive(typename, structured_primitive=True)
         if name:
             return name
         return strip_namespaces(typename)

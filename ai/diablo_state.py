@@ -103,7 +103,7 @@ def is_wall(d, pos):
     return not is_floor(d, pos) and not is_arch(d, pos)
 
 def to_trigger(d, pos):
-    for trig in d.trigs[:d.numtrigs]:
+    for trig in d.trigs[:d.numtrigs.value]:
         if trig.position.x == pos[0] and trig.position.y == pos[1]:
             return trig
     return None
@@ -118,7 +118,7 @@ def is_trigger_warp(trig):
     return trig._tmsg == dx.interface_mode.WM_DIABTWARPUP.value
 
 def is_game_paused(d):
-    return d.PauseMode != 0
+    return d.PauseMode.value != 0
 
 def is_player_dead(d):
     return d.player._pmode == dx.PLR_MODE.PM_DEATH.value
@@ -149,10 +149,10 @@ def get_closed_doors_ids(d):
     return closed_doors
 
 def count_active_items(d):
-    return d.ActiveItemCount
+    return d.ActiveItemCount.value
 
 def count_active_monsters(d):
-    return d.ActiveMonsterCount
+    return d.ActiveMonsterCount.value
 
 def count_active_monsters_total_hp(d):
     return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
@@ -454,7 +454,9 @@ def map_agent_state(path):
 
     # Create a 1-element view and return the scalar object. The
     # `view(np.recarray)` is needed to allow access using dot
-    # notation.
+    # notation. `AgentState` dtype is a structured type, so the
+    # `state_array[0]` is still backed by a memory buffer, and not a
+    # copy.
     state_array = np.frombuffer(mmapped, dtype=AgentState, count=1).view(np.recarray)
     state = state_array[0]
 
@@ -466,7 +468,6 @@ def map_devilutionx_state(path, offset):
     f.close()
 
     vars_dict = {}
-
     for var in dx.VARS:
         addr = var['addr']
         dtype = var['type']
@@ -477,8 +478,12 @@ def map_devilutionx_state(path, offset):
         # This view points directly into the mmap buffer. The
         # `view(np.recarray)` is needed to allow access using dot
         # notation.
+        #
+        # Be careful! We use `obj_array[0]`, which does not produce a
+        # copy for structured types, but for primitives, this will be a
+        # copy and not backed by a memory buffer. However, the
+        # `dbg2numpy` should handle this.
         obj_array = np.frombuffer(mmapped, dtype=dtype, count=1, offset=var_offset).view(np.recarray)
-        # Get the scalar object from the 1-element array
         obj = obj_array[0]
         name = dbg2numpy.strip_namespaces(var['name'])
         vars_dict[name] = obj
@@ -517,7 +522,7 @@ class DiabloGame:
 
         if game_ticks_per_step is None:
             # Read shared option in case of the attach
-            self.game_ticks_per_step = self.state.GameTicksPerStep
+            self.game_ticks_per_step = self.state.GameTicksPerStep.value
         else:
             self.game_ticks_per_step = game_ticks_per_step
 
@@ -560,7 +565,7 @@ class DiabloGame:
             self.state_dir.cleanup()
 
     def ticks(self, d=None):
-        t = self.state.game_ticks if d is None else d.game_ticks
+        t = self.state.game_ticks.value if d is None else d.game_ticks.value
         return t
 
     def update_ticks(self):
