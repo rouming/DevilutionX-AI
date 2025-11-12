@@ -18,7 +18,7 @@ class A2CAlgo(BaseAlgo):
         self.optimizer = torch.optim.RMSprop(self.acmodel.parameters(), lr,
                                              alpha=rmsprop_alpha, eps=rmsprop_eps)
 
-    def update_parameters(self, exps):
+    def update_parameters(self, exps, apply_update=True):
         # Compute starting indexes
 
         inds = self._get_starting_indexes()
@@ -81,10 +81,13 @@ class A2CAlgo(BaseAlgo):
 
         # Update actor-critic
 
-        self.optimizer.zero_grad()
-        update_loss.backward()
-        update_grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
-        self.optimizer.step()
+        if apply_update:
+            self.optimizer.zero_grad()
+            update_loss.backward()
+            update_grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
+            self.optimizer.step()
+        else:
+            update_grad_norm = 0.0
 
         # Log some values
 

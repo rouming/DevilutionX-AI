@@ -26,7 +26,7 @@ class PPOAlgo(BaseAlgo):
         self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
         self.batch_num = 0
 
-    def update_parameters(self, exps):
+    def update_parameters(self, exps, apply_update=True):
         # Collect experiences
 
         for _ in range(self.epochs):
@@ -132,10 +132,13 @@ class PPOAlgo(BaseAlgo):
 
                 # Update actor-critic
 
-                self.optimizer.zero_grad()
-                batch_loss.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
-                self.optimizer.step()
+                if apply_update:
+                    self.optimizer.zero_grad()
+                    batch_loss.backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
+                    self.optimizer.step()
+                else:
+                    grad_norm = 0.0
 
                 # Update log values
 
