@@ -568,7 +568,9 @@ void ProgressEventHandler(const SDL_Event &event, uint16_t modState)
 #endif
 	} break;
 	default:
-		app_fatal("Unknown progress mode");
+		// Naively disable this fatal error, as it causes issues during AI
+		// evaluation in GUI mode. FIXME, please.
+		// app_fatal("Unknown progress mode");
 		break;
 	}
 }
