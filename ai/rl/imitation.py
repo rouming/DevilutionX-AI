@@ -6,9 +6,10 @@ import time
 import torch
 
 from rl import utils
-from rl.evaluate import ManyEnvs
 from rl.evaluate import batch_evaluate
-from rl.model import ACModel
+from rl.flat_model import FlatACModel
+from rl.hrl_model import HRLACModel
+from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
 import sprout
 
@@ -24,12 +25,10 @@ class BotEnv:
 
     def step(self, dummy_action):
         done, action = self.bot.step()
-        # Be aware of differences from the original environment step
-        # API call convention: dummy action is not used (bot knows how
-        # to act), but a true action from bot is returned as a last
-        # tuple element. Bot `done` flag is returned as a termination
-        # flag.
-        return None, None, done, False, None, action
+        # true action from a bot is returned as part of the info dict,
+        # the bot `done` flag is returned as a termination flag
+        info = {"bot/action": action}
+        return None, None, done, False, info
 
 class EpochIndexSampler:
     """
@@ -82,29 +81,51 @@ class EpochIndexSampler:
         return indices
 
 def compute_mc_returns(rewards, dones, next_value, discount=0.99):
-    T = len(rewards)
-    returns = torch.zeros((T,), device=device, dtype=torch.float32)
+    T = rewards.shape[0]
+    returns = torch.zeros_like(rewards)
     # Monte Carlo return
     R = next_value
     for t in reversed(range(T)):
-        R = rewards[t] + discount * R * (1 - dones[t])
+        R = rewards[t] + discount * R * (1.0 - dones[t])
         returns[t] = R
 
     return returns
 
-def compute_gae_returns(rewards, dones, lam, values, gamma=0.99):
-    T = len(rewards)
-    returns = torch.zeros((T,), device=device, dtype=torch.float32)
-    # GAE return (lambda between 0 and 1)
-    advantages = torch.zeros((T,), device=device, dtype=torch.float32)
-    gae = 0
-    for t in reversed(range(T)):
-        delta = rewards[t] + gamma * values[t+1] * (1 - dones[t]) - values[t]
-        gae = delta + gamma * lam * (1 - dones[t]) * gae
-        advantages[t] = gae
-    returns = advantages + values[:-1]
+def pearson_corr(value, r, eps=1e-8):
+    """
+    Compute Pearson correlation per hierarchy level
 
-    return returns
+    Parameters
+    ----------
+    value : Tensor of shape (P, L)
+        Critic predictions.
+    r : Tensor of shape (P, L)
+        Returns / targets.
+    eps : float
+        Numerical stability constant.
+
+    Returns
+    -------
+    corr : Tensor of shape (L,)
+        Pearson correlation per level.
+    """
+
+    # Center values
+    v = value - value.mean(dim=0, keepdim=True)   # (P, L)
+    t = r     - r.mean(dim=0, keepdim=True)       # (P, L)
+
+    # Covariance numerator per level
+    cov = (v * t).sum(dim=0)                      # (L,)
+
+    # Standard deviations per level
+    v_std = (v.pow(2).sum(dim=0)).sqrt()          # (L,)
+    t_std = (t.pow(2).sum(dim=0)).sqrt()          # (L,)
+
+    # Pearson correlation per level
+    corr = cov / (v_std * t_std + eps)
+    corr = torch.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return corr.detach()
 
 class ImitationLearning(object):
     def __init__(self, args, spr, penv_pool, pbot_pool, model_dir, phase_no,
@@ -146,9 +167,6 @@ class ImitationLearning(object):
 
             txt_logger.info('Loaded all demos')
 
-            observation_space = self.penv_pool.envs[0].observation_space
-            action_space = self.penv_pool.envs[0].action_space
-
         else:
             demos_path = utils.get_demos_path(model_dir, args.env, valid=False)
             demos_path_valid = utils.get_demos_path(model_dir, args.env, valid=True)
@@ -160,8 +178,9 @@ class ImitationLearning(object):
                     raise ValueError("there are only {} train demos".format(len(self.train_demos)))
                 self.train_demos = self.train_demos[:args.episodes_int]
 
-            observation_space = self.penv_pool.envs[0].observation_space
-            action_space = self.penv_pool.envs[0].action_space
+        observation_space = self.penv_pool.envs[0].observation_space
+        action_space = self.penv_pool.envs[0].action_space
+        num_hierarchy_levels = self.penv_pool.envs[0].unwrapped.num_hierarchy_levels
 
         # Generate demos for validation if needed
         if self.args.val_interval > 0:
@@ -172,12 +191,10 @@ class ImitationLearning(object):
                 self.pbot_pool, seeds)
 
         # Load training status
-        need_save = False
         try:
             status = utils.get_status(model_phase_dir)
         except OSError:
             status = {'num_frames': 0, 'update': 0, 'patience': 0}
-            need_save = True
 
         txt_logger.info("Training status loaded\n")
 
@@ -190,9 +207,15 @@ class ImitationLearning(object):
         self.preprocess_obss = preprocess_obss
 
         # Load model
-        self.acmodel = ACModel(obs_space, action_space, args.cnn_arch,
-                               embedding_dim=args.embedding_dim,
-                               use_memory=True, use_text=False)
+        if num_hierarchy_levels == 1:
+            self.acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                                       embedding_dim=args.embedding_dim,
+                                       use_memory=True, use_text=False)
+        else:
+            self.acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                                      embedding_dim=args.embedding_dim,
+                                      use_memory=True, use_text=False)
+
         assert self.acmodel.recurrent, "Currently, non-recurrent models are not supported."
 
         # Training the critic only requires special attention
@@ -206,7 +229,7 @@ class ImitationLearning(object):
                 param.requires_grad = True
 
         if "model_state" in status:
-            self.acmodel.load_state_dict(status["model_state"])
+            self.acmodel.load_from_status(status, txt_logger)
         self.acmodel.to(device)
 
         # In case we train both - separate parameters in order to have
@@ -235,17 +258,19 @@ class ImitationLearning(object):
                                               self.args.lr,
                                               eps=self.args.optim_eps)
 
-        train_mode = status.get('il_train_mode')
+        train_mode = status.get("il_train_mode")
         self.train_mode_changed = (train_mode != (train_policy, train_critic))
-        status['il_train_mode'] = (train_policy, train_critic)
-        # Remove previous RL optimizer state if any
-        status.pop('optimizer_state', None)
-        if not self.train_mode_changed :
+        status["il_train_mode"] = (train_policy, train_critic)
+        if not self.train_mode_changed:
             # We load the optimizer state if this is a continuation of
             # the training
             if "il_optimizer_state" in status:
                 self.optimizer.load_state_dict(status["il_optimizer_state"])
                 txt_logger.info("Optimizer loaded from the state\n")
+        else:
+            # Remove previous IL optimizer state if the training mode
+            # has changed
+            status.pop("il_optimizer_state", None)
 
         # Create exponential decay LR scheduler, so every N steps LR
         # reduced by gamma
@@ -254,13 +279,17 @@ class ImitationLearning(object):
             step_size=args.lr_steps,
             gamma=args.lr_gamma)
 
-        if need_save:
-            # Model saved initially for the first validation step
-            status.update({"model_state": self.acmodel.state_dict(),
-                           "il_optimizer_state": self.optimizer.state_dict()})
-            if hasattr(preprocess_obss, "vocab"):
-                status["vocab"] = preprocess_obss.vocab.vocab
-            utils.save_status(status, model_phase_dir)
+        # Remove previous RL optimizer state if any, IL alternative
+        # will be used instead
+        status.pop("optimizer_state", None)
+
+        if "model_state" not in status:
+            self.acmodel.save_to_status(status)
+        if "il_optimizer_state" not in status:
+            status["il_optimizer_state"] = self.optimizer.state_dict()
+        if "vocab" not in status and hasattr(preprocess_obss, "vocab"):
+            status["vocab"] = preprocess_obss.vocab.vocab
+        utils.save_status(status, model_phase_dir)
 
     def starting_indexes(self, num_frames):
         if num_frames % self.args.recurrence == 0:
@@ -331,7 +360,7 @@ class ImitationLearning(object):
         inds = [0]
 
         num_envs = min(len(self.penv_pool.envs), len(batch))
-        env = ManyEnvs(self.penv_pool)
+        env = ParallelEnv(self.penv_pool)
 
         # Generate observations based on true actions from demos.
         # Similar to collect experiences step for regular PPO
@@ -340,11 +369,12 @@ class ImitationLearning(object):
             episodes = batch[offset: offset + size]
 
             seeds, true_actions = zip(*episodes)
-            obs, _ = env.reset(seeds=seeds)
+            obs, info = env.reset(seeds=seeds)
 
             obss = [[] for _ in range(size)]
             dones = [[] for _ in range(size)]
             rewards = [[] for _ in range(size)]
+            opt_changed = [[] for _ in range(size)]
             steps = np.zeros((size,), dtype=int)
             not_yet_done = np.ones((size,), dtype=bool)
             ts = time.time()
@@ -352,14 +382,18 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 actions = [true_actions[i][steps[i]] for i in active_indices]
-                new_obss, reward, terminated, truncated, _ = \
+                new_obss, _, terminated, truncated, info = \
                     env.step(actions, active_indices)
-                done = np.asarray(terminated) | np.asarray(truncated)
+                done = np.logical_or(terminated, truncated)
 
-                for i, o, r, d in zip(active_indices, obs, reward, done):
+                for i, o, d, inf in zip(active_indices, obs, done, info):
                     obss[i].append(o)
                     dones[i].append(d)
+                    # HRL-aware rewards with the shape (L,)
+                    r = inf["hierarchy/reward"]
+                    assert len(r) == self.acmodel.num_hierarchy_levels
                     rewards[i].append(r)
+                    opt_changed[i].append(inf["hierarchy/opt-changed"])
                     steps[i] += 1
 
                 obs = new_obss
@@ -368,19 +402,17 @@ class ImitationLearning(object):
 
             diff = time.time() - ts
             sum_steps = np.sum(steps)
-            if False:
-                self.txt_logger.info(f"generated OBSs for episodes {offset + size}/{len(batch)}: steps {sum_steps} | MAX steps {np.max(steps)} | AVG steps {np.mean(steps):.0f} | {sum_steps / diff:.0f} FPS, took {diff:.0f}s")
 
-            for obss_, actions_, dones_, rewards_, seed_ in \
-                    zip(obss, true_actions, dones, rewards, seeds):
-                total_reward = np.sum(rewards_)
-                if total_reward <= 0:
+            for obss_, actions_, dones_, rewards_, opt_changed_, seed_ in \
+                    zip(obss, true_actions, dones, rewards, opt_changed, seeds):
+                total_reward = np.sum(rewards_, axis=0)
+                if (total_reward <= 0).any():
                     self.txt_logger.warning(f"Environment was not able to get positive reward for demos generated by seed {seed_}")
                     continue
 
-                assert len(obss_) == len(actions_) == len(dones_) == len(rewards_)
-                flat_batch += [(o, a, d, r) for o, a, d, r in
-                               zip(obss_, actions_, dones_, rewards_)]
+                assert len(obss_) == len(actions_) == len(dones_) == len(rewards_) == len(opt_changed_)
+                flat_batch += [(o, a, d, r, oc) for o, a, d, r, oc in
+                               zip(obss_, actions_, dones_, rewards_, opt_changed_)]
                 inds.append(inds[-1] + len(actions_))
 
         # Do training with collected experiences
@@ -393,11 +425,21 @@ class ImitationLearning(object):
         mask[inds] = 0
         mask = torch.tensor(mask, device=device, dtype=torch.float).unsqueeze(1)
 
-        # Observations, true action and done for each of the stored demostration
-        obss, actions_true, dones, rewards = (flat_batch[:, 0], flat_batch[:, 1],
-                                              flat_batch[:, 2], flat_batch[:, 3])
-        actions_true = torch.as_tensor(actions_true.astype(dtype=int, copy=False),
+        # For each of the stored demonstrations
+        obss, true_actions, dones, rewards, opt_changed = \
+            (flat_batch[:, 0], flat_batch[:, 1], flat_batch[:, 2],
+             flat_batch[:, 3], flat_batch[:, 4])
+        # (P, L) shape
+        true_actions = torch.as_tensor(true_actions.tolist(),
                                        device=device, dtype=torch.long)
+        # (P, 1) shape for old demo episodes which have (P, ) shapes
+        true_actions = true_actions.unsqueeze(1) if true_actions.ndim == 1 else true_actions
+        # (P, 1) shape
+        opt_changed = torch.as_tensor(opt_changed.astype(dtype=np.float32, copy=False),
+                                      device=device, dtype=torch.float32).unsqueeze(1)
+        # (P, L) shape
+        rewards = torch.as_tensor(np.stack(rewards, axis=0).astype(np.float32, copy=False),
+                                  device=device, dtype=torch.float32)
 
         # Episodes always reach the end, so next_value is zero
         returns = compute_mc_returns(rewards, dones, next_value=0, discount=0.99)
@@ -413,12 +455,14 @@ class ImitationLearning(object):
             # taking observations and done located at inds
             obs = obss[inds]
             done_step = dones[inds]
+            action_step = true_actions[inds]
             with torch.no_grad():
                 preprocessed_obs = self.preprocess_obss(obs, device=device)
                 # taking the memory till len(inds), as demos beyond
                 # that have already finished
-                dist, value, new_memory = self.acmodel(preprocessed_obs,
-                                                       memory[:len(inds), :])
+                _, _, new_memory = self.acmodel(preprocessed_obs,
+                                                memory[:len(inds), :],
+                                                action=action_step)
             memories[inds, :] = memory[:len(inds), :]
             memory[:len(inds), :] = new_memory
             episode_ids[inds] = range(len(inds))
@@ -434,10 +478,14 @@ class ImitationLearning(object):
 
 
         # Here, actual backprop upto args.recurrence happens
-        final_loss, final_entropy = 0.0, 0.0
-        final_value_loss, final_policy_loss = 0.0, 0.0
-        value_accuracy, policy_accuracy = 0.0, 0.0
-        grad_norm = 0.0
+        final_entropy = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        final_value_loss = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        final_policy_loss = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        value_accuracy = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        policy_accuracy = np.zeros((self.acmodel.num_hierarchy_levels, ))
+
+        # Will be promoted to a tensor on the correct device
+        final_loss_tensor = 0
 
         indexes = self.starting_indexes(num_frames)
         memory = memories[indexes]
@@ -445,22 +493,34 @@ class ImitationLearning(object):
         for _ in range(self.args.recurrence):
             obs = obss[indexes]
             preprocessed_obs = self.preprocess_obss(obs, device=device)
-            action_step = actions_true[indexes]
+            action_step = true_actions[indexes]
             mask_step = mask[indexes]
+            opt_changed_step = opt_changed[indexes]
 
-            dist, value, memory = self.acmodel(preprocessed_obs, memory * mask_step)
+            # We detach memory if and only if the option changed, to
+            # prevent interference between temporally extended skills.
+            h = memory * mask_step # episode resets
+            h = h * (1 - opt_changed_step) + h.detach() * opt_changed_step # option boundaries
+            # Recurrent chain through memory
+            dist, value, memory = self.acmodel(preprocessed_obs, h, action=action_step)
             r = returns[indexes]
 
+            num_seqs = len(indexes)
+
+            assert len(dist) == self.acmodel.num_hierarchy_levels
+            assert value.shape == (num_seqs, self.acmodel.num_hierarchy_levels)
+
             # Standard MSE loss for critic
-            value_loss = torch.mean((value - r) ** 2)
+            value_loss = torch.mean((value - r) ** 2, axis=0)
             # Pearson correlation for value accuracy
-            stacked = torch.stack([value, r], dim=0).detach()
-            corr = torch.corrcoef(stacked)[0, 1]
-            corr = torch.nan_to_num(corr, nan=0.0)
-            value_accuracy += float(corr)
+            corr = pearson_corr(value, r)
+            value_accuracy += corr.cpu().numpy()
 
             # Actor
-            policy_loss = -dist.log_prob(action_step).mean()
+            log_prob = torch.stack([dist[j].log_prob(action_step[:, j])
+                                    for j in range(self.acmodel.num_hierarchy_levels)],
+                                   dim=1)
+            policy_loss = -log_prob.mean(axis=0)
             # Entropy is needed for calculating entropy bonus, which
             # trains the policy to be stochastic and encourages
             # exploration. By subtracting an entropy penalty for low
@@ -469,43 +529,45 @@ class ImitationLearning(object):
             # healthy amount of randomness and is not specifically
             # intended to aid IL. Instead, it prepares the policy PPO
             # fine-tuning
-            entropy = dist.entropy().mean()
+            entropy = torch.stack([d.entropy().mean() for d in dist])
 
-            action_pred = dist.probs.argmax(dim=1)
-            policy_accuracy += (action_pred == action_step).float().mean().item()
+            action_pred = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
+            policy_accuracy += (action_pred == action_step).float().mean(axis=0).detach().cpu().numpy()
 
             if self.train_policy and not self.train_critic:
-                final_loss += policy_loss - self.args.entropy_coef * entropy
+                final_loss_tensor += policy_loss - self.args.entropy_coef * entropy
             elif not self.train_policy and self.train_critic:
-                final_loss += value_loss
+                final_loss_tensor += value_loss
             elif self.train_policy and self.train_critic:
-                final_loss += (value_loss * self.args.value_loss_coef +
-                               policy_loss - self.args.entropy_coef * entropy)
+                final_loss_tensor += (value_loss * self.args.value_loss_coef +
+                                      policy_loss - self.args.entropy_coef * entropy)
             else:
                 assert 0, "Unknown training mode"
 
             # Accumulate
-            final_entropy += entropy
-            final_policy_loss += policy_loss
-            final_value_loss += value_loss
+            final_entropy += entropy.detach().cpu().numpy()
+            final_policy_loss += policy_loss.detach().cpu().numpy()
+            final_value_loss += value_loss.detach().cpu().numpy()
 
             indexes += 1
 
-        final_loss /= self.args.recurrence
+        final_loss_tensor /= self.args.recurrence
 
         if is_training:
             self.optimizer.zero_grad()
-            final_loss.backward()
+            final_loss_tensor.sum().backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(),
                                                        self.args.max_grad_norm).item()
             self.optimizer.step()
+        else:
+            grad_norm = 0.0
 
         log = {
-            "entropy": float(final_entropy / self.args.recurrence),
-            "value_loss": float(final_value_loss / self.args.recurrence),
-            "policy_loss": float(final_policy_loss / self.args.recurrence),
-            "value_accuracy": float(value_accuracy / self.args.recurrence),
-            "policy_accuracy": float(policy_accuracy / self.args.recurrence),
+            "entropy": final_entropy / self.args.recurrence,
+            "value_loss": final_value_loss / self.args.recurrence,
+            "policy_loss": final_policy_loss / self.args.recurrence,
+            "value_accuracy": value_accuracy / self.args.recurrence,
+            "policy_accuracy": policy_accuracy / self.args.recurrence,
             "grad_norm": grad_norm
         }
 
@@ -516,12 +578,6 @@ class ImitationLearning(object):
             episodes, min(episodes, len(self.penv_pool.envs))))
 
         num_envs = min(len(self.penv_pool.envs), episodes)
-        # Create an agent using the current model
-        agent = utils.Agent.from_external_model(
-            self.acmodel,
-            self.penv_pool.envs[0].observation_space,
-            argmax=True, num_envs=num_envs)
-
         env_names = [self.args.env] if not getattr(self.args, 'multi_env', None) \
             else self.args.multi_env
 
@@ -531,11 +587,15 @@ class ImitationLearning(object):
 
         logs = []
 
-        agent.acmodel.eval()
+        self.acmodel.eval()
         for _ in env_names:
-            logs += [batch_evaluate(agent, self.penv_pool, self.val_seed, episodes)]
+            logs += [batch_evaluate(self.acmodel, self.preprocess_obss,
+                                    self.penv_pool, argmax=True,
+                                    global_seed=self.args.seed,
+                                    seed_base=self.val_seed,
+                                    episodes=episodes)]
             self.val_seed += episodes
-        agent.acmodel.train()
+        self.acmodel.train()
 
         return logs
 
@@ -554,6 +614,8 @@ class ImitationLearning(object):
             try:
                 best_status = utils.get_status(self.model_phase_dir, best=True)
                 best_success_rate = best_status.get("success_rate", 0.0)
+                # Old statuses can contain an array
+                best_success_rate = np.mean(best_success_rate)
             except OSError:
                 pass
 
@@ -588,26 +650,38 @@ class ImitationLearning(object):
             status['update'] += 1
 
             update_end_time = time.time()
+            total_elapsed_time = update_end_time - total_start_time
 
             # Print logs
             if self.args.log_interval > 0 and (status['update'] % self.args.log_interval == 0 or
                                                status['num_frames'] >= self.args.frames_int):
-                total_elapsed_time = time.time() - total_start_time
 
                 fps = log['total_frames'] / (update_end_time - update_start_time)
 
-                # Average everything across the batch
+                # Per-level average for multi-level keys, scalar for others
                 for key in log:
-                    log[key] = np.mean(log[key])
+                    log[key] = np.mean(log[key], axis=0)
 
-                train_data = [status['update'], status['num_frames'], fps, total_elapsed_time,
-                              log['entropy'], log['policy_loss'], log['value_loss'],
-                              log['policy_accuracy'], log['value_accuracy'],
-                              log['grad_norm']]
+                L = self.acmodel.num_hierarchy_levels
+                _lvl = lambda v: list(np.atleast_1d(v))
+                train_data = ([status['update'], status['num_frames'], fps, total_elapsed_time]
+                              + _lvl(log['entropy']) + _lvl(log['policy_loss'])
+                              + _lvl(log['value_loss']) + _lvl(log['policy_accuracy'])
+                              + _lvl(log['value_accuracy']) + [log['grad_norm']])
 
-                self.txt_logger.info(
-                    "U {} | F {:06} | FPS {:04.0f} | D {:.0f} | H {:.3f} | pL {:.3f} | vL {:.3f} | pA {:.3f} | vA {:.3f} | ∇ {:.3f}".
-                    format(*train_data))
+                il_metrics = [('entropy', 'H'), ('policy_loss', 'pL'),
+                               ('value_loss', 'vL'), ('policy_accuracy', 'pA'),
+                               ('value_accuracy', 'vA')]
+                hdr = (f"U {status['update']} | F {status['num_frames']:06}"
+                       f" | FPS {fps:04.0f} | D {total_elapsed_time:.0f}")
+                if L == 1:
+                    mv = "".join(f" | {lbl} {log[key]:.3f}" for key, lbl in il_metrics)
+                    self.txt_logger.info(hdr + mv + f" | ∇ {log['grad_norm']:.3f}")
+                else:
+                    self.txt_logger.info(hdr + f" | ∇ {log['grad_norm']:.3f}")
+                    for i in range(L):
+                        mv = " | ".join(f"{lbl} {log[key][i]:.3f}" for key, lbl in il_metrics)
+                        self.txt_logger.info(f"  L{i} | {mv}")
 
                 # Log the gathered data only when we don't evaluate the
                 # validation metrics. It will be logged anyways afterwards
@@ -624,9 +698,10 @@ class ImitationLearning(object):
             if self.args.val_interval > 0 and (status['update'] % self.args.val_interval == 0 or
                                                status['num_frames'] >= self.args.frames_int):
                 valid_log = self.validate(self.args.val_episodes)
-                mean_return = [np.mean(log['return_per_episode']) for log in valid_log]
-                success_rate = [np.mean([1 if r > 0 else 0 for r in log['return_per_episode']]) for log in
-                                valid_log]
+                mean_return = [np.mean(np.array(log['return_per_episode'])[:, 0])
+                               for log in valid_log]
+                success_rate = [np.mean([1 if s else 0 for s in log['success_per_episode']])
+                                for log in valid_log]
                 mean_success_rate = np.mean(success_rate)
 
                 if self.args.log_interval > 0 and (status['update'] % self.args.log_interval == 0 or
@@ -645,7 +720,7 @@ class ImitationLearning(object):
                     self.txt_logger.info(("Validation: D {:.0f} | pA {:.3f} | vA {:.3f} " +
                                           "| R {:.3f} " * len(mean_return) +
                                           "| S {:.3f} " * len(success_rate) +
-                                          "| bS {:.3f}",
+                                          "| bS {:.3f}"
                                           ).format(elapsed_time,
                                                    *validation_data,
                                                    best_success_rate))
@@ -655,9 +730,9 @@ class ImitationLearning(object):
                         self.tb_writer.add_scalar(key, float(value), status['num_frames'])
                     self.csv_logger.writerow(train_data + validation_data)
 
-                status.update({"success_rate": success_rate,
-                               "model_state": self.acmodel.state_dict(),
+                status.update({"success_rate": mean_success_rate,
                                "il_optimizer_state": self.optimizer.state_dict() })
+                self.acmodel.save_to_status(status)
                 if hasattr(self.preprocess_obss, "vocab"):
                     status["vocab"] = self.preprocess_obss.vocab.vocab
 
@@ -673,6 +748,14 @@ class ImitationLearning(object):
                 utils.save_status(status, self.model_phase_dir)
                 self.txt_logger.info("Status saved")
 
+                custom_dict = {"duration": total_elapsed_time,
+                               "frames": status["num_frames"],
+                               "success_rate": mean_success_rate,
+                               "policy_accuracy": log["policy_accuracy"],
+                               "value_accuracy": log["value_accuracy"]}
+                best = {"best": custom_dict}
+                last = {"last": custom_dict}
+
                 if mean_success_rate > best_success_rate:
                     best_success_rate = mean_success_rate
                     status['success_rate'] = best_success_rate
@@ -684,85 +767,62 @@ class ImitationLearning(object):
                     self.txt_logger.info("Success rate {: .2f}; best model is saved".
                                          format(best_success_rate))
 
-                    # Save info about best status backup into Sprout as custom dict
-                    best = { 'best': { 'frames': status['num_frames'],
-                                       'success_rate': mean_success_rate,
-                                       'policy_accuracy': log['policy_accuracy'],
-                                       'value_accuracy': log['value_accuracy'], }}
-                    self.spr.edit(head=self.args.model, custom_dict=best)
+                    self.spr.edit(head=self.args.model, custom_dict=last | best,
+                                  custom_update=True)
+                else:
+                    self.spr.edit(head=self.args.model, custom_dict=last,
+                                  custom_update=True)
+
 
 
         return best_success_rate
 
-
-    def evaluate_agent(self, eval_seed, num_eval_episodes, return_obss_actions=False):
-        """
-        Evaluate the agent on some number of episodes and return the seeds for the
-        episodes the agent performed the worst on.
-        """
-
-        self.txt_logger.info("Evaluating agent using {} episodes".format(num_eval_episodes))
-
-        agent = utils.Agent.from_internal_model(
-            self.penv_pool.envs[0].observation_space,
-            self.penv_pool.envs[0].action_space,
-            self.model_phase_dir,
-            self.args.cnn_arch, argmax=False,
-            num_envs=min(len(self.penv_pool.envs), num_eval_episodes),
-            embedding_dim=self.args.embedding_dim,
-            use_memory=True, use_text=False)
-
-        agent.acmodel.eval()
-        logs = batch_evaluate(
-            agent,
-            self.penv_pool,
-            episodes=num_eval_episodes,
-            seed=eval_seed,
-            return_obss_actions=return_obss_actions
-        )
-        agent.acmodel.train()
-
-        success_rate = np.mean([1 if r > 0 else 0 for r in logs['return_per_episode']])
-        self.txt_logger.info("success rate: {:.2f}".format(success_rate))
-
-        # Find the seeds for all the failing demos
-        fail_seeds = []
-        fail_obss = []
-        fail_actions = []
-
-        for idx, ret in enumerate(logs["return_per_episode"]):
-            if ret <= 0:
-                fail_seeds.append(logs["seed_per_episode"][idx])
-                if return_obss_actions:
-                    fail_obss.append(logs["observations_per_episode"][idx])
-                    fail_actions.append(logs["actions_per_episode"][idx])
-
-        self.txt_logger.info("{} fails".format(len(fail_seeds)))
-
-        if not return_obss_actions:
-            return success_rate, fail_seeds
-        else:
-            return success_rate, fail_seeds, fail_obss, fail_actions
-
-
     @staticmethod
     def generate_demos(pbot_pool, all_seeds, pause=0.0):
+        """Generates number of demo episodes for each seed.
+
+        Note: Before optimizing this function and creating a tight
+        loop where no environments are idle and the next seed is
+        picked up immediately after an episode is completed (see
+        batch_evaluate() as an example), consider this carefully. Most
+        likely, this optimization won't be effective. The issue lies
+        in the resets, which should run in parallel. The more resets
+        you perform in parallel, the more gain you achieve. This
+        function accomplishes exactly that: a batch of episodes runs
+        to completion, and then all of them are reset
+        simultaneously. Yes, this means environments can be idle if
+        their episode has completed earlier, but the subsequent resets
+        are all executed in parallel, which really matters. Here are a
+        few numbers as proof:
+
+        1000 demo episodes:
+                  RUNNERS    32   64  101  251  501
+        -----------------  ----  ---  ---  ---  ---
+                  v1.5-ai  113s  95s  84s  67s  84s
+            this-function   70s  51s  41s  30s  60s
+          tight-loop-nbr*   97s  79s  70s  46s  64s
+
+        nbr* - means tight loop with nonblock resets
+
+        """
+
         steps_cnt = 0
         demos = []
         durations = []
 
         num_envs = min(len(pbot_pool.envs), len(all_seeds))
-        env = ManyEnvs(pbot_pool)
+        env = ParallelEnv(pbot_pool)
 
         for offset in range(0, len(all_seeds), num_envs):
             size = min(len(all_seeds) - offset, num_envs)
             seeds = all_seeds[offset: offset + size]
             durs = np.zeros((size,), dtype=float)
 
-            _, _ = env.reset(seeds=seeds)
+            active_indices = range(0, size)
+
+            _, _ = env.reset(seeds=seeds, indices=active_indices)
 
             actions = [[] for _ in range(size)]
-            steps = np.zeros((size,), dtype=int)
             not_yet_done = np.ones((size,), dtype=bool)
 
             ts = time.time()
@@ -770,18 +830,18 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
-                _, _, terminated, _, _, action = \
-                    env.step(dummy_actions, active_indices)
+                _, _, terminated, _, info = env.step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
+                true_actions = [inf["bot/action"] for inf in info]
 
                 if pause:
                     time.sleep(pause)
 
-                for i, a, d in zip(active_indices, action, done):
+                for i, a, d in zip(active_indices, true_actions, done):
                     # Skip last NOOP action
                     if not d:
                         actions[i].append(a)
-                        steps[i] += 1
+                        steps_cnt += 1
 
                 just_done_indices = active_indices[done]
                 durs[just_done_indices] = time.time() - ts
@@ -791,37 +851,4 @@ class ImitationLearning(object):
             for seed_, actions_ in zip(seeds, actions):
                 demos.append((seed_, actions_))
 
-            steps_cnt += np.sum(steps)
-
         return demos, durations, steps_cnt
-
-
-    def grow_training_set(self, eval_seed):
-        """
-        Grow the training set of demonstrations by some factor
-        We specifically generate demos on which the agent fails
-        """
-
-        if self.train_demos:
-            new_train_set_size = int(len(self.train_demos) * self.args.demo_grow_factor)
-        else:
-            new_train_set_size = self.args.start_demos
-        num_new_demos = new_train_set_size - len(self.train_demos)
-
-        self.txt_logger.info("Generating {} new demos".format(num_new_demos))
-
-        # Add new demos until we rearch the new target size
-        while len(self.train_demos) < new_train_set_size:
-            num_new_demos = new_train_set_size - len(self.train_demos)
-
-            # Evaluate the success rate of the model
-            success_rate, fail_seeds = self.evaluate_agent(eval_seed, self.args.eval_episodes)
-            eval_seed += self.args.eval_episodes
-
-            fail_seeds = fail_seeds[:num_new_demos]
-
-            # Generate demos for the worst performing seeds
-            new_demos, _, _ = ImitationLearning.generate_demos(self.pbot_pool, fail_seeds)
-            self.train_demos.extend(new_demos)
-
-        return eval_seed

@@ -2,22 +2,32 @@ from abc import abstractmethod, abstractproperty
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ACModel:
+class BaseACModel:
     recurrent = False
+    num_hierarchy_levels = 1
 
     @abstractmethod
     def __init__(self, obs_space, action_space):
         pass
 
     @abstractmethod
-    def forward(self, obs):
+    def forward(self, obs, **kwargs):
         pass
 
-class RecurrentACModel(ACModel):
-    recurrent = True
+    @abstractmethod
+    def load_from_status(self, status, logger=None):
+        pass
 
     @abstractmethod
-    def forward(self, obs, memory):
+    def save_to_status(self, status):
+        pass
+
+class RecurrentACModel(BaseACModel):
+    recurrent = True
+    num_hierarchy_levels = 1
+
+    @abstractmethod
+    def forward(self, obs, memory, **kwargs):
         pass
 
     @property

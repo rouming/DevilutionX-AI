@@ -48,6 +48,12 @@ class ActionMask(enum.Enum):
     MASK_WALLS         = 1<<2
     MASK_OTHER_SOLIDS  = 1<<3
 
+def _fmix32(h):
+    """MurmurHash3 finalizer: bijective 32-bit mixer with full avalanche."""
+    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF
+    return (h ^ (h >> 16)) & 0xFFFFFFFF
+
 class DiabloEnv(gym.Env):
     MASK_EVERYTHING = (ActionMask.MASK_TRIGGERS.value |
                        ActionMask.MASK_CLOSED_DOORS.value |
@@ -159,9 +165,14 @@ class DiabloEnv(gym.Env):
             raise ValueError("env_config must be provided!")
         if game is None:
             raise ValueError("game must be provided!")
+        # No hierarchy
+        self.num_hierarchy_levels = 1
+        self.resets_cnt = 0
         self.config = env_config
         self.game = game
         self.seed = self.config['seed']
+        self.initial_seed = _fmix32((self.seed + self.config['index']) & 0xFFFFFFFF)
+        self.auto_reset_counter = 0
         self.paused = False
         self.view_radius = None
         self.used_goal = None
@@ -270,16 +281,35 @@ class DiabloEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
-        seed_data = (0, 0)
         if seed is not None:
             seed_data = (1, seed)
             self.seed = seed
+        else:
+            # Auto-reset path: hash (initial_seed + counter) via fmix32.
+            # Eval resets always supply an explicit seed and never touch
+            # auto_reset_counter, so the training RNG sequence is completely
+            # isolated from eval resets.
+            auto_seed = _fmix32((self.initial_seed + self.auto_reset_counter) & 0xFFFFFFFF)
+            self.auto_reset_counter = (self.auto_reset_counter + 1) & 0xFFFFFFFF
+            seed_data = (1, auto_seed)
+
+        if seed is not None or self.config.get("fixed-seed", False):
+            self.resets_cnt = 0
+        else:
+            # When a seed is not available, we need to distinguish
+            # between two resets to perform different probability
+            # sampling. See determenistic_sample() and its callers for
+            # details
+            self.resets_cnt += 1
 
         if self.paused:
             # Resume first
             self.pause_game(False)
 
-        print(f"RESET seed={seed}" if seed else "RESET", file=self.log)
+        if seed is not None:
+            print(f"RESET seed={seed}", file=self.log)
+        else:
+            print(f"RESET auto_seed={auto_seed:08x}", file=self.log)
 
         # Start new game
         key = ring.RingEntryType.RING_ENTRY_KEY_NEW | \
@@ -323,6 +353,7 @@ class DiabloEnv(gym.Env):
         self.prev_hp = hp
         self.total_reward = 0.0
         self.exploration_reward = 0.0
+        self.episode_success = False
         self.hist_player_pos = collections.deque([pos], maxlen=3)
         self.last_player_pos = pos
         self.last_steps_cnt = 0
@@ -331,11 +362,9 @@ class DiabloEnv(gym.Env):
         # Starting dungeon level
         self.start_dungeon_level = d.player.plrlevel
 
-        obss = {
-            "env": env,
-            "env-status": env_status
-        }
-        return obss, {}
+        obss = {"env": env, "env-status": env_status}
+        info = {"env-counters": (self.resets_cnt, self.steps_cnt)}
+        return obss, info
 
     def is_agent_timedout(self):
         # Should cover most of the cases
@@ -470,6 +499,7 @@ class DiabloEnv(gym.Env):
         elif d.player.plrlevel > self.start_dungeon_level:
             reward = 50.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
         elif d.player.plrlevel != self.start_dungeon_level:
             # Done with this episode with 0 reward if agent has
@@ -560,10 +590,18 @@ class DiabloEnv(gym.Env):
             # Penalty for NOP
             reward = -0.1
 
-        return reward, done, truncated
+        return [reward], done, truncated
+
+    def _opt_changed(self, action):
+        return False
 
     def step(self, action):
         self.steps_cnt += 1
+
+        # HRL-awareness: (L,) shape
+        assert isinstance(action, list) or isinstance(action, np.ndarray)
+        assert len(action) == self.num_hierarchy_levels
+        worker_action = action[0]
 
         if self.paused:
             # Resume first
@@ -574,7 +612,7 @@ class DiabloEnv(gym.Env):
             # instance game ticks
             key = ring.RingEntryType.RING_ENTRY_KEY_NOOP
         else:
-            key = DiabloEnv.action_to_key(action)
+            key = DiabloEnv.action_to_key(worker_action)
 
         key |= ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
         self.game.submit_key(key)
@@ -592,17 +630,18 @@ class DiabloEnv(gym.Env):
         env = diablo_state.get_environment(d, radius=self.view_radius,
                                            goal_pos=goal_pos)
 
-        reward, done, truncated = self.evaluate_step(d, env, action)
-        self.total_reward += reward
+        rewards, done, truncated = self.evaluate_step(d, env, action)
+        self.total_reward += rewards[0]
 
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        obss = {
-            "env": env,
-            "env-status": env_status
-        }
-        return obss, reward, done, truncated, {}
+        obss = {"env": env, "env-status": env_status}
+        info = {"hierarchy/opt-changed": self._opt_changed(action),
+                "hierarchy/reward": rewards,
+                "env-counters": (self.resets_cnt, self.steps_cnt),
+                "success": self.episode_success if done else False}
+        return obss, rewards[0], done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
     @staticmethod
@@ -649,6 +688,7 @@ class DiabloEnv_FindNextLevel_v0(DiabloEnv):
         elif d.player.plrlevel > self.start_dungeon_level:
             reward = 20.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
 
         # See the definition of @reward: initially, it is set to
@@ -668,7 +708,7 @@ class DiabloEnv_FindNextLevel_v0(DiabloEnv):
             # Penalty for NOP
             reward = 0.0
 
-        return reward, done, truncated
+        return [reward], done, truncated
 
 class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
     @staticmethod
@@ -730,7 +770,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             # Penalty for NOP
             reward = 0.0
 
-        return reward, done, truncated
+        return [reward], done, truncated
 
 class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
     @staticmethod
@@ -749,6 +789,209 @@ class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
         goal_pos = (nxtlvl_trig.position.x, nxtlvl_trig.position.y)
         return goal_pos
 
+class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
+    @staticmethod
+    def tune_config(env_config):
+        """Tune configuration before instantiation"""
+        pass
+
+    def __init__(self, env_config, **kwargs):
+        super().__init__(env_config, **kwargs)
+        self.used_goal = "random"
+
+    def generate_goal_pos(self, d, env_whole):
+        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+
+    def evaluate_step(self, d, env, action):
+        monsters_cnt = diablo_state.count_active_monsters(d)
+        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        player_pos = diablo_state.player_position(d)
+        hp = d.player._pHitPoints
+
+        truncated = False
+        done = False
+        # The initial value must be a zero integer. I need a simple
+        # marker to indicate that @reward was changed in many if-blocks below.
+        # It seems the easiest way is to set it to an integer initially and
+        # propagate it to a float on any update. This will be an ideal
+        # marker that @reward was updated and that the agent was exploring.
+        reward = int(0)
+
+        if diablo_state.is_player_dead(d):
+            # We are dead, game over
+            reward = -10.0
+            done = True
+            print("Death, R %.2f" % reward, file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            # Done with this episode with 0 reward if agent has
+            # stepped into a trigger to escape
+            reward = 0.0
+            done = True
+            print("Escape, R %.2f" % reward, file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
+            reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Goal, R %.2f" % reward, file=self.log)
+        else:
+            if hp < self.prev_hp:
+                # Player took damage
+                reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                self.prev_hp = hp
+                print("Damage taken, R %.2f" % reward, file=self.log)
+            if total_hp < self.prev_total_hp:
+                # Monster took damage
+                reward += 0.02
+                self.prev_total_hp = total_hp
+                print("Attack monster, R %.2f" % reward, file=self.log)
+            if monsters_cnt < self.prev_monsters_cnt:
+                # Monsters killed
+                reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
+                self.prev_monsters_cnt = monsters_cnt
+                print("Kill monster, R %.2f" % reward, file=self.log)
+
+        # See the definition of @reward: initially, it is set to
+        # the integer zero, so we can safely check for type changes
+        # if the agent was exploring and @reward has changed to float.
+        was_exploring = (type(reward) != int)
+
+        if self.is_agent_stuck(d, was_exploring):
+            # Cut this episode, agent is stuck
+            truncated = True
+            reward = 0.0
+            if self.is_agent_timedout():
+                print("Timedout, R %.2f" % reward, file=self.log)
+            else:
+                print("Stuck, R %.2f" % reward, file=self.log)
+        elif not was_exploring:
+            # Penalize only movement that didn't accomplish anything.
+            # Stand/PrimaryAction/SecondaryAction get no penalty: the agent
+            # should be free to attempt attacks or interact without being
+            # punished for a miss or a failed interaction.
+            if action < ActionEnum.Stand.value:
+                reward -= 0.01
+
+        return [reward], done, truncated
+
+### HRL Environment Classes
+
+class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
+    @staticmethod
+    def tune_config(env_config):
+        pass
+
+    def __init__(self, env_config, **kwargs):
+        super().__init__(env_config, **kwargs)
+        self.num_hierarchy_levels = 2
+        self.used_goal = "random"
+        self.prev_option = None
+
+    def reset(self, **kwargs):
+        obs, info = super().reset(**kwargs)
+        self.prev_option = None
+        return obs, info
+
+    def _opt_changed(self, action):
+        opt = int(action[1])
+        changed = (opt != self.prev_option)
+        self.prev_option = opt
+        return bool(changed)
+
+    def generate_goal_pos(self, d, env_whole):
+        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+
+    def evaluate_step(self, d, env, action):
+        worker_action = int(action[0])
+        manager_option = int(action[1])
+        monsters_cnt = diablo_state.count_active_monsters(d)
+        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        player_pos = diablo_state.player_position(d)
+        hp = d.player._pHitPoints
+
+        truncated = False
+        done = False
+        # int(0) sentinel: reward becomes float only when something happens,
+        # used to detect whether the agent was active this step.
+        worker_reward = int(0)
+        manager_reward = int(0)
+
+        if diablo_state.is_player_dead(d):
+            # We are dead, game over
+            worker_reward = -10.0
+            manager_reward = -10.0
+            done = True
+            print("Death, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            # Done with this episode with 0 reward if agent has
+            # stepped into a trigger to escape
+            worker_reward = 0.0
+            manager_reward = 0.0
+            done = True
+            print("Escape, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
+            worker_reward = 20.0
+            manager_reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Goal, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif manager_option == 0:
+            # Explorer selected: keep state in sync so no stale delta
+            # fires when manager later switches to combat.
+            self.prev_hp = hp
+            self.prev_total_hp = total_hp
+            self.prev_monsters_cnt = monsters_cnt
+        elif manager_option == 1:
+            # Combat selected
+
+            # Manager hint: penalize choosing fight with no visible targets
+            if diablo_state.count_visible_monsters(env) == 0:
+                manager_reward = -0.5
+
+            if hp < self.prev_hp:
+                # Player took damage
+                worker_reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                self.prev_hp = hp
+                print("Damage taken, R %.2f" % worker_reward, file=self.log)
+            if total_hp < self.prev_total_hp:
+                # Monster took damage
+                worker_reward += 0.02
+                self.prev_total_hp = total_hp
+                print("Attack monster, R %.2f" % worker_reward, file=self.log)
+            if monsters_cnt < self.prev_monsters_cnt:
+                # Monsters killed
+                worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
+                self.prev_monsters_cnt = monsters_cnt
+                print("Kill monster, R %.2f" % worker_reward, file=self.log)
+
+        # See the definition of @worker_reward: initially, it is set
+        # to the integer zero, so we can safely check for type changes
+        # if the agent was exploring and @worker_reward has changed to
+        # float.
+        was_exploring = (type(worker_reward) != int)
+
+        if self.is_agent_stuck(d, was_exploring):
+            # Cut this episode, agent is stuck
+            truncated = True
+            worker_reward = 0.0
+            manager_reward = 0.0
+            if self.is_agent_timedout():
+                print("Timedout, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+            else:
+                print("Stuck, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif not was_exploring:
+            # Penalize only movement that didn't accomplish anything.
+            # Stand/PrimaryAction/SecondaryAction get no penalty: the agent
+            # should be free to attempt attacks or interact without being
+            # punished for a miss or a failed interaction.
+            if worker_action < ActionEnum.Stand.value:
+                worker_reward -= 0.01
+
+        return [worker_reward, manager_reward], done, truncated
+
 
 from gymnasium.envs.registration import register
 
@@ -759,6 +1002,13 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_FindNextLevel_v1 },
     { 'id': 'Diablo-FindRandomGoal-v0',
       'entry_point': DiabloEnv_FindRandomGoal_v0 },
+    { 'id': 'Diablo-ClearTheLevel-v0',
+      'entry_point': DiabloEnv_ClearTheLevel_v0 },
+
+    # HRL Environment Classes
+
+    { 'id': 'Diablo-HRL-ClearTheLevel-v0',
+      'entry_point': DiabloEnvHRL_ClearTheLevel_v0 },
 ]
 
 def register_diablo_envs():

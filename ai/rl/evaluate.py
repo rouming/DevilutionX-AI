@@ -1,46 +1,20 @@
 import numpy as np
 import time
+import torch
 
+from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
 from rl.torch_ac.utils import ParallelEnv
-
-class ManyEnvs(ParallelEnv):
-    def __init__(self, penv_pool, *args, **kwargs):
-        super().__init__(penv_pool, *args, **kwargs)
-
-    def reset(self, seeds=None):
-        results = super().reset(seeds=seeds)
-        return results
-
-    def step(self, actions, active_indices):
-        assert len(actions) == len(active_indices)
-
-        for i, ind in enumerate(active_indices):
-            if ind > 0:
-                local, action = self.p.locals[ind - 1], actions[i]
-                local.send(("step", action))
-
-        results = []
-        for i, ind in enumerate(active_indices):
-            if ind == 0:
-                result = self.p.envs[0].step(actions[i])
-            else:
-                local = self.p.locals[ind - 1]
-                result = local.recv()
-            results.append(result)
-
-        return zip(*results)
-
-    def render(self):
-        raise NotImplementedError
+from rl.utils import device
 
 
-# Returns the performance of the agent on the environment for a
-# particular number of episodes.
-def batch_evaluate(agent, penv_pool, seed, episodes,
-                   return_obss_actions=False, pause=0.0):
+# Evaluate the model with a specific number of episodes starting from
+# a seed value
+def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
+                   seed_base, episodes, return_obss_actions=False, pause=0.0):
     logs = {
         "num_frames_per_episode": [],
         "return_per_episode": [],
+        "success_per_episode": [],
         "duration_per_episode": [],
         "observations_per_episode": [],
         "actions_per_episode": [],
@@ -48,56 +22,157 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
     }
 
     num_envs = min(len(penv_pool.envs), episodes)
-    env = ManyEnvs(penv_pool)
+    num_hierarchy_levels = penv_pool.envs[0].unwrapped.num_hierarchy_levels
+    env = ParallelEnv(penv_pool)
 
-    for offset in range(0, episodes, num_envs):
-        num_envs = min(episodes - offset, num_envs)
-        seeds = range(seed + offset, seed + offset + num_envs)
-        many_obs, _ = env.reset(seeds=seeds)
+    # (P, L) shape
+    returns = np.zeros((num_envs, num_hierarchy_levels), dtype=float)
+    # (P, ) shape
+    num_frames = np.zeros((num_envs,), dtype=int)
+    timestamps = np.zeros((num_envs,), dtype=float)
+    pending_resets = np.zeros((num_envs,), dtype=bool)
+    running_envs = np.ones((num_envs,), dtype=bool)
 
-        num_frames = np.zeros((num_envs,), dtype=int)
-        durations = np.zeros((num_envs,), dtype=float)
-        returns = np.zeros((num_envs,))
-        not_yet_done = np.ones((num_envs,), dtype=bool)
+    seeds = torch.arange(seed_base, seed_base + num_envs, dtype=int, device=device)
+    max_seed = seed_base + episodes
+    next_seed = seed_base + num_envs
+
+    if return_obss_actions:
+        log_obss = [[] for _ in range(num_envs)]
+        log_actions = [[] for _ in range(num_envs)]
+
+    timestamps[:] = time.time()
+
+    if acmodel.recurrent:
+        memories = torch.zeros(num_envs, acmodel.memory_size, device=device)
+
+    active_indices = np.flatnonzero(running_envs)
+    obss, info = env.reset(seeds=seeds.tolist(), indices=active_indices)
+    obss = np.asarray(obss)
+    if not argmax:
+        counters = torch.tensor([inf["env-counters"] for inf in info],
+                                dtype=int, device=device)
+
+    while np.any(running_envs):
+        if np.any(pending_resets):
+            # Do a blocking call if all running environments are pending
+            nonblock = np.any(running_envs & ~pending_resets)
+            reset_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
+            pending_resets[reset_indices] = False
+            obss[reset_indices] = new_obs
+            if not argmax and len(info):
+                new_counters = torch.tensor([inf["env-counters"] for inf in info],
+                                            dtype=int, device=device)
+                counters[reset_indices] = new_counters
+
+        active_indices = np.flatnonzero(running_envs & ~pending_resets)
+        obs = obss[active_indices]
+        with torch.no_grad():
+            if not argmax:
+                active_seeds = seeds[active_indices]
+                active_counters = counters[active_indices]
+                active_counters = (active_counters[:, 0], active_counters[:, 1])
+                noise = calculate_deterministic_noise(global_seed, active_seeds,
+                                                      *active_counters,
+                                                      dims=num_hierarchy_levels)
+            else:
+                noise = None
+            preprocessed_obss = preprocess_obss(obs, device=device)
+            if acmodel.recurrent:
+                memory = memories[active_indices]
+                dist, _, memory = acmodel(preprocessed_obss, memory, noise=noise)
+                memories[active_indices] = memory
+            else:
+                dist, _ = acmodel(preprocessed_obss, noise=noise)
+
+            assert len(dist) == num_hierarchy_levels
+
+        # Distributions shape (L, P) -> actions shape (P, L)
+        if argmax:
+            actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
+        else:
+            # We use stateless and deterministic categorical sampling
+            # (P, L)
+            actions = torch.stack([
+                deterministic_sample(d.probs, noise[:, i]) for i, d in enumerate(dist)
+            ], dim=1)
+
+        actions = actions.cpu().numpy()
+
+        assert len(active_indices) == len(actions) == len(obs)
+        assert actions.shape[1] == num_hierarchy_levels
 
         if return_obss_actions:
-            obss = [[] for _ in range(num_envs)]
-            actions = [[] for _ in range(num_envs)]
+            for i, o, a in zip(active_indices, obs, actions):
+                log_obss[i].append(o)
+                log_actions[i].append(a)
 
-        ts = time.time()
+        obs, _, terminated, truncated, info = env.step(actions, active_indices)
+        done = np.logical_or(terminated, truncated)
+        # HRL-aware rewards with the shape (P, L)
+        reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+        assert reward.shape == (len(actions), num_hierarchy_levels)
 
-        while np.any(not_yet_done):
-            active_indices = np.flatnonzero(not_yet_done)
-            actions = agent.get_actions(many_obs)
-            assert len(active_indices) == len(actions) == len(many_obs)
+        returns[active_indices] += reward
+        obss[active_indices] = obs
+        num_frames[active_indices] += 1
+        if not argmax:
+            active_counters = torch.tensor([inf["env-counters"] for inf in info],
+                                           dtype=int, device=device)
+            counters[active_indices] = active_counters
+
+        if np.any(done):
+            just_done_indices = active_indices[done]
+            done_num_frames = num_frames[just_done_indices]
+            done_returns = returns[just_done_indices]
+            done_durations = time.time() - timestamps[just_done_indices]
+            done_seeds = seeds[just_done_indices]
+
+            logs["num_frames_per_episode"].extend(done_num_frames.tolist())
+            logs["return_per_episode"].extend(done_returns.tolist())
+            logs["success_per_episode"].extend(
+                [inf.get("success", False) for inf, d in zip(info, done) if d])
+            logs["duration_per_episode"].extend(done_durations.tolist())
+            logs["seed_per_episode"].extend(done_seeds.tolist())
 
             if return_obss_actions:
-                for i, o, a in zip(active_indices, many_obs, actions):
-                        obss[i].append(o)
-                        actions[i].append(a)
+                for i in just_done_indices:
+                    logs["observations_per_episode"].append(log_obss[i])
+                    logs["actions_per_episode"].append(log_actions[i])
+                    log_obss[i] = []
+                    log_actions[i] = []
 
-            many_obs, reward, terminated, truncated, _ = env.step(actions, active_indices)
-            done = np.asarray(terminated) | np.asarray(truncated)
-            agent.analyze_feedbacks(reward, done)
+            end_seed = min(max_seed, next_seed + len(just_done_indices))
+            new_seeds = torch.arange(next_seed, end_seed, dtype=int, device=device)
+            next_seed = end_seed
 
-            if pause:
-                time.sleep(pause)
+            nr_resets = len(new_seeds)
 
-            # For the next round keep only active observations
-            many_obs = np.array(many_obs)[~done]
-            just_done_indices = active_indices[done]
+            reset_indices = just_done_indices[:nr_resets]
+            finished_indices = just_done_indices[nr_resets:]
+            running_envs[finished_indices] = False
 
-            returns[active_indices] += reward
-            num_frames[active_indices] += 1
-            durations[just_done_indices] = time.time() - ts
-            not_yet_done[just_done_indices] = False
+            if len(reset_indices):
+                pending_resets[reset_indices] = True
+                seeds[reset_indices] = new_seeds
+                timestamps[reset_indices] = time.time()
+                num_frames[reset_indices] = 0
+                returns[reset_indices] = 0
 
-        logs["num_frames_per_episode"].extend(list(num_frames))
-        logs["return_per_episode"].extend(list(returns))
-        logs["duration_per_episode"].extend(list(durations))
-        logs["seed_per_episode"].extend(list(seeds))
-        if return_obss_actions:
-            logs["observations_per_episode"].extend(obss)
-            logs["actions_per_episode"].extend(actions)
+                if acmodel.recurrent:
+                    memories[reset_indices] = 0
+
+                env.nonblock_reset(seeds=new_seeds.tolist(), indices=reset_indices)
+
+        if pause:
+            time.sleep(pause)
+
+    assert not np.any(pending_resets)
+
+    # Keep all logs sorted by seed
+    order = np.argsort(logs["seed_per_episode"])
+    for key, value in logs.items():
+        if len(value):
+            logs[key] = [value[i] for i in order]
 
     return logs

@@ -4,7 +4,6 @@ import torch
 import logging
 import sys
 
-import rl.utils as utils
 from .other import device
 
 
@@ -34,10 +33,6 @@ def save_status(status, model_dir):
 
 def get_vocab(model_dir):
     return get_status(model_dir)["vocab"]
-
-
-def get_model_state(model_dir, best=False):
-    return get_status(model_dir, best=best)["model_state"]
 
 
 def get_txt_logger(model_dir):

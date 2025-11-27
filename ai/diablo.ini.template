@@ -98,6 +98,7 @@ Fixed seed for game run={fixed_seed}
 Share game state via file={mshared_filename}
 Load player into the level=1
 Disable all monsters={no_monsters}
+Blind monsters={blind_monsters}
 Skip animation={skip_animation}
 Disable monsters auto-pursuing=1
 Game ticks per step={game_ticks_per_step}
@@ -105,6 +106,7 @@ Run the game loop in step mode={step_mode}
 Automap active on start={automap_active}
 Disable explosive barrels, urns, or pods={harmless_barrels}
 Disable auto-walk when pressing the secondary action={no_auto_walk_on_seconday_action}
+Enable invincible player mode={invincible_player}
 
 [Network]
 Port=6112

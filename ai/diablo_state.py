@@ -113,7 +113,8 @@ def is_door_closed(obj):
 
 @njit(cache=True)
 def is_door_open(obj):
-    return obj._oVar4 == DoorState.DOOR_OPEN.value
+    return obj._oVar4 == DoorState.DOOR_OPEN.value or \
+           obj._oVar4 == DoorState.DOOR_BLOCKED.value
 
 @njit(cache=True)
 def is_door(obj):
@@ -253,6 +254,9 @@ def count_active_monsters(d):
 
 def count_active_monsters_total_hp(d):
     return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
+
+def count_visible_monsters(env):
+    return int(np.count_nonzero(env & EnvironmentFlag.Monster.value))
 
 @njit(cache=True)
 def count_explored_tiles(d):
@@ -824,13 +828,15 @@ class DiabloGame:
                          game_ticks_per_step=game_ticks_per_step,
                          step_mode=0 if config["gui"] else 1 if step_mode else 0,
                          mshared_filename=mshared_filename,
+                         invincible_player=1 if config["invincible-player"] else 0,
                          no_monsters=1 if config["no-monsters"] else 0,
+                         blind_monsters=1 if config["blind-monsters"] else 0,
                          harmless_barrels=1 if config["harmless-barrels"] else 0,
                          no_auto_walk_on_seconday_action=
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
                          )
 
-        prefix = "diablo-%d-%d-" % (config["seed"], os.getpid())
+        prefix = "diablo-%d-%d-" % (config["index"], os.getpid())
         state_dir = tempfile.TemporaryDirectory(prefix=prefix)
         cfg_file = open(state_dir.name + "/diablo.ini", "w")
         cfg_file.write(cfg)

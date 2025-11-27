@@ -1,15 +1,34 @@
+"""
+HRL Adaptation of torch-ac,
+based on torch-ac by lcswillems.
+
+Changes:
+- Deterministic sampling.
+- Adapted storage and collection to support 'num_hierarchy_levels' dimension (P x L).
+- Manager and Worker steps are aligned for joint optimization.
+- Implemented shared Encoder/Memory with multi-head outputs.
+- Added 'opt_mask' to handle Truncated BPTT at option boundaries
+  (detaching memory on option switch).
+
+Author: Roman Penyaev, 2025
+"""
+
 from abc import ABC, abstractmethod
+import numpy
 import torch
 
 from rl.torch_ac.format import default_preprocess_obss
 from rl.torch_ac.utils import DictList, ParallelEnv
+from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
 
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, penv_pool, acmodel, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
-                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward):
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device,
+                 num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
+                 reshape_reward):
         """
         Initializes a `BaseAlgo` instance.
 
@@ -17,6 +36,10 @@ class BaseAlgo(ABC):
         ----------
         penv_pool : ParallelEnvPool
             a pool of environments
+        global_seed: int
+            initial global experiment seed
+        seeds : list
+            a list of initial environment seeds
         acmodel : torch.Module
             the model
         num_frames_per_proc : int
@@ -46,9 +69,11 @@ class BaseAlgo(ABC):
 
         # Store parameters
 
-        self.env = ParallelEnv(penv_pool)
+        self.env = ParallelEnv(penv_pool, auto_reset=True)
+        self.global_seed = global_seed
         self.acmodel = acmodel
         self.device = device
+        self.num_hierarchy_levels = acmodel.num_hierarchy_levels
         self.num_frames_per_proc = num_frames_per_proc
         self.discount = discount
         self.lr = lr
@@ -77,31 +102,41 @@ class BaseAlgo(ABC):
 
         # Initialize experience values
 
-        shape = (self.num_frames_per_proc, self.num_procs)
+        # - T is self.num_frames_per_proc
+        # - P is self.num_procs
+        # - L is self.num_hierarchy_levels
+        # (T, P, L)
+        shape = (self.num_frames_per_proc, self.num_procs, self.num_hierarchy_levels)
 
-        self.obs, _ = self.env.reset()
+        self.obs, info = self.env.reset(seeds=seeds)
+        self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
+                                         dtype=int, device=self.device)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
-            self.memories = torch.zeros(*shape, self.acmodel.memory_size, device=self.device)
+            self.memories = torch.zeros(*shape[:2], self.acmodel.memory_size, device=self.device)
         self.mask = torch.ones(shape[1], device=self.device)
-        self.masks = torch.zeros(*shape, device=self.device)
+        self.masks = torch.zeros(*shape[:2], device=self.device)
+        self.opt_mask = torch.ones(shape[1], device=self.device)
+        self.opt_masks = torch.zeros(*shape[:2], device=self.device)
         self.actions = torch.zeros(*shape, device=self.device, dtype=torch.int)
         self.values = torch.zeros(*shape, device=self.device)
         self.rewards = torch.zeros(*shape, device=self.device)
         self.advantages = torch.zeros(*shape, device=self.device)
         self.log_probs = torch.zeros(*shape, device=self.device)
+        self.seeds = torch.tensor(seeds, dtype=int, device=self.device)
 
         # Initialize log values
 
-        self.log_episode_return = torch.zeros(self.num_procs, device=self.device)
-        self.log_episode_reshaped_return = torch.zeros(self.num_procs, device=self.device)
+        self.log_episode_return = torch.zeros(*shape[1:], device=self.device)
+        self.log_episode_reshaped_return = torch.zeros(*shape[1:], device=self.device)
         self.log_episode_num_frames = torch.zeros(self.num_procs, device=self.device)
 
         self.log_done_counter = 0
-        self.log_return = [0] * self.num_procs
-        self.log_reshaped_return = [0] * self.num_procs
+        self.log_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
+        self.log_reshaped_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
         self.log_num_frames = [0] * self.num_procs
+        self.log_success = [False] * self.num_procs
 
     def collect_experiences(self):
         """Collects rollouts and computes advantages.
@@ -128,15 +163,34 @@ class BaseAlgo(ABC):
             # Do one agent-environment interaction
 
             with torch.no_grad():
+                env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
+                noise = calculate_deterministic_noise(self.global_seed, self.seeds,
+                                                      *env_counters,
+                                                      dims=self.num_hierarchy_levels)
                 preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
                 if self.acmodel.recurrent:
-                    dist, value, memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
+                    dist, value, memory = self.acmodel(
+                        preprocessed_obs, self.memory * self.mask.unsqueeze(1),
+                        noise=noise)
                 else:
-                    dist, value = self.acmodel(preprocessed_obs)
-            action = dist.sample()
+                    dist, value = self.acmodel(preprocessed_obs, noise=noise)
 
-            obs, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy())
-            done = tuple(a | b for a, b in zip(terminated, truncated))
+            assert len(dist) == self.num_hierarchy_levels
+            assert value.shape == (self.num_procs, self.num_hierarchy_levels)
+
+            # (P, L)
+            actions = torch.stack([
+                deterministic_sample(d.probs, noise[:, i]) for i, d in enumerate(dist)
+            ], dim=1)
+
+            obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
+            done = numpy.logical_or(terminated, truncated)
+            # HRL-aware rewards with the shape (P, L)
+            reward = numpy.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+            assert reward.shape == (self.num_procs, self.num_hierarchy_levels)
+            # HRL-aware opt-changed flag with the shape (P,)
+            opt_changed = numpy.array([inf["hierarchy/opt-changed"] for inf in info],
+                                      dtype=bool)
 
             # Update experiences values
 
@@ -145,18 +199,27 @@ class BaseAlgo(ABC):
             if self.acmodel.recurrent:
                 self.memories[i] = self.memory
                 self.memory = memory
+            self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
+                                             dtype=int, device=self.device)
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
-            self.actions[i] = action
+            self.opt_masks[i] = self.opt_mask
+            self.opt_mask = 1 - torch.tensor(opt_changed, device=self.device, dtype=torch.float)
+            self.actions[i] = actions
             self.values[i] = value
             if self.reshape_reward is not None:
                 self.rewards[i] = torch.tensor([
-                    self.reshape_reward(obs_, action_, reward_, done_)
-                    for obs_, action_, reward_, done_ in zip(obs, action, reward, done)
+                    self.reshape_reward(obs_, action_, reward_, opt_changed_, done_)
+                    for obs_, action_, reward_, opt_changed_, done_ in
+                    zip(obs, actions, reward, opt_changed, done)
                 ], device=self.device)
             else:
                 self.rewards[i] = torch.tensor(reward, device=self.device)
-            self.log_probs[i] = dist.log_prob(action)
+
+            # (P, L)
+            self.log_probs[i] = torch.stack([dist[j].log_prob(actions[:, j])
+                                             for j in range(self.num_hierarchy_levels)],
+                                            dim=1)
 
             # Update log values
 
@@ -167,30 +230,37 @@ class BaseAlgo(ABC):
             for i, done_ in enumerate(done):
                 if done_:
                     self.log_done_counter += 1
-                    self.log_return.append(self.log_episode_return[i].item())
-                    self.log_reshaped_return.append(self.log_episode_reshaped_return[i].item())
+                    self.log_return.append(self.log_episode_return[i].tolist())
+                    self.log_reshaped_return.append(self.log_episode_reshaped_return[i].tolist())
                     self.log_num_frames.append(self.log_episode_num_frames[i].item())
+                    self.log_success.append(info[i].get("success", False))
 
-            self.log_episode_return *= self.mask
-            self.log_episode_reshaped_return *= self.mask
+            self.log_episode_return *= self.mask.unsqueeze(1)
+            self.log_episode_reshaped_return *= self.mask.unsqueeze(1)
             self.log_episode_num_frames *= self.mask
 
         # Add advantage and return to experiences
 
         with torch.no_grad():
+            env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
+            noise = calculate_deterministic_noise(self.global_seed, self.seeds,
+                                                  *env_counters,
+                                                  dims=self.num_hierarchy_levels)
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             if self.acmodel.recurrent:
-                _, next_value, _ = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
+                _, next_value, _ = self.acmodel(
+                    preprocessed_obs, self.memory * self.mask.unsqueeze(1),
+                    noise=noise)
             else:
-                _, next_value = self.acmodel(preprocessed_obs)
+                _, next_value = self.acmodel(preprocessed_obs, noise=noise)
 
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
             next_value = self.values[i+1] if i < self.num_frames_per_proc - 1 else next_value
             next_advantage = self.advantages[i+1] if i < self.num_frames_per_proc - 1 else 0
 
-            delta = self.rewards[i] + self.discount * next_value * next_mask - self.values[i]
-            self.advantages[i] = delta + self.discount * self.gae_lambda * next_advantage * next_mask
+            delta = self.rewards[i] + self.discount * next_value * next_mask.unsqueeze(1) - self.values[i]
+            self.advantages[i] = delta + self.discount * self.gae_lambda * next_advantage * next_mask.unsqueeze(1)
 
         # Define experiences:
         #   the whole experience is the concatenation of the experience
@@ -198,6 +268,7 @@ class BaseAlgo(ABC):
         # In comments below:
         #   - T is self.num_frames_per_proc,
         #   - P is self.num_procs,
+        #   - L is self.num_hierarchy_levels,
         #   - D is the dimensionality.
 
         exps = DictList()
@@ -209,13 +280,14 @@ class BaseAlgo(ABC):
             exps.memory = self.memories.transpose(0, 1).reshape(-1, *self.memories.shape[2:])
             # T x P -> P x T -> (P * T) x 1
             exps.mask = self.masks.transpose(0, 1).reshape(-1).unsqueeze(1)
-        # for all tensors below, T x P -> P x T -> P * T
-        exps.action = self.actions.transpose(0, 1).reshape(-1)
-        exps.value = self.values.transpose(0, 1).reshape(-1)
-        exps.reward = self.rewards.transpose(0, 1).reshape(-1)
-        exps.advantage = self.advantages.transpose(0, 1).reshape(-1)
+            exps.opt_mask = self.opt_masks.transpose(0, 1).reshape(-1).unsqueeze(1)
+        # for all tensors below, T x P x L -> P x T x L -> (P * T) x L
+        exps.action = self.actions.transpose(0, 1).reshape(-1, *self.actions.shape[2:])
+        exps.value = self.values.transpose(0, 1).reshape(-1, *self.values.shape[2:])
+        exps.reward = self.rewards.transpose(0, 1).reshape(-1, *self.rewards.shape[2:])
+        exps.advantage = self.advantages.transpose(0, 1).reshape(-1, *self.advantages.shape[2:])
         exps.returnn = exps.value + exps.advantage
-        exps.log_prob = self.log_probs.transpose(0, 1).reshape(-1)
+        exps.log_prob = self.log_probs.transpose(0, 1).reshape(-1, *self.log_probs.shape[2:])
 
         # Preprocess experiences
 
@@ -229,6 +301,7 @@ class BaseAlgo(ABC):
             "return_per_episode": self.log_return[-keep:],
             "reshaped_return_per_episode": self.log_reshaped_return[-keep:],
             "num_frames_per_episode": self.log_num_frames[-keep:],
+            "success_per_episode": self.log_success[-keep:],
             "num_frames": self.num_frames
         }
 
@@ -236,6 +309,7 @@ class BaseAlgo(ABC):
         self.log_return = self.log_return[-self.num_procs:]
         self.log_reshaped_return = self.log_reshaped_return[-self.num_procs:]
         self.log_num_frames = self.log_num_frames[-self.num_procs:]
+        self.log_success = self.log_success[-self.num_procs:]
 
         return exps, logs
 

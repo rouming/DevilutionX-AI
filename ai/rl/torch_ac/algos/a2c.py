@@ -1,3 +1,18 @@
+"""
+HRL Adaptation of torch-ac,
+based on torch-ac by lcswillems.
+
+Changes:
+- Deterministic sampling.
+- Adapted storage and collection to support 'num_hierarchy_levels' dimension (P x L).
+- Manager and Worker steps are aligned for joint optimization.
+- Implemented shared Encoder/Memory with multi-head outputs.
+- Added 'opt_mask' to handle Truncated BPTT at option boundaries
+  (detaching memory on option switch).
+
+Author: Roman Penyaev, 2025
+"""
+
 import numpy
 import torch
 import torch.nn.functional as F
@@ -7,13 +22,16 @@ from rl.torch_ac.algos.base import BaseAlgo
 class A2CAlgo(BaseAlgo):
     """The Advantage Actor-Critic algorithm."""
 
-    def __init__(self, penv_pool, acmodel, device=None, num_frames_per_proc=None, discount=0.99, lr=0.01, gae_lambda=0.95,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None,
+                 num_frames_per_proc=None, discount=0.99, lr=0.01, gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  rmsprop_alpha=0.99, rmsprop_eps=1e-8, preprocess_obss=None, reshape_reward=None):
         num_frames_per_proc = num_frames_per_proc or 8
 
-        super().__init__(penv_pool, acmodel, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
-                         value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward)
+        super().__init__(penv_pool, global_seed, seeds, acmodel, device,
+                         num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+                         value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
+                         reshape_reward)
 
         self.optimizer = torch.optim.RMSprop(self.acmodel.parameters(), lr,
                                              alpha=rmsprop_alpha, eps=rmsprop_eps)
@@ -25,12 +43,14 @@ class A2CAlgo(BaseAlgo):
 
         # Initialize update values
 
-        update_entropy = 0
-        update_value = 0
-        update_policy_loss = 0
-        update_value_loss = 0
-        update_loss = 0
-        update_kl = 0
+        update_entropy = numpy.zeros((self.num_hierarchy_levels, ))
+        update_value = numpy.zeros((self.num_hierarchy_levels, ))
+        update_policy_loss = numpy.zeros((self.num_hierarchy_levels, ))
+        update_value_loss = numpy.zeros((self.num_hierarchy_levels, ))
+        update_kl = numpy.zeros((self.num_hierarchy_levels, ))
+
+        # Will be promoted to a tensor on the correct device
+        update_loss_tensor = 0
 
         # Initialize memory
 
@@ -45,30 +65,43 @@ class A2CAlgo(BaseAlgo):
             # Compute loss
 
             if self.acmodel.recurrent:
-                dist, value, memory = self.acmodel(sb.obs, memory * sb.mask)
+                # We detach memory if and only if the option
+                # changed, to prevent interference between
+                # temporally extended skills.
+                h = memory * sb.mask # episode resets
+                h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
+                dist, value, memory = self.acmodel(sb.obs, h, action=sb.action)
             else:
-                dist, value = self.acmodel(sb.obs)
+                dist, value = self.acmodel(sb.obs, action=sb.action)
 
-            entropy = dist.entropy().mean()
+            num_seqs = len(inds)
 
-            policy_loss = -(dist.log_prob(sb.action) * sb.advantage).mean()
+            assert len(dist) == self.num_hierarchy_levels
+            assert value.shape == (num_seqs, self.num_hierarchy_levels)
 
-            value_loss = (value - sb.returnn).pow(2).mean()
+            entropy = torch.stack([d.entropy().mean() for d in dist])
+
+            new_log_prob = torch.stack([dist[j].log_prob(sb.action[:, j])
+                                        for j in range(self.num_hierarchy_levels)],
+                                       dim=1)
+            policy_loss = -(new_log_prob * sb.advantage).mean(axis=0)
+
+            value_loss = (value - sb.returnn).pow(2).mean(axis=0)
 
             loss = policy_loss - self.entropy_coef * entropy + self.value_loss_coef * value_loss
 
             # Kullback-Leibler (KL) divergence, not strictly needed
             # for A2C, but can be a good health check
-            kl = (sb.log_prob - dist.log_prob(sb.action)).mean()
+            kl = (sb.log_prob - new_log_prob).mean(axis=0)
 
             # Update batch values
 
-            update_entropy += entropy.item()
-            update_value += value.mean().item()
-            update_policy_loss += policy_loss.item()
-            update_value_loss += value_loss.item()
-            update_loss += loss
-            update_kl += kl.item()
+            update_entropy += entropy.detach().cpu().numpy()
+            update_value += value.mean(axis=0).detach().cpu().numpy()
+            update_policy_loss += policy_loss.detach().cpu().numpy()
+            update_value_loss += value_loss.detach().cpu().numpy()
+            update_kl += kl.detach().cpu().numpy()
+            update_loss_tensor += loss
 
         # Update update values
 
@@ -76,15 +109,16 @@ class A2CAlgo(BaseAlgo):
         update_value /= self.recurrence
         update_policy_loss /= self.recurrence
         update_value_loss /= self.recurrence
-        update_loss /= self.recurrence
+        update_loss_tensor /= self.recurrence
         update_kl /= self.recurrence
 
         # Update actor-critic
 
         if apply_update:
             self.optimizer.zero_grad()
-            update_loss.backward()
-            update_grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
+            update_loss_tensor.sum().backward()
+            update_grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(),
+                                                              self.max_grad_norm).item()
             self.optimizer.step()
         else:
             update_grad_norm = 0.0
@@ -97,6 +131,7 @@ class A2CAlgo(BaseAlgo):
             "policy_loss": update_policy_loss,
             "value_loss": update_value_loss,
             "kl": update_kl,
+            "clip_frac": numpy.zeros((self.num_hierarchy_levels, )), # A2C has no clipping
             "grad_norm": update_grad_norm,
         }
 

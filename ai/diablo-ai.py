@@ -27,6 +27,7 @@ import numpy as np
 import procutils
 import sprout
 from rl import utils
+from rl.constants import KL_GOOD_HI, CLIP_FRAC_GOOD_HI, GRAD_NORM_GOOD_HI
 
 VERSION='Diablo AI Tool v1.6'
 
@@ -75,9 +76,11 @@ def make_diablo_parser():
     incompatible_options = {
         '--attach': ['--game-ticks-per-step',
                      '--step-mode',
+                     '--invincible-player',
                      '--no-monsters',
+                     '--blind-monsters',
                      '--harmless-barrels',
-                     '--seed',
+                     '--seed-base',
                      '--fixed-seed']
     }
 
@@ -124,20 +127,27 @@ def make_diablo_parser():
         help="Start Diablo in GUI mode only")
     # See also `incompatible_options`
     common_parser.add_argument(
+        "--invincible-player", action="store_true",
+        help="Enable invincible player mode")
+    # See also `incompatible_options`
+    common_parser.add_argument(
         "--no-monsters", action="store_true",
         help="Disable all monsters on the level")
     # See also `incompatible_options`
     common_parser.add_argument(
+        "--blind-monsters", action="store_true",
+        help="Monsters stand still and don't react to the player")
+    # See also `incompatible_options`
+    common_parser.add_argument(
         "--harmless-barrels", action="store_true",
         help="Disable explosive barrels, urns, or pods")
-    # See also `incompatible_options`
     common_parser.add_argument(
         "--seed", type=int, default=0,
-        help="Initial seed (default: 0).")
+        help="Initial global experiment seed (controls PyTorch, numpy, RNGs, etc) (default: 0)")
     # See also `incompatible_options`
     common_parser.add_argument(
-        "--fixed-seed", action="store_true",
-        help="Every new game starts with the same seed, so the game world (dungeon) is identical each time.")
+        "--seed-base", type=int, default=0,
+        help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
 
     #
     # sprout: reuse sprout's parser
@@ -159,6 +169,10 @@ def make_diablo_parser():
     play_parser.add_argument(
         "--no-env-log", action="store_true",
         help="Disable environment log on TUI screen.")
+    # See also `incompatible_options`
+    play_parser.add_argument(
+        "--fixed-seed", action="store_true",
+        help="Every new game starts with the same initial seed, so the game world (dungeon) is identical each environment reset")
 
     #
     # common_ai
@@ -166,8 +180,8 @@ def make_diablo_parser():
     common_ai_parser = argparse.ArgumentParser(add_help=False)
     common_ai_parser.add_argument(
         "--cnn-arch", required=True,
-        choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn35", "cnn4"],
-        help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
+        choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn32expert", "cnn35", "cnn4"],
+        help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn32expert | cnn35 | cnn4")
     common_ai_parser.add_argument(
         "--embedding-dim", type=int, default=256,
         help="dimension of embeddings (default: 256)")
@@ -326,6 +340,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--eval-episodes", type=int, default=10,
         help="Number of episodes used to evaluate the agent (default: 10)")
+    train_ai_parser.add_argument(
+        "--eval-env-runners", type=int, default=64,
+        help="Number of environment runners dedicated to evaluation (default: 64)")
 
     #
     # demos-il
@@ -467,107 +484,6 @@ def make_diablo_parser():
         "--val-episodes", type=int, default=10,
         help="Number of episodes used to evaluate the agent, and to evaluate validation accuracy (default: 10)")
 
-
-    #
-    # train-il-expert
-    #
-    train_il_expert_parser = subparsers.add_parser(
-        "train-il-expert", parents=[common_parser, common_ai_parser],
-        help="Train the RL model using imitation learning (IL) by creating new workers and Diablo instances (devilutionX processes), or attach to a single existing instance by using the `--attach` option (convenient for debugging purposes).",
-        formatter_class=IndentedHelpFormatter)
-
-    train_il_expert_parser.add_argument(
-        "--bot", type=str, default="FindRandomGoal_Bot",
-        help="Name of the bot to be run (default: FindRandomGoal_Bot)")
-    train_il_expert_parser.add_argument(
-        "--episodes", type=str, default='0',
-        help="Number of episodes of demonstrations to use (default: 0, meaning all demos)")
-    train_il_expert_parser.add_argument(
-        "--batch-size", type=int, default=256,
-        help="Batch size of demo episodes for training (default: 256)")
-    train_il_expert_parser.add_argument(
-        "--epoch-length", type=int, default=0,
-        help="Number of demo episodes per epoch; the batch size is used if 0 (default: 0)")
-    train_il_expert_parser.add_argument(
-        "--start-demos", type=int, default=5000,
-        help="The starting number of demonstrations (default: 5000)")
-    train_il_expert_parser.add_argument(
-        "--demo-grow-factor", type=float, default=1.2,
-        help="Number of demos to add to the training set (default: 1.2)")
-    train_il_expert_parser.add_argument(
-        "--eval-episodes", type=int, default=10,
-        help="Number of episodes used for evaluation while growing the training set (default: 10)")
-    train_il_expert_parser.add_argument(
-        "--phases", type=int, default=1000,
-        help="Maximum number of phases to train for (default: 1000)")
-
-    # BEGIN common with `train-ai`
-
-    train_il_expert_parser.add_argument(
-        "--entropy-coef", type=float, default=0.01,
-        help="Entropy term coefficient (default: 0.01)")
-    train_il_expert_parser.add_argument(
-        "--value-loss-coef", type=float, default=0.5,
-        help="Value loss term coefficient; used only for phase 3 (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--recurrence", type=int, default=1,
-        help="Number of time-steps gradient is backpropagated; If > 1, a LSTM is added to the model to have memory. (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--env-runners", type=int, default=1,
-        help="Number of environment runners or processes (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--frames", type=str, default='10M',
-        help="Number of frames of training (default: 10M)")
-
-    train_il_expert_parser.add_argument(
-        "--env", required=True,
-        help="name of the environment to train on (REQUIRED)")
-    train_il_expert_parser.add_argument(
-        "--model", required=True,
-        help="Name of the model (REQUIRED)")
-    train_il_expert_parser.add_argument(
-        "--continue", action="store_true", dest="cont",
-        help="Continue training without taking a snapshot of the model before training begins")
-    train_il_expert_parser.add_argument(
-        "--log-interval", type=int, default=1,
-        help="Number of updates between two logs; 0 means no logs (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--lr", type=float, default=0.001,
-        help="Learning rate (default: 0.001)")
-    train_il_expert_parser.add_argument(
-        "--lr-delicate", type=float, default=0.0001,
-        help="Learning rate for delicate group; used only for phase 3 (default: 0.0001)")
-    train_il_expert_parser.add_argument(
-        "--lr-steps", type=float, default=100,
-        help="Number of steps (period) of LR decay (default: 100)")
-    train_il_expert_parser.add_argument(
-        "--lr-gamma", type=float, default=1,
-        help="Factor of LR decay; 1 means no decay (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--max-grad-norm", type=float, default=0.5,
-        help="Maximum norm of gradient (default: 0.5)")
-    train_il_expert_parser.add_argument(
-        "--optim-eps", type=float, default=1e-8,
-        help="Adam and RMSprop optimizer epsilon (default: 1e-8)")
-
-    # END common with `train-ai`
-
-    # Validation parameters
-    train_il_expert_parser.add_argument(
-        "--val-seed", type=int, default=int(1e9),
-        help="seed for environment used for validation (default: 1e9)")
-    train_il_expert_parser.add_argument(
-        "--val-interval", type=int, default=1,
-        help="number of epochs between two validation checks; 0 means no validation (default: 1)")
-    train_il_expert_parser.add_argument(
-        "--val-episodes", type=int, default=10,
-        help="Number of episodes used to evaluate the agent, and to evaluate validation accuracy (default: 10)")
-
-    # General game env parameters
-    train_il_expert_parser.add_argument(
-        "--log-to-stdout", action="store_true",
-        help="Write logs to stdout instead of env.log.")
-
     #
     # list
     #
@@ -576,7 +492,7 @@ def make_diablo_parser():
         help="List all Diablo instances grouped by parent ID of the test runner."
     )
 
-    return incompatible_options, parser, train_ai_parser
+    return incompatible_options, parser
 
 def delayed_import(binary_path):
     import devilutionx_generator
@@ -1044,7 +960,7 @@ def prepare_directory_for_run(args, dir_name):
             msg = "Proceed with training? [y/N]: "
             if input(msg).strip().lower() != "y":
                 print("Training aborted.")
-                return 1
+                sys.exit(1)
 
         # Change parameters for the existing model and continue
         # training without creating a snapshot
@@ -1053,10 +969,46 @@ def prepare_directory_for_run(args, dir_name):
     return spr, run_dir
 
 
+def _fmt_frames(n):
+    return f"{int(n):,}".replace(",", "'")
+
+def _fmt_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
+
+def _sprout_duration(spr, model_dir):
+    # spr may be None if sprout is not configured
+    try:
+        run, _ = spr.get_run(head=os.path.basename(model_dir))
+        return run.get("custom", {}).get("last", {}).get("duration", 0)
+    except Exception:
+        return 0
+
+def _scale_bar(value, good_hi, good_lo=0.0, width=4):
+    """Bar over the good zone [good_lo, good_hi].
+    [^---] in range (near low), [---^] in range (near high),
+    [<---] below, [--->] above."""
+    if value < good_lo:
+        return '[<' + '-' * (width - 1) + ']'
+    if value > good_hi:
+        return '[' + '-' * (width - 1) + '>]'
+    pos = round((value - good_lo) / (good_hi - good_lo) * (width - 1))
+    bar = ['-'] * width
+    bar[pos] = '^'
+    return '[' + ''.join(bar) + ']'
+
+
 def train_ai(args, gameconfig):
     from rl import torch_ac
     from rl.evaluate import batch_evaluate
-    from rl.model import ACModel
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
     from rl.torch_ac.utils import ParallelEnvPool
     from rl.utils import device
     import tensorboardX
@@ -1082,7 +1034,7 @@ def train_ai(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1100,6 +1052,21 @@ def train_ai(args, gameconfig):
 
     penv_pool = ParallelEnvPool(envs)
 
+    eval_envs = []
+    ts = 0
+    for i in range(args.eval_env_runners):
+        env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = args.env_runners + i
+        EnvClass = utils.get_env_class(args.env)
+        EnvClass.tune_config(env_config)
+        game = diablo_state.DiabloGame.run_or_attach(env_config)
+        eval_envs.append(utils.make_env(args.env, env_config, game))
+
+        if time.time() - ts >= 3.0 or i == args.eval_env_runners - 1:
+            ts = time.time()
+            print(f"{i+1}/{args.eval_env_runners} eval environment instances are created")
+    eval_penv_pool = ParallelEnvPool(eval_envs)
+
     txt_logger.info("Environments loaded\n")
 
     # Load training status
@@ -1113,6 +1080,8 @@ def train_ai(args, gameconfig):
     try:
         best_status = utils.get_status(model_dir, best=True)
         best_success_rate = best_status.get("success_rate", 0.0)
+        # Old statuses can contain an array
+        best_success_rate = np.mean(best_success_rate)
     except OSError:
         pass
 
@@ -1124,22 +1093,31 @@ def train_ai(args, gameconfig):
         preprocess_obss.vocab.load_vocab(status["vocab"])
     txt_logger.info("Observations preprocessor loaded")
 
+    num_hierarchy_levels = envs[0].unwrapped.num_hierarchy_levels
+
     # Load model
-    acmodel = ACModel(obs_space, envs[0].action_space, args.cnn_arch,
-                      embedding_dim=args.embedding_dim,
-                      use_memory=True, use_text=False)
+    if num_hierarchy_levels == 1:
+        acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
+                              embedding_dim=args.embedding_dim,
+                              use_memory=True, use_text=False)
+    else:
+        acmodel = HRLACModel(obs_space, envs[0].action_space, args.cnn_arch,
+                             embedding_dim=args.embedding_dim,
+                             use_memory=True, use_text=False)
+
     if "model_state" in status:
-        acmodel.load_state_dict(status["model_state"])
+        acmodel.load_from_status(status, txt_logger)
     acmodel.to(device)
     txt_logger.info("Model loaded\n")
     txt_logger.info("{}\n".format(acmodel))
 
     # Load algo
+    seeds = range(args.seed_base, args.seed_base + len(penv_pool.envs))
     reshape_reward = None
 
     if args.algo == "a2c":
-        algo = torch_ac.A2CAlgo(penv_pool, acmodel, device,
-                                args.frames_per_env_runner,
+        algo = torch_ac.A2CAlgo(penv_pool, args.seed, seeds, acmodel,
+                                device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -1147,8 +1125,8 @@ def train_ai(args, gameconfig):
                                 args.optim_alpha, args.optim_eps,
                                 preprocess_obss, reshape_reward)
     elif args.algo == "ppo":
-        algo = torch_ac.PPOAlgo(penv_pool, acmodel, device,
-                                args.frames_per_env_runner,
+        algo = torch_ac.PPOAlgo(penv_pool, args.seed, seeds, acmodel,
+                                device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -1161,7 +1139,7 @@ def train_ai(args, gameconfig):
 
     if "optimizer_state" in status:
         algo.optimizer.load_state_dict(status["optimizer_state"])
-        txt_logger.info("Optimizer loaded from the state\n")
+        txt_logger.info("Optimizer loaded from the state")
 
     # Create exponential decay LR scheduler, so every N steps LR
     # reduced by gamma
@@ -1173,7 +1151,12 @@ def train_ai(args, gameconfig):
     # Train model
     num_frames = status["num_frames"]
     update = status["update"]
+    duration_offset = status.get("duration", 0) or \
+        _sprout_duration(spr, model_dir)
     start_time = time.time()
+    start_time -= min(duration_offset, start_time)
+
+    txt_logger.info(f"Start training from {num_frames} frames\n")
 
     while num_frames < args.frames_int:
         # Update model parameters
@@ -1183,41 +1166,83 @@ def train_ai(args, gameconfig):
         logs = {**logs1, **logs2}
         update_end_time = time.time()
 
-        scheduler.step()
+        if not args.dry_run:
+            scheduler.step()
 
         num_frames += logs["num_frames"]
         update += 1
 
         success_per_episode = utils.synthesize(
-            [1 if r > 0 else 0 for r in logs["return_per_episode"]])
+            [1 if s else 0 for s in logs["success_per_episode"]])
         success_rate = success_per_episode['mean']
+        duration = int(time.time() - start_time)
 
         # Print logs
         if args.log_interval > 0 and (update % args.log_interval == 0 or
                                       num_frames >= args.frames_int):
             fps = logs["num_frames"] / (update_end_time - update_start_time)
-            duration = int(time.time() - start_time)
-            return_per_episode = utils.synthesize(logs["return_per_episode"])
-            rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
+            returns_arr = np.array(logs["return_per_episode"])           # (N, L)
+            rreturns_arr = np.array(logs["reshaped_return_per_episode"]) # (N, L)
+            L = returns_arr.shape[1]
+            return_per_episode = [utils.synthesize(returns_arr[:, i]) for i in range(L)]
+            rreturn_per_episode = [utils.synthesize(rreturns_arr[:, i]) for i in range(L)]
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
 
             header = ["update", "frames", "FPS", "duration"]
             data = [update, num_frames, fps, duration]
-            header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
-            data += rreturn_per_episode.values()
+            for i, rr in enumerate(rreturn_per_episode):
+                header += [f"rreturn{i}_" + key for key in rr.keys()]
+                data += rr.values()
             header += ["success_rate"]
             data += [success_rate]
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
             data += num_frames_per_episode.values()
-            header += ["entropy", "value", "policy_loss", "value_loss", "kl", "grad_norm"]
-            data += [logs["entropy"], logs["value"], logs["policy_loss"], logs["value_loss"], logs["kl"], logs["grad_norm"]]
 
+            metrics = [("entropy", "H"),
+                       ("value", "V"),
+                       ("policy_loss", "pL"),
+                       ("value_loss", "vL"),
+                       ("kl", "KL"),
+                       ("clip_frac", "cF")]
+            for m in metrics:
+                v = logs[m[0]]
+                header += [f"{m[0]}_lvl{i}" for i in range(len(v))]
+                data += v.tolist()
+
+            header += ["grad_norm"]
+            data += [logs["grad_norm"]]
+
+            grad = logs["grad_norm"]
+            grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
+            bar_metrics = {"kl", "clip_frac"}
             txt_logger.info(
-                "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | S {:.2f} | F:μσmM {:.1f} {:.1f} {} {} | H {:.3f} | V {:.3f} | pL {:.3f} | vL {:.3f} | KL {:.3f} | ∇ {:.3f}"
-                .format(*data))
+                f"U {update} | F {_fmt_frames(num_frames)} | FPS {fps:04.0f} | D {_fmt_duration(duration)}"
+                f" | S {success_rate:.2f} | ∇ {grad:.3f}{grad_bar}")
+            for i in range(L):
+                rr = list(rreturn_per_episode[i].values())
+                mv = " | ".join(f"{m[1]} {logs[m[0]][i]:.3f}"
+                               for m in metrics if m[0] not in bar_metrics)
+                kl = logs["kl"][i]; kl_bar = _scale_bar(kl, KL_GOOD_HI)
+                cf = logs["clip_frac"][i]; cf_bar = _scale_bar(cf, CLIP_FRAC_GOOD_HI)
+                e_term = args.entropy_coef       * logs["entropy"][i]
+                v_term = args.value_loss_coef    * logs["value_loss"][i]
+                p_term = abs(logs["policy_loss"][i])
+                total  = e_term + v_term + p_term
+                if total > 0:
+                    lp = (f"e:{e_term/total*100:.0f}%"
+                          f" v:{v_term/total*100:.0f}%"
+                          f" p:{p_term/total*100:.0f}%")
+                else:
+                    lp = "e:0% v:0% p:0%"
+                prefix = f"  L{i} | " if L > 1 else "  "
+                txt_logger.info(
+                    f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                    f" | {mv}"
+                    f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
 
-            header += ["return_" + key for key in return_per_episode.keys()]
-            data += return_per_episode.values()
+            for i, rp in enumerate(return_per_episode):
+                header += [f"return{i}_" + key for key in rp.keys()]
+                data += rp.values()
 
             if status["num_frames"] == 0:
                 csv_logger.writerow(header)
@@ -1230,48 +1255,50 @@ def train_ai(args, gameconfig):
         # Save status
         if args.save_interval > 0 and (update % args.save_interval == 0 or
                                        num_frames >= args.frames_int):
-            num_envs = min(len(penv_pool.envs), args.eval_episodes)
+            num_eval_envs = min(len(eval_penv_pool.envs), args.eval_episodes)
             txt_logger.info("Evaluating the model's {} episodes with {} environments".format(
-                args.eval_episodes, num_envs))
+                args.eval_episodes, num_eval_envs))
 
-            agent = utils.Agent.from_internal_model(
-                penv_pool.envs[0].observation_space,
-                penv_pool.envs[0].action_space,
-                model_dir, args.cnn_arch, argmax=True,
-                num_envs=num_envs,
-                embedding_dim=args.embedding_dim,
-                use_memory=True, use_text=False)
-
-            # Setting the agent model to the current model
-            agent.acmodel = acmodel
-            agent.acmodel.eval()
-            start_time = time.time()
-            vlogs = batch_evaluate(agent, penv_pool, args.eval_seed,
-                                   args.eval_episodes)
-            elapsed_time = time.time() - start_time
-            agent.acmodel.train()
+            acmodel.eval()
+            eval_start_time = time.time()
+            vlogs = batch_evaluate(acmodel, preprocess_obss, eval_penv_pool,
+                                   argmax=True, global_seed=args.seed,
+                                   seed_base=args.eval_seed,
+                                   episodes=args.eval_episodes)
+            elapsed_time = time.time() - eval_start_time
+            acmodel.train()
 
             returns = vlogs['return_per_episode']
-            success_rate = np.mean([1 if r > 0 else 0 for r in returns])
-            returns = np.mean(returns)
+            success_rate = np.mean([1 if s else 0 for s in vlogs["success_per_episode"]])
+            returns_arr = np.mean(np.array(returns), axis=0)  # (L,)
 
-            header = ["evaluation_success_rate", "evaluation_returns"]
-            data = [success_rate, returns]
+            header = ["evaluation_success_rate"] + [f"evaluation_return{i}" for i in range(len(returns_arr))]
+            data = [success_rate] + returns_arr.tolist()
 
             for field, value in zip(header, data):
                 tb_writer.add_scalar(field, value, num_frames)
 
             status = {"num_frames": num_frames,
                       "update": update,
+                      "duration": duration,
                       "success_rate": success_rate,
-                      "model_state": acmodel.state_dict(),
                       "optimizer_state": algo.optimizer.state_dict()}
+            acmodel.save_to_status(status)
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
-            txt_logger.info("Evaluation: D {:.0f} | R {:.3f} | S {:.3f} | bS {:.3f}".format(
-                elapsed_time, returns, success_rate, best_success_rate))
+            if len(returns_arr) == 1:
+                R_str = f"R {returns_arr[0]:.3f}"
+            else:
+                R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
+            txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time)} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info("Status saved")
+
+            custom_dict = {"duration": duration,
+                           "frames": num_frames,
+                           "success_rate": success_rate}
+            best = {"best": custom_dict}
+            last = {"last": custom_dict}
 
             if success_rate > best_success_rate:
                 best_success_rate = success_rate
@@ -1280,9 +1307,11 @@ def train_ai(args, gameconfig):
                 shutil.copyfile(src_path, dst_path)
                 txt_logger.info("Success rate {: .2f}; best model is saved".format(success_rate))
 
-                # Save info about best status backup into Sprout as custom dict
-                best = { 'best': { 'frames': num_frames, 'success_rate': success_rate }}
-                spr.edit(head=args.model, custom_dict=best)
+                spr.edit(head=args.model, custom_dict=last | best,
+                         custom_update=True)
+            else:
+                spr.edit(head=args.model, custom_dict=last,
+                         custom_update=True)
     return 0
 
 
@@ -1310,7 +1339,8 @@ def demos_il(args, gameconfig):
     bots_envs = []
     ts = 0
     for i in range(num_envs):
-        env_config = gameconfig
+        env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Run or attach to Diablo (devilutionX) instance
         game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -1325,7 +1355,7 @@ def demos_il(args, gameconfig):
 
     txt_logger.info("Bots are loaded\n")
 
-    seed = args.seed
+    seed = args.seed_base
 
     validation = hasattr(args, 'for-validation')
     demos_path = utils.get_demos_path(demos_dir, args.env, valid=validation)
@@ -1369,7 +1399,7 @@ def demos_il(args, gameconfig):
                 seeds = list(seeds_set)
 
         seed += num_envs
-        demos, _, steps = ImitationLearning.generate_demos(pbot_pool, seeds, txt_logger)
+        demos, _, steps = ImitationLearning.generate_demos(pbot_pool, seeds)
         all_steps_cnt += steps
         steps_cnt += steps
         all_demos += demos
@@ -1426,7 +1456,7 @@ def train_il(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1455,8 +1485,11 @@ def train_il(args, gameconfig):
                                  train_critic=args.phase2 or args.phase3)
 
     # Define logger and Tensorboard writer
-    header = (["update", "frames", "FPS", "duration", "entropy", "policy_loss",
-               "value_loss", "policy_accuracy", "value_accuracy", "grad_norm"]
+    L = envs[0].unwrapped.num_hierarchy_levels
+    _lk = lambda name: ([name] if L == 1 else [f"{name}{i}" for i in range(L)])
+    header = (["update", "frames", "FPS", "duration"]
+              + _lk("entropy") + _lk("policy_loss") + _lk("value_loss")
+              + _lk("policy_accuracy") + _lk("value_accuracy") + ["grad_norm"]
               + ["validation_policy_accuracy", "validation_value_accuracy",
                  "validation_return", "validation_success_rate"])
 
@@ -1478,128 +1511,13 @@ def train_il(args, gameconfig):
     return 0
 
 
-def train_il_expert(args, gameconfig):
-    import tensorboardX
-    from rl.utils import device
-    from rl.imitation import ImitationLearning, BotEnv
-    from rl.torch_ac.utils import ParallelEnvPool
-
-    bot_constructor = diablo_bot.get_bot_constructor(args.bot)
-
-    # Prepare model dir
-    spr, model_dir = prepare_directory_for_run(args, args.model)
-
-    # Load loggers and Tensorboard writer
-    txt_logger = utils.get_txt_logger(model_dir)
-    csv_file, csv_logger = utils.get_csv_logger(model_dir)
-    tb_writer = tensorboardX.SummaryWriter(model_dir)
-
-    # Log command and all script arguments
-    txt_logger.info("{}\n".format(" ".join(sys.argv)))
-    txt_logger.info("{}\n".format(args))
-
-    # Used device
-    txt_logger.info(f"Device: {device}\n")
-
-    # Load environments and bots
-    envs = []
-    bots_envs = []
-    ts = 0
-    for i in range(args.env_runners):
-        env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
-
-        # Some old environments have specific configurations that need
-        # to be adjusted before starting a game instance
-        EnvClass = utils.get_env_class(args.env)
-        EnvClass.tune_config(env_config)
-
-        # Run or attach to Diablo (devilutionX) instance
-        game = diablo_state.DiabloGame.run_or_attach(env_config)
-        env = utils.make_env(args.env, env_config, game)
-        bot = bot_constructor(game, args, view_radius=env_config['view-radius'])
-        bots_envs.append(BotEnv(bot))
-        envs.append(env)
-
-        if time.time() - ts >= 3.0 or i == args.env_runners - 1:
-            ts = time.time()
-            print(f"{i+1}/{args.env_runners} environment and bot instances are created")
-
-    pbot_pool = ParallelEnvPool(bots_envs)
-    penv_pool = ParallelEnvPool(envs)
-
-    txt_logger.info("Environments and bots are loaded\n")
-
-    il_learn = ImitationLearning(args, spr, penv_pool, pbot_pool, model_dir,
-                                 None, tb_writer, txt_logger, csv_logger)
-
-    # Define logger and Tensorboard writer
-    header = (["update", "frames", "FPS", "duration", "entropy", "policy_loss",
-               "value_loss", "policy_accuracy", "value_accuracy", "grad_norm"]
-              + ["validation_policy_accuracy", "validation_value_accuracy",
-                 "validation_return", "validation_success_rate"])
-
-    txt_logger.info("Model loaded\n")
-    txt_logger.info("{}\n".format(il_learn.acmodel))
-
-    # Seed at which demo evaluation/generation will begin
-    eval_seed = args.seed + len(il_learn.train_demos)
-
-    # Phase at which we start
-    cur_phase = 0
-
-    # Try to load the status (if resuming)
-    status_path = os.path.join(model_dir, 'status.json')
-    if os.path.exists(status_path):
-        with open(status_path, 'r') as src:
-            status = json.load(src)
-            eval_seed = status.get('eval_seed', eval_seed)
-            cur_phase = status.get('cur_phase', cur_phase)
-
-    for phase_no in range(cur_phase, args.phases):
-        txt_logger.info("Starting phase {} with {} demos, eval_seed={}".format(
-            phase_no, len(il_learn.train_demos), eval_seed))
-
-        # Each phase trains a different model from scratch
-        il_learn = ImitationLearning(args, spr, penv_pool, pbot_pool, model_dir,
-                                     phase_no, tb_writer, txt_logger, csv_logger)
-
-        # Train the imitation learning agent
-        if il_learn.train_demos:
-            il_learn.train(header)
-
-        # Stopping criterion
-        logs = il_learn.validate(args.val_episodes)
-        success_rate = np.mean([1 if r > 0 else 0 for r in logs[0]['return_per_episode']])
-
-        if success_rate >= 0.99:
-            txt_logger.info("Reached target success rate with {} demos, stopping".format(
-                len(il_learn.train_demos)))
-            break
-
-        eval_seed = il_learn.grow_training_set(eval_seed)
-
-        # Save the current demo generation seed
-        with open(status_path, 'w') as dst:
-            status = {
-                'eval_seed': eval_seed,
-                'cur_phase':phase_no + 1
-            }
-            json.dump(status, dst)
-
-        # Save the demos
-        demos_path = utils.get_demos_path(model_dir, args.env, valid=False)
-        txt_logger.info(f'saving demos to: {demos_path}')
-        utils.save_demos(il_learn.train_demos, demos_path)
-
-    return 0
-
-
 def play_ai(args, gameconfig):
-    from rl.utils import device
-    from rl.imitation import BotEnv
-    from rl.torch_ac.utils import ParallelEnvPool
     from rl.evaluate import batch_evaluate
+    from rl.imitation import BotEnv
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
+    from rl.torch_ac.utils import ParallelEnvPool
+    from rl.utils import device
 
     # Load agent
     model_dir = utils.get_run_dir(args.model)
@@ -1615,7 +1533,7 @@ def play_ai(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1635,16 +1553,32 @@ def play_ai(args, gameconfig):
 
     print(f"Environments are loaded\n")
 
-    agent = utils.Agent.from_internal_model(
-        penv_pool.envs[0].observation_space,
-        penv_pool.envs[0].action_space,
-        model_dir, args.cnn_arch, best=args.best,
-        argmax=args.argmax, num_envs=num_envs,
-        embedding_dim=args.embedding_dim,
-        use_memory=True, use_text=False)
+    obs_space = penv_pool.envs[0].observation_space
+    action_space = penv_pool.envs[0].action_space
+    num_hierarchy_levels = penv_pool.envs[0].unwrapped.num_hierarchy_levels
 
-    logs = batch_evaluate(agent, penv_pool, args.seed, args.episodes_int,
+    obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
+
+    if num_hierarchy_levels == 1:
+        acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                              embedding_dim=args.embedding_dim,
+                              use_memory=True, use_text=False)
+    else:
+        acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                             embedding_dim=args.embedding_dim,
+                             use_memory=True, use_text=False)
+
+    acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
+    acmodel.to(device)
+    acmodel.eval()
+    if hasattr(preprocess_obss, "vocab"):
+        preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
+
+    ts = time.time()
+    logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
+                          args.seed, args.seed_base, args.episodes_int,
                           pause=args.pause)
+    duration = time.time() - ts
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']
@@ -1652,11 +1586,13 @@ def play_ai(args, gameconfig):
     seeds = logs['seed_per_episode']
 
     for f, d, r, s in zip(frames, durations, returns, seeds):
-        success = r > 0.0
+        success = np.all(np.asarray(r) > 0.0)
         print(f"seed {s:2d} | {'success' if success else 'failure'} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
 
-    success_rate = np.mean([1 if r > 0 else 0 for r in returns])
-    print(f"average success rate {success_rate:.2f} for {args.episodes_int} episodes")
+    successes = sum(1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns)
+    success_rate = successes / len(returns)
+    print(f"S {success_rate:.2f} | {successes} ok / {len(returns) - successes} fail of {len(returns)} | "
+          f"steps {_fmt_frames(np.sum(frames))} | time {duration:.2f}s")
 
     return 0
 
@@ -1673,7 +1609,7 @@ def play_bot(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
+        env_config['index'] = i
 
         # Run or attach to Diablo (devilutionX) instance
         game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -1689,14 +1625,17 @@ def play_bot(args, gameconfig):
 
     print(f"Bots are loaded\n")
 
-    seeds = range(args.seed, args.seed + args.episodes_int)
+    ts = time.time()
+    seeds = range(args.seed_base, args.seed_base + args.episodes_int)
     demos, durations, num_frames = \
         ImitationLearning.generate_demos(pbot_pool, seeds, pause=args.pause)
+    duration = time.time() - ts
 
     for demo, d in zip(demos, durations):
         s, actions = demo
         f = len(actions)
         print(f"seed {s:2d} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
+    print(f"{len(demos)} demos | steps {_fmt_frames(sum(num_frames))} | time {duration:.2f}s")
 
     return 0
 
@@ -1707,7 +1646,7 @@ def main():
     # Set big enough limits
     set_rlimits()
 
-    incompatible_options, parser, train_ai_parser = make_diablo_parser()
+    incompatible_options, parser = make_diablo_parser()
     args = parser.parse_args(namespace=DiabloParserNamespace())
 
     # Check if some options are incompatible
@@ -1737,7 +1676,7 @@ def main():
         # re-run through sprout.main(), but pass sys.argv after "sprout"
         sprout_args = ['--working', utils.get_models_dir()]
         sprout_args += sys.argv[sys.argv.index("sprout")+1:]
-        return sprout.main(argv=sprout_args, default_parser=train_ai_parser)
+        return sprout.main(argv=sprout_args, default_parser=parser)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
@@ -1751,8 +1690,13 @@ def main():
         "diablo-bin-path": diablo_bin_path,
 
         # Common
-        "seed": args.seed,
+        "index": 0, # Just a sequential number, will be overridden for each instance
+        "seed": args.seed_base, # Will be overridden by a subsequent env reset with a valid seed
+        "fixed-seed": args.fixed_seed \
+            if hasattr(args, "fixed_seed") else False,
+        "invincible-player": args.invincible_player,
         "no-monsters": args.no_monsters,
+        "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "view-radius": args.view_radius,
@@ -1761,8 +1705,6 @@ def main():
         "gui": args.gui,
 
         # AI
-        "fixed-seed": args.fixed_seed \
-            if hasattr(args, "fixed_seed") else False,
         "log-to-stdout": args.log_to_stdout \
             if hasattr(args, "log_to_stdout") else False,
         "no-actions": args.no_actions \
@@ -1814,8 +1756,6 @@ def main():
         return demos_il(args, gameconfig)
     if args.command == 'train-il':
         return train_il(args, gameconfig)
-    if args.command == 'train-il-expert':
-        return train_il_expert(args, gameconfig)
     if args.command == 'play-ai':
         return play_ai(args, gameconfig)
     if args.command == 'play-bot':

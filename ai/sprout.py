@@ -24,6 +24,7 @@ from functools import wraps
 from typing import Dict, List, Tuple, Optional
 import argparse
 import ast
+import copy
 import fcntl
 import json
 import os
@@ -198,9 +199,8 @@ def decode_escapes(s: Optional[str]) -> Optional[str]:
 def extract_arg_defs(parser: argparse.ArgumentParser):
     """Extract definitions from argparse (not parsed values)"""
     arg_defs = {}
+
     for action in parser._actions:
-        if action.dest == "help":
-            continue
         arg_defs[action.dest] = {
             "default": action.default,
             "required": action.required,
@@ -209,16 +209,26 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
         }
     return arg_defs
 
-def make_cli_opts(arg_defs, new_params):
+def make_cli_opts(parser, params, all_params=False):
     """Compare new parameters with argparse defaults and required
-    values, and return a list of CLI options"""
+    values, and return a list of CLI options.
+    If all_params=True, include params even when they match their default."""
     opts = []
     missing = []
+
+    # First try to find a subparser
+    for a in parser._actions:
+        if a.dest in params:
+            parser = a.choices[params[a.dest]]
+            break
+
+    assert isinstance(parser, argparse.ArgumentParser)
+    arg_defs = extract_arg_defs(parser)
 
     for name, meta in arg_defs.items():
         default_val = meta["default"]
         required = meta["required"]
-        new_val = new_params.get(name, None)
+        new_val = params.get(name, None)
 
         # Handle required params: add with special marker if missing
         if required and new_val is None:
@@ -228,8 +238,8 @@ def make_cli_opts(arg_defs, new_params):
             else:
                 missing.append(f"{opt_string} ${name.upper()}")
 
-        # Include if new param overrides default
-        elif new_val is not None and new_val != default_val:
+        # Include if new param overrides default (or all_params requested)
+        elif new_val is not None and (all_params or str(new_val) != str(default_val)):
             opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
                 if new_val:
@@ -246,9 +256,9 @@ def make_cli_opts(arg_defs, new_params):
             else:
                 opts.append(f"{opt_string} {default_val}")
 
-    return opts + missing
+    return [parser.prog] + opts + missing
 
-def format_cli_opts(cli_opts, prefix=""):
+def format_cli_opts(cli_opts, fit_terminal_width=True, prefix=""):
     if not sys.stdout.isatty():
         width = 80
     else:
@@ -258,7 +268,7 @@ def format_cli_opts(cli_opts, prefix=""):
     for opt in cli_opts:
         piece = ("" if current == prefix else " ") + opt
         end = " \\"
-        if len(current) + len(piece) + len(end) > width:
+        if fit_terminal_width and len(current) + len(piece) + len(end) > width:
             # close current line with backslash
             lines.append(current + end)
             current = prefix + opt
@@ -282,14 +292,37 @@ def color(text, rgb=(255, 255, 255), bold=False):
     prefix = f"\033[{';'.join(codes)}m" if codes else ""
     return f"{prefix}{text}\033[0m"
 
-def flatten(d, prefix=""):
-    for k in sorted(d.keys()):
+def _fmt_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
+
+def _fmt_frames(n):
+    return f"{int(n):,}".replace(",", "'")
+
+def fmt_custom_value(path, v):
+    key = path.rsplit("/", 1)[-1]
+    if key == "duration" and isinstance(v, (int, float)):
+        return _fmt_duration(v)
+    if key == "frames" and isinstance(v, (int, float)):
+        return _fmt_frames(v)
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+def flatten(d, format_value, prefix=""):
+    for k in sorted(d.keys(), key=str):
         v = d[k]
         path = f"{prefix}/{k}" if prefix else k
         if isinstance(v, dict):
-            yield from flatten(v, path)
+            yield from flatten(v, format_value, path)
         else:
-            yield f"{path}: {v}"
+            yield f"{path}: {format_value(path, v)}"
 
 # -------------------------
 # File lock uses flock()
@@ -709,6 +742,131 @@ class Sprout:
         return new_run_id
 
     @locked
+    def clone(self,
+              group: Optional[str] = None,
+              head: Optional[str] = None,
+              from_run: Optional[str] = None,
+              from_head: Optional[str] = None,
+              parent_run: Optional[str] = None,
+              parent_head: Optional[str] = None,
+              params_str: Optional[str] = None,
+              description_str: Optional[str] = None,
+              alias_str: Optional[str] = None) -> str:
+        """
+        Clone a run or head into a new run without mutating the source or parent.
+
+        Placement:
+          - group (positional): new independent root run in a new group
+          - --parent-run/--parent-head: leaf-child of that run (group inherited)
+
+        Unlike create, no snapshot is inserted above the source or parent.
+
+        Returns newly created run id.
+        """
+        if from_run and from_head:
+            raise SproutError("either --from-run or --from-head, not both")
+        if not (from_run or from_head):
+            raise SproutError("--from-run or --from-head required")
+        if parent_run and parent_head:
+            raise SproutError("either --parent-run or --parent-head, not both")
+        if group and (parent_run or parent_head):
+            raise SproutError("either group or --parent-run/--parent-head, not both")
+        if not (group or parent_run or parent_head):
+            raise SproutError("group or --parent-run/--parent-head required")
+
+        meta = self._load_meta()
+        runs = meta.setdefault("runs", {})
+        heads = meta.setdefault("heads", {})
+
+        if head and head in heads:
+            raise SproutError(f"head '{head}' already exists")
+
+        # resolve source run
+        if from_head:
+            if from_head not in heads:
+                raise SproutError(f"head '{from_head}' not found")
+            src_run = heads[from_head]
+        else:
+            src_run = from_run
+        if src_run not in runs:
+            raise SproutError(f"run '{src_run}' not found")
+
+        # resolve parent
+        parent_for_new = None
+        if parent_head:
+            if parent_head not in heads:
+                raise SproutError(f"head '{parent_head}' not found")
+            parent_for_new = heads[parent_head]
+        elif parent_run:
+            if parent_run not in runs:
+                raise SproutError(f"run '{parent_run}' not found")
+            parent_for_new = parent_run
+
+        # determine group
+        if parent_for_new:
+            group = runs[parent_for_new]["group"]
+
+        # parse overrides (None means inherit from source)
+        params = parse_params_string(params_str)
+        description = decode_escapes(description_str) if description_str is not None else None
+
+        # inherit metadata from source
+        src = runs[src_run]
+        if params is None:
+            params = src["params"]
+        if alias_str is None:
+            alias_str = src.get("alias", "")
+        if description is None:
+            description = src.get("description", "")
+        custom_dict = src.get("custom", {})
+
+        # allocate new run id
+        new_run_id = self.random_run_id()
+        target_dir = self._head_dir(new_run_id)
+        mkdir_p(target_dir)
+
+        # copy data from source (active folder or borg)
+        src_dir = self._head_dir(src_run)
+        if is_dir(src_dir):
+            cp_r(src_dir, target_dir)
+        else:
+            self._borg_extract(src_run)
+            try:
+                cp_r(src_dir, target_dir)
+            finally:
+                if is_dir(src_dir):
+                    rmtree(src_dir)
+
+        # archive the new run
+        self._borg_create(new_run_id)
+
+        if not head:
+            rmtree(target_dir)
+        else:
+            symlink_path = os.path.join(self.active_path, head)
+            rel_target = self._symlink_target_rel(new_run_id)
+            if os.path.islink(symlink_path):
+                try:
+                    unlink(symlink_path)
+                except OSError:
+                    pass
+            os.symlink(rel_target, symlink_path)
+            heads[head] = new_run_id
+
+        runs[new_run_id] = {
+            "group": group,
+            "parent": parent_for_new,
+            "params": params or {},
+            "alias": alias_str or "",
+            "description": description or "",
+            "custom": custom_dict,
+            "created_at": now_iso()
+        }
+        self._save_meta(meta)
+
+        return new_run_id
+
+    @locked
     def persist(self, head: Optional[str] = None) -> List[str]:
         """
         Persist a single head or all heads.
@@ -852,6 +1010,144 @@ class Sprout:
         return [run]
 
     @locked
+    def rewind(self, head: str, persist: bool = False) -> str:
+        """
+        Reset head's active folder to its parent's archived state.
+
+        persist=False (default): discard current state, restore parent in-place
+          (run id and metadata preserved, only working files replaced).
+        persist=True: archive current run as a permanent branch first, then
+          create a new run from parent content and reassign the head to it.
+
+        Raises SproutError if the head has no parent.
+        Returns the parent run id.
+        """
+        meta = self._load_meta()
+        runs = meta.get("runs", {})
+        heads = meta.get("heads", {})
+
+        if head not in heads:
+            raise SproutError(f"head '{head}' not found")
+
+        run_id = heads[head]
+        run = runs.get(run_id)
+        if run is None:
+            raise SproutError(f"run '{run_id}' not found")
+
+        parent_id = run.get("parent")
+        if not parent_id:
+            raise SproutError(f"head '{head}' has no parent to rewind to")
+        if parent_id not in runs:
+            raise SproutError(f"parent run '{parent_id}' not found in metadata")
+
+        head_dir = self._head_dir(run_id)
+        parent_dir = self._head_dir(parent_id)
+
+        if is_dir(parent_dir):
+            raise SproutError(f"parent run '{parent_id}' has an unexpected active folder")
+
+        if persist:
+            # Archive current run as a permanent branch, then create a new
+            # run from parent content and reassign the head to it.
+            self._borg_create(run_id)
+            rmtree(head_dir)
+
+            new_run_id = self.random_run_id()
+            self._borg_extract(parent_id)
+            os.rename(parent_dir, self._head_dir(new_run_id))
+            self._borg_create(new_run_id)
+
+            parent_run = runs[parent_id]
+            runs[new_run_id] = {
+                "group": parent_run["group"],
+                "parent": parent_id,
+                "params": parent_run.get("params", {}),
+                "alias": parent_run.get("alias", ""),
+                "description": parent_run.get("description", ""),
+                "custom": parent_run.get("custom", {}),
+                "created_at": now_iso()
+            }
+
+            heads[head] = new_run_id
+            symlink_path = os.path.join(self.active_path, head)
+            if os.path.islink(symlink_path):
+                unlink(symlink_path)
+            os.symlink(self._symlink_target_rel(new_run_id), symlink_path)
+        else:
+            rmtree(head_dir)
+            self._borg_extract(parent_id)
+            os.rename(parent_dir, head_dir)
+
+            # Restore all fields from parent, preserving only structural identity fields
+            parent_run = runs[parent_id]
+            restored = copy.deepcopy(parent_run)
+            restored["parent"] = parent_id
+            restored["created_at"] = run.get("created_at")
+            runs[run_id] = restored
+
+        self._save_meta(meta)
+        return parent_id
+
+    @locked
+    def switch(self, head: str, to_run: str, persist: bool = False) -> str:
+        """
+        Reattach head to a different existing run.
+
+        If head currently has an active run:
+          - persist=True: archive its current state to borg before deactivating.
+          - persist=False: discard the active folder without updating the archive.
+
+        The target run 'to_run' must exist and must not already be assigned
+        to any head (i.e. it must be persistent). A new active run is created
+        as a child of 'to_run' to preserve immutability of the 'to_run' state.
+
+        Returns the new active run_id.
+        """
+        meta = self._load_meta()
+        runs = meta.get("runs", {})
+        heads = meta.get("heads", {})
+
+        if to_run not in runs:
+            raise SproutError(f"run '{to_run}' not found")
+
+        existing_heads = [h for h, rid in heads.items() if rid == to_run]
+        if existing_heads:
+            raise SproutError(f"run '{to_run}' already has head '{existing_heads[0]}'")
+
+        # If head is already active, handle its deactivation
+        current_run_id = heads.get(head)
+        if current_run_id:
+            other_heads = [k for k, v in heads.items() if v == current_run_id and k != head]
+            if persist:
+                self._borg_create(current_run_id)
+                if not other_heads:
+                    head_dir = self._head_dir(current_run_id)
+                    if is_dir(head_dir):
+                        rmtree(head_dir)
+
+                symlink_path = os.path.join(self.active_path, head)
+                if os.path.islink(symlink_path):
+                    unlink(symlink_path)
+                heads.pop(head, None)
+            else:
+                # persist=False: remove the run entirely if it's not used by other heads
+                if not other_heads:
+                    self.remove_run_recursive(current_run_id, runs[current_run_id], meta)
+                else:
+                    symlink_path = os.path.join(self.active_path, head)
+                    if os.path.islink(symlink_path):
+                        unlink(symlink_path)
+                    heads.pop(head, None)
+
+            self._save_meta(meta)
+
+        # Since to_run is persistent, we must create a NEW run as its child to
+        # keep it immutable.
+        new_run_id = self.create(head=head, from_run=to_run)
+
+        return new_run_id
+
+    @locked
     def edit(self,
              run: Optional[str] = None,
              head: Optional[str] = None,
@@ -859,7 +1155,8 @@ class Sprout:
              description_str: Optional[str] = None,
              alias_str: Optional[str] = None,
              created_str: Optional[str] = None,
-             custom_dict: Optional[dict] = None) -> str:
+             custom_dict: Optional[dict] = None,
+             custom_update: bool = False) -> str:
         """
         Edit metadata for a run. None means don't touch. Empty string clears.
         """
@@ -880,7 +1177,10 @@ class Sprout:
             run["created_at"] = created_str
 
         if custom_dict is not None:
-            run["custom"] = custom_dict
+            if custom_update:
+                run["custom"].update(custom_dict)
+            else:
+                run["custom"] = custom_dict
 
         self._save_meta(meta)
         return run_id
@@ -1004,7 +1304,7 @@ class Sprout:
         runs = meta.get("runs", {})
         heads = meta.get("heads", {})
 
-        # 1. Check borg archives
+        # Check borg archives
         out = self._borg_list()
         borg_ids = {line.split()[0] for line in out.strip().splitlines()}
         meta_ids = set(runs.keys())
@@ -1015,7 +1315,7 @@ class Sprout:
                 f"meta-only: {meta_ids - borg_ids}"
             )
 
-        # 2. Check .heads folders
+        # Check .heads folders
         head_dirs = {d for d in os.listdir(self.heads_path) if is_dir(os.path.join(self.heads_path, d))}
         meta_heads = set(heads.values())
         if not head_dirs.issubset(meta_ids):
@@ -1027,7 +1327,7 @@ class Sprout:
                 f"meta-only: {meta_heads - head_dirs}"
             )
 
-        # 3. Check symlinks in working_path
+        # Check symlinks in working_path
         symlinks = {
             name: os.readlink(os.path.join(self.active_path, name))
             for name in os.listdir(self.active_path)
@@ -1076,6 +1376,27 @@ def cli_create(args, sprout: Sprout) -> int:
     return 0
 
 
+def cli_clone(args, sprout: Sprout) -> int:
+    try:
+        run_id = sprout.clone(group=getattr(args, 'group', None),
+                              head=args.head,
+                              from_run=args.from_run,
+                              from_head=args.from_head,
+                              parent_run=args.parent_run,
+                              parent_head=args.parent_head,
+                              params_str=args.params,
+                              description_str=args.description,
+                              alias_str=args.alias)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if args.head:
+        print(f"Cloned run {run_id} and head '{args.head}' -> .heads/{run_id}")
+    else:
+        print(f"Cloned run {run_id}")
+    return 0
+
+
 def cli_persist(args, sprout: Sprout) -> int:
     try:
         persisted = sprout.persist(head=args.head)
@@ -1109,6 +1430,26 @@ def cli_remove(args, sprout: Sprout) -> int:
         return 2
     return 0
 
+def cli_rewind(args, sprout: Sprout) -> int:
+    try:
+        parent_id = sprout.rewind(head=args.head, persist=args.persist)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(f"Rewound head '{args.head}' to parent state {parent_id}")
+    return 0
+
+
+def cli_switch(args, sprout: Sprout) -> int:
+    try:
+        run_id = sprout.switch(head=args.head, to_run=args.to_run, persist=args.persist)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(f"Switched head '{args.head}' to {args.to_run} (created new active run {run_id})")
+    return 0
+
+
 def cli_edit(args, sprout: Sprout,
              default_parser: Optional[argparse.ArgumentParser] = None) -> int:
     try:
@@ -1139,8 +1480,7 @@ def cli_edit(args, sprout: Sprout,
             # Prepare CLI opts
             opts_str = ""
             if default_parser:
-                arg_defs = extract_arg_defs(default_parser)
-                cli_opts = make_cli_opts(arg_defs, params)
+                cli_opts = make_cli_opts(default_parser, params)
                 opts_str = format_cli_opts(cli_opts, prefix="# ")
                 opts_str += "\n\n"
 
@@ -1317,7 +1657,7 @@ def cli_tree(args, sprout: Sprout) -> int:
 
             custom_dict = r.get("custom", {}) or {}
             if custom_dict:
-                custom_list = list(flatten(custom_dict))
+                custom_list = list(flatten(custom_dict, fmt_custom_value))
                 custom_prefix = prefix + tree_prefix("≡")
                 custom_str = custom_prefix + custom_prefix.join(custom_list)
                 out_str += custom_str
@@ -1357,7 +1697,8 @@ def cli_tree(args, sprout: Sprout) -> int:
                 print_node(c, new_prefix, is_last)
 
         # group by group and print
-        groups = sorted({r["group"] for r in runs.values()})
+        groups = sorted({r["group"] for r in runs.values()},
+                        key=lambda g: min(r["created_at"] for r in runs.values() if r["group"] == g))
         for ig, g in enumerate(groups):
             if ig:
                 print()
@@ -1377,10 +1718,6 @@ def cli_tree(args, sprout: Sprout) -> int:
 def cli_log(args,
             sprout: Sprout,
             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
-
-    arg_defs = None
-    if default_parser:
-        arg_defs = extract_arg_defs(default_parser)
 
     # renamed history: show ancestry diffs for run or head
     try:
@@ -1421,9 +1758,9 @@ def cli_log(args,
             if i > 0:
                 print()
             print(color(title, bold=True))
-            if arg_defs:
-                cli_opts = make_cli_opts(arg_defs, run_params)
-                opts = format_cli_opts(cli_opts, prefix="  ")
+            if default_parser:
+                cli_opts = make_cli_opts(default_parser, run_params)
+                opts = format_cli_opts(cli_opts, fit_terminal_width=False)
                 print(f"{opts}")
                 print()
             if i == 0:
@@ -1457,6 +1794,96 @@ def cli_log(args,
                 print()
                 print("  Custom fields:")
                 print(custom_yaml)
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+
+def cli_show(args,
+             sprout: Sprout,
+             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+    try:
+        _, heads, _ = sprout.get_tree()
+        run_id = None
+        if args.run:
+            run_id = args.run
+        elif args.head:
+            if args.head not in heads:
+                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
+                return 2
+            run_id = heads[args.head]
+        else:
+            print("ERROR: show requires --run or --head", file=sys.stderr)
+            return 2
+
+        chain = sprout.history_chain(run_id)
+        rid, r = chain[-1]
+        run_params = r["params"]
+
+        prev_params = chain[-2][1]["params"] if len(chain) > 1 else {}
+        diffs = {}
+        for k, v in run_params.items():
+            if k not in prev_params:
+                diffs[k] = repr(v)
+            else:
+                old = prev_params[k]
+                if old != v:
+                    diffs[k] = f"{old} -> {v}"
+
+        alias = f" ({r['alias']})" if r.get("alias") else ""
+        ts = to_iso(r["created_at"])
+        active_heads = [h for h, run in heads.items() if run == rid]
+        rid_or_head = active_heads[0] if active_heads else rid
+        title = f"> {rid_or_head}{alias} at {ts}"
+        print(color(title, bold=True))
+
+        if default_parser:
+            cli_opts = make_cli_opts(default_parser, run_params, all_params=args.all_params)
+            opts = format_cli_opts(cli_opts, fit_terminal_width=False)
+            print(f"{opts}")
+            print()
+
+        if args.all_params:
+            if run_params:
+                print("  All params:")
+            else:
+                print("  No params")
+            max_len = max((len(k) for k in run_params), default=0)
+            fmt = "    %s%s%s"
+            for k, v in run_params.items():
+                print(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
+        else:
+            if len(chain) == 1:
+                if diffs:
+                    print("  Initial params:")
+                else:
+                    print("  No params")
+            else:
+                if diffs:
+                    print("  Params changed:")
+                else:
+                    print("  No params changes")
+            max_len = max((len(k) for k in diffs), default=0)
+            fmt = "    %s%s%s"
+            for k, v in diffs.items():
+                print(fmt % (k, " " * (max_len - len(k)), " = " + v))
+
+        description = r.get("description", "")
+        if description:
+            description = textwrap.indent(description, " " * 4)
+            print()
+            print("  Description:")
+            print(description)
+
+        custom_dict = r.get("custom", {}) or {}
+        if custom_dict:
+            custom_yaml = yaml.dump(custom_dict, indent=4)
+            custom_yaml = textwrap.indent(custom_yaml, " " * 4)
+            print()
+            print("  Custom fields:")
+            print(custom_yaml)
 
         return 0
     except Exception as e:
@@ -1504,6 +1931,20 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pc.add_argument("--description", default=None, help="Set description string (use bash $'line\\nline' for newlines)")
     pc.add_argument("--alias", default=None, help="Set alias")
 
+    # clone
+    pcl = sub.add_parser("clone", help="Clone a run or head without mutating source or parent")
+    pcl.add_argument("group", nargs="?", help="New group name (required unless --parent-run/--parent-head used)")
+    src_group = pcl.add_mutually_exclusive_group(required=True)
+    src_group.add_argument("--from-run", dest="from_run", help="Source run id")
+    src_group.add_argument("--from-head", dest="from_head", help="Source head name")
+    pcl.add_argument("--head", help="Create an active head for the cloned run")
+    parent_group = pcl.add_mutually_exclusive_group()
+    parent_group.add_argument("--parent-run", dest="parent_run", help="Attach as leaf-child of this run id")
+    parent_group.add_argument("--parent-head", dest="parent_head", help="Attach as leaf-child of this head's run")
+    pcl.add_argument("--params", default=None, help="Override params")
+    pcl.add_argument("--description", default=None, help="Override description")
+    pcl.add_argument("--alias", default=None, help="Override alias")
+
     # persist
     pp = sub.add_parser("persist", help="Persist a head or all heads")
     pp.add_argument("head", nargs="?", help="Persist a head or all heads")
@@ -1524,6 +1965,19 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pe.add_argument("--description", default=None, help="Set description")
     pe.add_argument("--alias", default=None, help="Set alias")
 
+    # rewind
+    prw = sub.add_parser("rewind", help="Reset head to its parent state")
+    prw.add_argument("head", help="Head name to rewind")
+    prw.add_argument("--persist", action="store_true",
+                     help="Persist current state as a permanent branch before rewinding")
+
+    # switch
+    psw = sub.add_parser("switch", help="Reattach a head to a different existing run")
+    psw.add_argument("--head", required=True, help="Head name to reattach")
+    psw.add_argument("--to-run", required=True, dest="to_run", help="Target run id")
+    psw.add_argument("--persist", action="store_true",
+                     help="Archive current active state to borg before switching")
+
     # rename
     pr = sub.add_parser("rename", help="Rename head")
     pr.add_argument("old_head", help="Head name which should be renamed")
@@ -1538,6 +1992,13 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pl = sub.add_parser("log", help="Show ancestry/diffs (history) for run or head")
     pl.add_argument("--run", help="Run id")
     pl.add_argument("--head", help="Head name")
+
+    # show (leaf details)
+    ps = sub.add_parser("show", help="Show details for the last leaf of a run or head")
+    ps.add_argument("--run", help="Run id")
+    ps.add_argument("--head", help="Head name")
+    ps.add_argument("--all", dest="all_params", action="store_true",
+                    help="Show all params and CLI opts, not just those differing from parent/defaults")
 
     # fetch
     prs = sub.add_parser("fetch", help="Fetches run states and heads from the remote repo")
@@ -1571,18 +2032,26 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
     with scoped_lock(sprout.lock):
         if args.cmd == "create":
             ret = cli_create(args, sprout)
+        elif args.cmd == "clone":
+            ret = cli_clone(args, sprout)
         elif args.cmd == "persist":
             ret = cli_persist(args, sprout)
         elif args.cmd == "remove":
             ret = cli_remove(args, sprout)
         elif args.cmd == "edit":
             ret = cli_edit(args, sprout, default_parser=default_parser)
+        elif args.cmd == "rewind":
+            ret = cli_rewind(args, sprout)
+        elif args.cmd == "switch":
+            ret = cli_switch(args, sprout)
         elif args.cmd == "rename":
             ret = cli_rename(args, sprout)
         elif args.cmd == "tree":
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
+        elif args.cmd == "show":
+            ret = cli_show(args, sprout, default_parser=default_parser)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
         else:
@@ -2276,6 +2745,318 @@ class SproutCLITests(unittest.TestCase):
         runs, heads, tree = self.sprout.get_tree()
         self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': []})
         self.assertEqual(heads, {'B': '20c9a09f'})
+
+
+    def test_clone(self):
+        # build a small tree: GroupA with two active heads A and B
+        rc, out, err = self.run_sprout("create GroupA --head A --params 'lr 0.01' --alias base --description base-desc")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin > {self.tmpdir}/active/A/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        rc, md5sum_A, err = self.run_cmd(f"cat {self.tmpdir}/active/A/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_A = heads0['A']
+
+        # --- clone into a new independent root (new group) ---
+        rc, out, err = self.run_sprout("clone GroupB --from-head A --head B")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, tree = self.sprout.get_tree()
+        run_B = heads['B']
+
+        # B is a new root (no parent)
+        self.assertIsNone(runs[run_B]['parent'])
+        self.assertEqual(runs[run_B]['group'], 'GroupB')
+        # metadata inherited from A
+        self.assertEqual(runs[run_B]['params'], {'lr': 0.01})
+        self.assertEqual(runs[run_B]['alias'], 'base')
+        self.assertEqual(runs[run_B]['description'], 'base-desc')
+        # source A is untouched (no snapshot inserted above it)
+        self.assertEqual(heads['A'], run_A)
+        self.assertIsNone(runs[run_A]['parent'])
+        # data copied correctly
+        rc, md5sum_B, err = self.run_cmd(f"cat {self.tmpdir}/active/B/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_B)
+
+        # --- clone as leaf-child of run_A (graft into GroupA tree) ---
+        rc, out, err = self.run_sprout(f"clone --from-head B --parent-run {run_A} --head C")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, tree = self.sprout.get_tree()
+        run_C = heads['C']
+
+        # C is a child of run_A
+        self.assertEqual(runs[run_C]['parent'], run_A)
+        self.assertEqual(runs[run_C]['group'], 'GroupA')
+        # still no snapshot inserted above A
+        self.assertEqual(heads['A'], run_A)
+        self.assertIsNone(runs[run_A]['parent'])
+        self.assertIn(run_C, tree[run_A])
+        # data correct
+        rc, md5sum_C, err = self.run_cmd(f"cat {self.tmpdir}/active/C/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_C)
+
+        # --- clone from persisted (borg-only) run ---
+        rc, out, err = self.run_sprout("persist B")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotIn('B', self.sprout._load_meta()['heads'])
+
+        rc, out, err = self.run_sprout(f"clone GroupC --from-run {run_B} --head D")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, _ = self.sprout.get_tree()
+        run_D = heads['D']
+        self.assertIsNone(runs[run_D]['parent'])
+        self.assertEqual(runs[run_D]['group'], 'GroupC')
+        rc, md5sum_D, err = self.run_cmd(f"cat {self.tmpdir}/active/D/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_D)
+
+        # --- metadata override via --params/--alias/--description ---
+        rc, out, err = self.run_sprout(f"clone GroupD --from-head A --params 'lr 0.1' --alias override --description new-desc --head E")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, _ = self.sprout.get_tree()
+        run_E = heads['E']
+        self.assertEqual(runs[run_E]['params'], {'lr': 0.1})
+        self.assertEqual(runs[run_E]['alias'], 'override')
+        self.assertEqual(runs[run_E]['description'], 'new-desc')
+
+        # --- error cases ---
+        rc, out, err = self.run_sprout("clone --from-head A --head A")
+        self.assertEqual(rc, 2, msg=err)  # head A already exists
+
+        rc, out, err = self.run_sprout("clone --from-head NoSuch --head X")
+        self.assertEqual(rc, 2, msg=err)  # source head not found
+
+        rc, out, err = self.run_sprout(f"clone --from-head A --parent-run deadbeef --head X")
+        self.assertEqual(rc, 2, msg=err)  # parent run not found
+
+        rc, out, err = self.run_sprout(f"clone GroupX --from-head A --parent-run {run_A} --head X")
+        self.assertEqual(rc, 2, msg=err)  # group + parent-run conflict
+
+        rc, out, err = self.run_sprout(f"clone --from-head A --head X")
+        self.assertEqual(rc, 2, msg=err)  # neither group nor parent given
+
+
+    def test_rewind(self):
+        # create head A with a file
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, orig_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_A = heads0['A']
+
+        # create head B from A (snapshots A, B starts from that snapshot)
+        rc, out, err = self.run_sprout("create --head B --from-head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs1, heads1, _ = self.sprout.get_tree()
+        run_B = heads1['B']
+        parent_B = runs1[run_B]['parent']
+
+        # modify B's file to simulate training progress
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/B/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, new_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotEqual(orig_md5.split()[0], new_md5.split()[0])
+
+        # simulate training modifying meta fields on B
+        self.sprout.edit(head='B', custom_dict={'best/frames': 1000, 'success_rate': 0.9},
+                         custom_update=True)
+        self.sprout.edit(head='B', params_str='--lr 0.001', alias_str='tuned',
+                         description_str='after tuning')
+
+        runs_before, _, _ = self.sprout.get_tree()
+        self.assertIn('best/frames', runs_before[run_B].get('custom', {}))
+
+        # rewind B back to its parent state
+        rc, out, err = self.run_sprout("rewind B")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertIn(parent_B, out)
+
+        # metadata unchanged: B still points to run_B, parent is still parent_B
+        runs2, heads2, _ = self.sprout.get_tree()
+        self.assertEqual(heads2['B'], run_B)
+        self.assertEqual(runs2[run_B]['parent'], parent_B)
+
+        # all mutable fields reset to parent's state
+        for field in ('custom', 'params', 'description', 'alias'):
+            self.assertEqual(runs2[run_B].get(field), runs2[parent_B].get(field))
+
+        # file content restored to original
+        rc, rewound_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(orig_md5.split()[0], rewound_md5.split()[0])
+
+        # rewind a head with no parent fails (C is a fresh root head)
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout("rewind C")
+        self.assertEqual(rc, 2, msg=err)
+
+        # rewind a nonexistent head fails
+        rc, out, err = self.run_sprout("rewind NONEXIST")
+        self.assertEqual(rc, 2, msg=err)
+
+    def test_rewind_persist(self):
+        # create root head A with a file
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, orig_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+
+        # create head B from A (snapshots A, B starts from that snapshot)
+        rc, out, err = self.run_sprout("create --head B --from-head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_B = heads0['B']
+        parent_B = runs0[run_B]['parent']
+
+        # modify B to simulate training progress
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/B/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, trained_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotEqual(orig_md5.split()[0], trained_md5.split()[0])
+
+        # rewind B with --persist: current run_B must be archived, B gets a new run
+        rc, out, err = self.run_sprout("rewind B --persist")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs1, heads1, _ = self.sprout.get_tree()
+        new_run_B = heads1['B']
+
+        # head B now points to a different run
+        self.assertNotEqual(new_run_B, run_B)
+
+        # old run_B is still in the tree (archived as a permanent branch)
+        self.assertIn(run_B, runs1)
+
+        # both old run_B and new run_B share the same parent
+        self.assertEqual(runs1[run_B]['parent'], parent_B)
+        self.assertEqual(runs1[new_run_B]['parent'], parent_B)
+
+        # new run inherits parent's metadata
+        for field in ('params', 'description', 'alias', 'custom'):
+            self.assertEqual(runs1[new_run_B].get(field), runs1[parent_B].get(field))
+
+        # file content restored to parent's state (original A content)
+        rc, rewound_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(orig_md5.split()[0], rewound_md5.split()[0])
+
+        # rewind --persist on a head with no parent fails
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout("rewind C --persist")
+        self.assertEqual(rc, 2, msg=err)
+
+    def test_switch(self):
+        # create one persisted run and one active head in the same group
+        rc, out, err = self.run_sprout("create GroupA")
+        self.assertEqual(rc, 0, msg=err)
+        runs0, _, _ = self.sprout.get_tree()
+        run_persisted = list(runs0.keys())[0]
+
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+        runs1, heads1, _ = self.sprout.get_tree()
+        run_a = heads1['A']
+
+        # error: target run does not exist
+        rc, _, err = self.run_sprout("switch --head A --to-run deadbeef")
+        self.assertEqual(rc, 2)
+        self.assertIn("not found", err)
+
+        # create another head B so we can test switching to an active run
+        rc, out, err = self.run_sprout("create GroupA --head B")
+        self.assertEqual(rc, 0, msg=err)
+        runs2, heads2, _ = self.sprout.get_tree()
+        run_b = heads2['B']
+
+        # error: target run already has a head
+        rc, _, err = self.run_sprout(f"switch --head A --to-run {run_b}")
+        self.assertEqual(rc, 2)
+        self.assertIn("already has head", err)
+
+        # basic switch to a persistent run: head A now points to a NEW run, child of run_persisted
+        rc, out, err = self.run_sprout(f"switch --head A --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs4, heads4, _ = self.sprout.get_tree()
+        run_a_new = heads4['A']
+        self.assertNotEqual(run_a_new, run_persisted)
+        self.assertEqual(runs4[run_a_new]['parent'], run_persisted)
+        self.assertIn(run_a, runs4) # run_a is still in the tree
+        self.assertTrue(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_a_new)))
+
+        # switch --persist: write a sentinel, switch away, verify it was saved
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        runs5, heads5, _ = self.sprout.get_tree()
+        run_c = heads5['C']
+
+        sentinel = os.path.join(self.tmpdir, 'active', 'C', 'sentinel.txt')
+        with open(sentinel, 'w') as f:
+            f.write('persist_me')
+
+        # Switch C to run_persisted (persistent) while persisting current run_c
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted} --persist")
+        self.assertEqual(rc, 0, msg=err)
+        runs6, heads6, _ = self.sprout.get_tree()
+        run_c_new = heads6['C']
+        self.assertEqual(runs6[run_c_new]['parent'], run_persisted)
+        self.assertFalse(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_c)))
+
+        # switch C back to run_c (persistent): this extracts run_c and creates a NEW run_c_child
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_c}")
+        self.assertEqual(rc, 0, msg=err)
+        runs7, heads7, _ = self.sprout.get_tree()
+        run_c_newest = heads7['C']
+        self.assertNotEqual(run_c_newest, run_c)
+        self.assertEqual(runs7[run_c_newest]['parent'], run_c)
+
+        restored = os.path.join(self.tmpdir, 'active', 'C', 'sentinel.txt')
+        self.assertTrue(os.path.exists(restored))
+        with open(restored) as f:
+            self.assertEqual(f.read(), 'persist_me')
+
+        # repeat switch without persist should not grow the tree
+        runs_before, _, _ = self.sprout.get_tree()
+        num_runs_before = len(runs_before)
+
+        # Switch C to run_persisted twice more
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs_after, _, _ = self.sprout.get_tree()
+        # The number of runs should only increase by 1 compared to runs_before,
+        # because the first switch created a new run and deleted the previous C leaf,
+        # and the second switch created a new run and deleted the previous one.
+        # Actually it shouldn't grow at all across the two switches?
+        # Wait, from runs_before to the first switch: +1 new run, -1 deleted run = 0 net change
+        # Second switch: +1 new run, -1 deleted run = 0 net change.
+        self.assertEqual(len(runs_after), num_runs_before)
 
 
 # In order to test sprout run:
