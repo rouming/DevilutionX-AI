@@ -588,11 +588,11 @@ class ImitationLearning(object):
             status['update'] += 1
 
             update_end_time = time.time()
+            total_elapsed_time = update_end_time - total_start_time
 
             # Print logs
             if self.args.log_interval > 0 and (status['update'] % self.args.log_interval == 0 or
                                                status['num_frames'] >= self.args.frames_int):
-                total_elapsed_time = time.time() - total_start_time
 
                 fps = log['total_frames'] / (update_end_time - update_start_time)
 
@@ -673,6 +673,14 @@ class ImitationLearning(object):
                 utils.save_status(status, self.model_phase_dir)
                 self.txt_logger.info("Status saved")
 
+                custom_dict = {"duration": total_elapsed_time,
+                               "frames": status["num_frames"],
+                               "success_rate": mean_success_rate,
+                               "policy_accuracy": log["policy_accuracy"],
+                               "value_accuracy": log["value_accuracy"]}
+                best = {"best": custom_dict}
+                last = {"last": custom_dict}
+
                 if mean_success_rate > best_success_rate:
                     best_success_rate = mean_success_rate
                     status['success_rate'] = best_success_rate
@@ -684,12 +692,12 @@ class ImitationLearning(object):
                     self.txt_logger.info("Success rate {: .2f}; best model is saved".
                                          format(best_success_rate))
 
-                    # Save info about best status backup into Sprout as custom dict
-                    best = { 'best': { 'frames': status['num_frames'],
-                                       'success_rate': mean_success_rate,
-                                       'policy_accuracy': log['policy_accuracy'],
-                                       'value_accuracy': log['value_accuracy'], }}
-                    self.spr.edit(head=self.args.model, custom_dict=best)
+                    self.spr.edit(head=self.args.model, custom_dict=last | best,
+                                  custom_update=True)
+                else:
+                    self.spr.edit(head=self.args.model, custom_dict=last,
+                                  custom_update=True)
+
 
 
         return best_success_rate

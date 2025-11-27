@@ -1191,12 +1191,12 @@ def train_ai(args, gameconfig):
         success_per_episode = utils.synthesize(
             [1 if r > 0 else 0 for r in logs["return_per_episode"]])
         success_rate = success_per_episode['mean']
+        duration = int(time.time() - start_time)
 
         # Print logs
         if args.log_interval > 0 and (update % args.log_interval == 0 or
                                       num_frames >= args.frames_int):
             fps = logs["num_frames"] / (update_end_time - update_start_time)
-            duration = int(time.time() - start_time)
             return_per_episode = utils.synthesize(logs["return_per_episode"])
             rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
@@ -1273,6 +1273,12 @@ def train_ai(args, gameconfig):
                 elapsed_time, returns, success_rate, best_success_rate))
             txt_logger.info("Status saved")
 
+            custom_dict = {"duration": duration,
+                           "frames": num_frames,
+                           "success_rate": success_rate}
+            best = {"best": custom_dict}
+            last = {"last": custom_dict}
+
             if success_rate > best_success_rate:
                 best_success_rate = success_rate
                 src_path = utils.get_status_path(model_dir, best=False)
@@ -1280,9 +1286,11 @@ def train_ai(args, gameconfig):
                 shutil.copyfile(src_path, dst_path)
                 txt_logger.info("Success rate {: .2f}; best model is saved".format(success_rate))
 
-                # Save info about best status backup into Sprout as custom dict
-                best = { 'best': { 'frames': num_frames, 'success_rate': success_rate }}
-                spr.edit(head=args.model, custom_dict=best)
+                spr.edit(head=args.model, custom_dict=last | best,
+                         custom_update=True)
+            else:
+                spr.edit(head=args.model, custom_dict=last,
+                         custom_update=True)
     return 0
 
 
