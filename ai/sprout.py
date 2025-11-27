@@ -282,14 +282,19 @@ def color(text, rgb=(255, 255, 255), bold=False):
     prefix = f"\033[{';'.join(codes)}m" if codes else ""
     return f"{prefix}{text}\033[0m"
 
-def flatten(d, prefix=""):
-    for k in sorted(d.keys()):
+def fmt_compact_floats(v):
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+def flatten(d, format_value, prefix=""):
+    for k in sorted(d.keys(), key=str):
         v = d[k]
         path = f"{prefix}/{k}" if prefix else k
         if isinstance(v, dict):
-            yield from flatten(v, path)
+            yield from flatten(v, format_value, path)
         else:
-            yield f"{path}: {v}"
+            yield f"{path}: {format_value(v)}"
 
 # -------------------------
 # File lock uses flock()
@@ -859,7 +864,8 @@ class Sprout:
              description_str: Optional[str] = None,
              alias_str: Optional[str] = None,
              created_str: Optional[str] = None,
-             custom_dict: Optional[dict] = None) -> str:
+             custom_dict: Optional[dict] = None,
+             custom_update: bool = False) -> str:
         """
         Edit metadata for a run. None means don't touch. Empty string clears.
         """
@@ -880,7 +886,10 @@ class Sprout:
             run["created_at"] = created_str
 
         if custom_dict is not None:
-            run["custom"] = custom_dict
+            if custom_update:
+                run["custom"].update(custom_dict)
+            else:
+                run["custom"] = custom_dict
 
         self._save_meta(meta)
         return run_id
@@ -1317,7 +1326,7 @@ def cli_tree(args, sprout: Sprout) -> int:
 
             custom_dict = r.get("custom", {}) or {}
             if custom_dict:
-                custom_list = list(flatten(custom_dict))
+                custom_list = list(flatten(custom_dict, fmt_compact_floats))
                 custom_prefix = prefix + tree_prefix("≡")
                 custom_str = custom_prefix + custom_prefix.join(custom_list)
                 out_str += custom_str
