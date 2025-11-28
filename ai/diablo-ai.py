@@ -5,6 +5,7 @@
    Tool which trains AI for playing Diablo and helps to evalulate and
    play as human
 
+Author: Roman Penyaev <r.peniaev@gmail.com>
 """
 from pathlib import Path
 import argparse
@@ -27,7 +28,7 @@ import procutils
 import sprout
 from rl import utils
 
-VERSION='Diablo AI Tool v1.5'
+VERSION='Diablo AI Tool v1.6'
 
 def set_sighandlers():
     # Silently terminate on Ctrl-C
