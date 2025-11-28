@@ -576,7 +576,7 @@ def make_diablo_parser():
         help="List all Diablo instances grouped by parent ID of the test runner."
     )
 
-    return incompatible_options, parser, train_ai_parser
+    return incompatible_options, parser
 
 def delayed_import(binary_path):
     import devilutionx_generator
@@ -1715,7 +1715,7 @@ def main():
     # Set big enough limits
     set_rlimits()
 
-    incompatible_options, parser, train_ai_parser = make_diablo_parser()
+    incompatible_options, parser = make_diablo_parser()
     args = parser.parse_args(namespace=DiabloParserNamespace())
 
     # Check if some options are incompatible
@@ -1745,7 +1745,7 @@ def main():
         # re-run through sprout.main(), but pass sys.argv after "sprout"
         sprout_args = ['--working', utils.get_models_dir()]
         sprout_args += sys.argv[sys.argv.index("sprout")+1:]
-        return sprout.main(argv=sprout_args, default_parser=train_ai_parser)
+        return sprout.main(argv=sprout_args, default_parser=parser)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)

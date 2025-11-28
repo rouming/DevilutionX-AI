@@ -198,9 +198,8 @@ def decode_escapes(s: Optional[str]) -> Optional[str]:
 def extract_arg_defs(parser: argparse.ArgumentParser):
     """Extract definitions from argparse (not parsed values)"""
     arg_defs = {}
+
     for action in parser._actions:
-        if action.dest == "help":
-            continue
         arg_defs[action.dest] = {
             "default": action.default,
             "required": action.required,
@@ -209,16 +208,25 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
         }
     return arg_defs
 
-def make_cli_opts(arg_defs, new_params):
+def make_cli_opts(parser, params):
     """Compare new parameters with argparse defaults and required
     values, and return a list of CLI options"""
     opts = []
     missing = []
 
+    # First try to find a subparser
+    for a in parser._actions:
+        if a.dest in params:
+            parser = a.choices[params[a.dest]]
+            break
+
+    assert isinstance(parser, argparse.ArgumentParser)
+    arg_defs = extract_arg_defs(parser)
+
     for name, meta in arg_defs.items():
         default_val = meta["default"]
         required = meta["required"]
-        new_val = new_params.get(name, None)
+        new_val = params.get(name, None)
 
         # Handle required params: add with special marker if missing
         if required and new_val is None:
@@ -246,7 +254,7 @@ def make_cli_opts(arg_defs, new_params):
             else:
                 opts.append(f"{opt_string} {default_val}")
 
-    return opts + missing
+    return [parser.prog] + opts + missing
 
 def format_cli_opts(cli_opts, prefix=""):
     if not sys.stdout.isatty():
@@ -1148,8 +1156,7 @@ def cli_edit(args, sprout: Sprout,
             # Prepare CLI opts
             opts_str = ""
             if default_parser:
-                arg_defs = extract_arg_defs(default_parser)
-                cli_opts = make_cli_opts(arg_defs, params)
+                cli_opts = make_cli_opts(default_parser, params)
                 opts_str = format_cli_opts(cli_opts, prefix="# ")
                 opts_str += "\n\n"
 
@@ -1387,10 +1394,6 @@ def cli_log(args,
             sprout: Sprout,
             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
 
-    arg_defs = None
-    if default_parser:
-        arg_defs = extract_arg_defs(default_parser)
-
     # renamed history: show ancestry diffs for run or head
     try:
         _, heads, _ = sprout.get_tree()
@@ -1430,8 +1433,8 @@ def cli_log(args,
             if i > 0:
                 print()
             print(color(title, bold=True))
-            if arg_defs:
-                cli_opts = make_cli_opts(arg_defs, run_params)
+            if default_parser:
+                cli_opts = make_cli_opts(default_parser, run_params)
                 opts = format_cli_opts(cli_opts, prefix="  ")
                 print(f"{opts}")
                 print()
