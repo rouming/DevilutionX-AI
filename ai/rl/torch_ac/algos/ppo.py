@@ -1,3 +1,17 @@
+"""
+HRL Adaptation of torch-ac,
+based on torch-ac by lcswillems.
+
+Changes:
+- Adapted storage and collection to support 'num_levels' dimension (P x L).
+- Manager and Worker steps are aligned for joint optimization.
+- Implemented shared Encoder/Memory with multi-head outputs.
+- Added 'opt_mask' to handle Truncated BPTT at option boundaries
+  (detaching memory on option switch).
+
+Author: Roman Penyaev, 2025
+"""
+
 import numpy
 import torch
 import torch.nn.functional as F
@@ -8,13 +22,13 @@ class PPOAlgo(BaseAlgo):
     """The Proximal Policy Optimization algorithm
     ([Schulman et al., 2015](https://arxiv.org/abs/1707.06347))."""
 
-    def __init__(self, penv_pool, acmodel, device=None, num_frames_per_proc=None, discount=0.99, lr=0.001, gae_lambda=0.95,
+    def __init__(self, penv_pool, acmodel, device=None, num_levels=1, num_frames_per_proc=None, discount=0.99, lr=0.001, gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  adam_eps=1e-8, clip_eps=0.2, epochs=4, batch_size=256, preprocess_obss=None,
                  reshape_reward=None):
         num_frames_per_proc = num_frames_per_proc or 128
 
-        super().__init__(penv_pool, acmodel, device, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+        super().__init__(penv_pool, acmodel, device, num_levels, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                          value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward)
 
         self.clip_eps = clip_eps
@@ -42,12 +56,14 @@ class PPOAlgo(BaseAlgo):
             for inds in self._get_batches_starting_indexes():
                 # Initialize batch values
 
-                batch_entropy = 0
-                batch_value = 0
-                batch_policy_loss = 0
-                batch_value_loss = 0
-                batch_loss = 0
-                batch_kl = 0
+                batch_entropy = np.zeros((self.num_levels, ))
+                batch_value = np.zeros((self.num_levels, ))
+                batch_policy_loss = np.zeros((self.num_levels, ))
+                batch_value_loss = np.zeros((self.num_levels, ))
+                batch_kl = np.zeros((self.num_levels, ))
+
+                # Will be promoted to a tensor on the correct device
+                batch_loss_tensor = 0
 
                 # If model is recurrent, load the stored hidden
                 # states.  Mmemory state is detached from the
@@ -68,43 +84,59 @@ class PPOAlgo(BaseAlgo):
                     # Compute loss
 
                     if self.acmodel.recurrent:
+                        # We detach memory if and only if the option
+                        # changed, to prevent interference between
+                        # temporally extended skills.
+                        h = memory * sb.mask # episode resets
+                        h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
                         # Recurrent chain through memory
-                        dist, value, memory = self.acmodel(sb.obs, memory * sb.mask)
+                        dist, value, memory = self.acmodel(sb.obs, h)
                     else:
                         dist, value = self.acmodel(sb.obs)
 
-                    # Entropy (scalar) averaged over this sub-batch (S)
-                    entropy = dist.entropy().mean()
+                    num_seqs = len(inds)
+
+                    assert len(dist) == self.num_levels
+                    assert value.shape == (num_seqs, self.num_levels)
+
+                    # Entropy (scalar) averaged over the sub-batch (S)
+                    # for each distribution, resulting in the shape (L, )
+                    entropy = torch.stack([d.entropy().mean() for d in dist])
 
                     # PPO ratio: exp(log pi_theta(a|s) - log pi_old(a|s))
-                    # shapes: dist.log_prob(sb.action) -> [S], sb.log_prob -> [S]
-                    ratio = torch.exp(dist.log_prob(sb.action) - sb.log_prob)
+                    # (S, L) -> (L, )
+                    new_log_prob = torch.stack([dist[j].log_prob(sb.actions[:, j])
+                                                for j in range(self.num_levels)],
+                                               dim=1)
+                    ratio = torch.exp(new_log_prob - sb.log_prob)
 
-                    # Surrogate objectives (per-sample) and final policy loss (scalar)
+                    # Surrogate objectives (S, L)
                     surr1 = ratio * sb.advantage
                     surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
-                    policy_loss = -torch.min(surr1, surr2).mean()
 
-                    # Value loss with clipping (PPO-style)
+                    # Mean over batch dimension, so (S, L) -> (L,)
+                    policy_loss = -torch.min(surr1, surr2).mean(axis=0)
+
+                    # Value loss with clipping
                     value_clipped = sb.value + torch.clamp(value - sb.value, -self.clip_eps, self.clip_eps)
                     surr1 = (value - sb.returnn).pow(2)
                     surr2 = (value_clipped - sb.returnn).pow(2)
-                    value_loss = torch.max(surr1, surr2).mean()
+                    value_loss = torch.max(surr1, surr2).mean(axis=0)
 
-                    # Scalar loss for this timestep
+                    # Loss per level (L,)
                     loss = policy_loss - self.entropy_coef * entropy + self.value_loss_coef * value_loss
 
                     # Kullback-Leibler (KL) divergence
-                    kl = (sb.log_prob - dist.log_prob(sb.action)).mean()
+                    kl = (sb.log_prob - new_log_prob).mean(axis=0)
 
                     # Update batch values
 
-                    batch_entropy += entropy.item()
-                    batch_value += value.mean().item()
-                    batch_policy_loss += policy_loss.item()
-                    batch_value_loss += value_loss.item()
-                    batch_loss += loss
-                    batch_kl += kl.item()
+                    batch_entropy += entropy.cpu().numpy()
+                    batch_value += value.mean(axis=0).cpu().numpy()
+                    batch_policy_loss += policy_loss.cpu().numpy()
+                    batch_value_loss += value_loss.cpu().numpy()
+                    batch_kl += kl.cpu().numpy()
+                    batch_loss_tensor += loss
 
                     # Save detached memory for the future recurrence
                     # step. What is important is that memory is saved
@@ -127,15 +159,16 @@ class PPOAlgo(BaseAlgo):
                 batch_value /= self.recurrence
                 batch_policy_loss /= self.recurrence
                 batch_value_loss /= self.recurrence
-                batch_loss /= self.recurrence
                 batch_kl /= self.recurrence
+                batch_loss_tensor /= self.recurrence
 
                 # Update actor-critic
 
                 if apply_update:
                     self.optimizer.zero_grad()
-                    batch_loss.backward()
-                    grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(), self.max_grad_norm).item()
+                    batch_loss_tensor.sum().backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(),
+                                                               self.max_grad_norm).item()
                     self.optimizer.step()
                 else:
                     grad_norm = 0.0
@@ -152,11 +185,11 @@ class PPOAlgo(BaseAlgo):
         # Log some values
 
         logs = {
-            "entropy": numpy.mean(log_entropies),
-            "value": numpy.mean(log_values),
-            "policy_loss": numpy.mean(log_policy_losses),
-            "value_loss": numpy.mean(log_value_losses),
-            "kl": numpy.mean(log_kls),
+            "entropy": numpy.mean(log_entropies, axis=0), # (L, )
+            "value": numpy.mean(log_values, axis=0), # (L, )
+            "policy_loss": numpy.mean(log_policy_losses, axis=0), # (L, )
+            "value_loss": numpy.mean(log_value_losses, axis=0), # (L, )
+            "kl": numpy.mean(log_kls, axis=0), # (L, )
             "grad_norm": numpy.mean(log_grad_norms),
         }
 
