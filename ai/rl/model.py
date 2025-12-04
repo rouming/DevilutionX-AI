@@ -321,6 +321,9 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
                  use_text=False):
         super().__init__()
 
+        # No hierarchy
+        self.num_levels = 1
+
         # Decide which components are enabled
         self.cnn_arch = cnn_arch
         self.use_text = use_text
@@ -572,9 +575,12 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
         dist = Categorical(logits=F.log_softmax(x, dim=1))
 
         x = self.critic(embedding)
-        value = x.squeeze(1)
+        value = x
 
-        return dist, value, memory
+        # Distribution is a list of categorical objects for each level
+        # (L is 1 for this model), and the value is expected to be in
+        # the (P, L) shape.
+        return [dist], value, memory
 
     def _get_embed_text(self, text):
         _, hidden = self.text_rnn(self.word_embedding(text))

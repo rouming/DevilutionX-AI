@@ -13,10 +13,11 @@ class Agent:
     - to choose an action given an observation,
     - to analyze the feedback (i.e. reward and done state) of its action."""
 
-    def __init__(self, acmodel, preprocess_obss, argmax, num_envs):
+    def __init__(self, acmodel, preprocess_obss, argmax, num_levels, num_envs):
         self.acmodel = acmodel
         self.preprocess_obss = preprocess_obss
         self.argmax = argmax
+        self.num_levels = num_levels
         self.num_envs = num_envs
         if self.acmodel.recurrent:
             self.memories = torch.zeros(self.num_envs, self.acmodel.memory_size, device=device)
@@ -66,10 +67,13 @@ class Agent:
             else:
                 dist, _ = self.acmodel(preprocessed_obss)
 
+        assert len(dist) == self.num_levels
+
+        # Actions shape (P, L)
         if self.argmax:
-            actions = dist.probs.max(1, keepdim=True)[1]
+            actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
         else:
-            actions = dist.sample()
+            actions = torch.stack([d.sample() for d in dist], dim=1)
 
         return actions.cpu().numpy()
 
