@@ -159,6 +159,8 @@ class DiabloEnv(gym.Env):
             raise ValueError("env_config must be provided!")
         if game is None:
             raise ValueError("game must be provided!")
+        # No hierarchy
+        self.num_levels = 1
         self.config = env_config
         self.game = game
         self.seed = self.config['seed']
@@ -331,10 +333,7 @@ class DiabloEnv(gym.Env):
         # Starting dungeon level
         self.start_dungeon_level = d.player.plrlevel
 
-        obss = {
-            "env": env,
-            "env-status": env_status
-        }
+        obss = {"env": env, "env-status": env_status}
         return obss, {}
 
     def is_agent_timedout(self):
@@ -598,11 +597,10 @@ class DiabloEnv(gym.Env):
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        obss = {
-            "env": env,
-            "env-status": env_status
-        }
-        return obss, reward, done, truncated, {}
+        obss = {"env": env, "env-status": env_status}
+        info = {"hierarchy/opt-changed": False,
+                "hierarchy/rewards": [reward]}
+        return obss, reward, done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
     @staticmethod
