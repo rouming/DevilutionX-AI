@@ -38,8 +38,8 @@ class ManyEnvs(ParallelEnv):
 
 # Evaluate the model with a specific number of episodes starting from
 # a seed value
-def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
-                   return_obss_actions=False, pause=0.0):
+def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
+                   episodes, return_obss_actions=False, pause=0.0):
     logs = {
         "num_frames_per_episode": [],
         "return_per_episode": [],
@@ -50,6 +50,7 @@ def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
     }
 
     num_envs = min(len(penv_pool.envs), episodes)
+    num_levels = penv_pool.envs[0].unwrapped.num_levels
     env = ManyEnvs(penv_pool)
 
     if acmodel.recurrent:
@@ -60,9 +61,10 @@ def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
         seeds = range(seed + offset, seed + offset + num_envs)
         many_obs, _ = env.reset(seeds=seeds)
 
+        # (P, L) shape
+        returns = np.zeros((num_envs, num_levels), dtype=float)
         num_frames = np.zeros((num_envs,), dtype=int)
         durations = np.zeros((num_envs,), dtype=float)
-        returns = np.zeros((num_envs,))
         not_yet_done = np.ones((num_envs,), dtype=bool)
 
         if return_obss_actions:
@@ -76,30 +78,32 @@ def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
             with torch.no_grad():
                 preprocessed_obss = preprocess_obss(many_obs, device=device)
                 if acmodel.recurrent:
-                    memories = memories[active_indices]
-                    dist, _, memories = acmodel(preprocessed_obss, memories)
-                    memories[active_indices] = memories
+                    memory = memories[active_indices]
+                    dist, _, memory = acmodel(preprocessed_obss, memory)
+                    memories[active_indices] = memory
                 else:
                     dist, _ = acmodel(preprocessed_obss)
 
-                assert len(dist) == self.num_levels
+                assert len(dist) == num_levels
 
-            if self.argmax:
-                actions = dist.probs.max(1, keepdim=True)[1]
+            # Actions shape (P, L)
+            if argmax:
+                actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
             else:
-                actions = dist.sample()
+                actions = torch.stack([d.sample() for d in dist], dim=1)
 
-            # Actions shape (P)
             actions = actions.cpu().numpy()
 
             assert len(active_indices) == len(actions) == len(many_obs)
+            assert actions.shape[1] == num_levels
 
             if return_obss_actions:
                 for i, o, a in zip(active_indices, many_obs, actions):
                     all_obss[i].append(o)
                     all_actions[i].append(a)
 
-            many_obs, reward, terminated, truncated, _ = env.step(actions, active_indices)
+            many_obs, _, terminated, truncated, info = env.step(actions, active_indices)
+            reward = np.array([i['hierarchy/rewards'] for i in info ], dtype=np.float32)
             done = np.asarray(terminated) | np.asarray(truncated)
 
             if pause:
@@ -118,9 +122,9 @@ def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
             durations[just_done_indices] = time.time() - ts
             not_yet_done[just_done_indices] = False
 
-        logs["num_frames_per_episode"].extend(list(num_frames))
-        logs["return_per_episode"].extend(list(returns))
-        logs["duration_per_episode"].extend(list(durations))
+        logs["num_frames_per_episode"].extend(num_frames.tolist())
+        logs["return_per_episode"].extend(returns.tolist())
+        logs["duration_per_episode"].extend(durations.tolist())
         logs["seed_per_episode"].extend(list(seeds))
         if return_obss_actions:
             logs["observations_per_episode"].extend(all_obss)

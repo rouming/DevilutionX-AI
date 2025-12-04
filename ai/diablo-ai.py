@@ -1136,8 +1136,8 @@ def train_ai(args, gameconfig):
             # Evaluate on the current model
             acmodel.eval()
             start_time = time.time()
-            vlogs = batch_evaluate(acmodel, penv_pool, argmax=True,
-                                   seed=args.eval_seed,
+            vlogs = batch_evaluate(acmodel, preprocess_obss, penv_pool,
+                                   argmax=True, seed=args.eval_seed,
                                    episodes=args.eval_episodes)
             elapsed_time = time.time() - start_time
             acmodel.train()
@@ -1378,10 +1378,11 @@ def train_il(args, gameconfig):
 
 
 def play_ai(args, gameconfig):
-    from rl.utils import device
-    from rl.imitation import BotEnv
-    from rl.torch_ac.utils import ParallelEnvPool
     from rl.evaluate import batch_evaluate
+    from rl.imitation import BotEnv
+    from rl.model import ACModel
+    from rl.torch_ac.utils import ParallelEnvPool
+    from rl.utils import device
 
     # Load agent
     model_dir = utils.get_run_dir(args.model)
@@ -1430,8 +1431,8 @@ def play_ai(args, gameconfig):
     if hasattr(preprocess_obss, "vocab"):
         preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
-    logs = batch_evaluate(acmodel, penv_pool, args.argmax, args.seed,
-                          args.episodes_int, pause=args.pause)
+    logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
+                          args.seed, args.episodes_int, pause=args.pause)
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']
@@ -1439,10 +1440,10 @@ def play_ai(args, gameconfig):
     seeds = logs['seed_per_episode']
 
     for f, d, r, s in zip(frames, durations, returns, seeds):
-        success = r > 0.0
+        success = np.all(np.array(r) > 0.0)
         print(f"seed {s:2d} | {'success' if success else 'failure'} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
 
-    success_rate = np.mean([1 if r > 0 else 0 for r in returns])
+    success_rate = np.mean([1 if np.all(np.array(r) > 0.0) else 0 for r in returns])
     print(f"average success rate {success_rate:.2f} for {args.episodes_int} episodes")
 
     return 0
