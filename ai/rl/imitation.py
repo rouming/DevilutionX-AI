@@ -516,12 +516,6 @@ class ImitationLearning(object):
             episodes, min(episodes, len(self.penv_pool.envs))))
 
         num_envs = min(len(self.penv_pool.envs), episodes)
-        # Create an agent using the current model
-        agent = utils.Agent.from_external_model(
-            self.acmodel,
-            self.penv_pool.envs[0].observation_space,
-            argmax=True, num_envs=num_envs)
-
         env_names = [self.args.env] if not getattr(self.args, 'multi_env', None) \
             else self.args.multi_env
 
@@ -531,11 +525,12 @@ class ImitationLearning(object):
 
         logs = []
 
-        agent.acmodel.eval()
+        self.acmodel.eval()
         for _ in env_names:
-            logs += [batch_evaluate(agent, self.penv_pool, self.val_seed, episodes)]
+            logs += [batch_evaluate(self.acmodel, self.penv_pool, argmax=True,
+                                    seed=self.val_seed, episodes=episodes)]
             self.val_seed += episodes
-        agent.acmodel.train()
+        self.acmodel.train()
 
         return logs
 
