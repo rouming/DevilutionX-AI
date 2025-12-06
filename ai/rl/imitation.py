@@ -694,57 +694,6 @@ class ImitationLearning(object):
 
         return best_success_rate
 
-
-    def evaluate_agent(self, eval_seed, num_eval_episodes, return_obss_actions=False):
-        """
-        Evaluate the agent on some number of episodes and return the seeds for the
-        episodes the agent performed the worst on.
-        """
-
-        self.txt_logger.info("Evaluating agent using {} episodes".format(num_eval_episodes))
-
-        agent = utils.Agent.from_internal_model(
-            self.penv_pool.envs[0].observation_space,
-            self.penv_pool.envs[0].action_space,
-            self.model_phase_dir,
-            self.args.cnn_arch, argmax=False,
-            num_envs=min(len(self.penv_pool.envs), num_eval_episodes),
-            embedding_dim=self.args.embedding_dim,
-            use_memory=True, use_text=False)
-
-        agent.acmodel.eval()
-        logs = batch_evaluate(
-            agent,
-            self.penv_pool,
-            episodes=num_eval_episodes,
-            seed=eval_seed,
-            return_obss_actions=return_obss_actions
-        )
-        agent.acmodel.train()
-
-        success_rate = np.mean([1 if r > 0 else 0 for r in logs['return_per_episode']])
-        self.txt_logger.info("success rate: {:.2f}".format(success_rate))
-
-        # Find the seeds for all the failing demos
-        fail_seeds = []
-        fail_obss = []
-        fail_actions = []
-
-        for idx, ret in enumerate(logs["return_per_episode"]):
-            if ret <= 0:
-                fail_seeds.append(logs["seed_per_episode"][idx])
-                if return_obss_actions:
-                    fail_obss.append(logs["observations_per_episode"][idx])
-                    fail_actions.append(logs["actions_per_episode"][idx])
-
-        self.txt_logger.info("{} fails".format(len(fail_seeds)))
-
-        if not return_obss_actions:
-            return success_rate, fail_seeds
-        else:
-            return success_rate, fail_seeds, fail_obss, fail_actions
-
-
     @staticmethod
     def generate_demos(pbot_pool, all_seeds, pause=0.0):
         steps_cnt = 0
@@ -794,34 +743,3 @@ class ImitationLearning(object):
             steps_cnt += np.sum(steps)
 
         return demos, durations, steps_cnt
-
-
-    def grow_training_set(self, eval_seed):
-        """
-        Grow the training set of demonstrations by some factor
-        We specifically generate demos on which the agent fails
-        """
-
-        if self.train_demos:
-            new_train_set_size = int(len(self.train_demos) * self.args.demo_grow_factor)
-        else:
-            new_train_set_size = self.args.start_demos
-        num_new_demos = new_train_set_size - len(self.train_demos)
-
-        self.txt_logger.info("Generating {} new demos".format(num_new_demos))
-
-        # Add new demos until we rearch the new target size
-        while len(self.train_demos) < new_train_set_size:
-            num_new_demos = new_train_set_size - len(self.train_demos)
-
-            # Evaluate the success rate of the model
-            success_rate, fail_seeds = self.evaluate_agent(eval_seed, self.args.eval_episodes)
-            eval_seed += self.args.eval_episodes
-
-            fail_seeds = fail_seeds[:num_new_demos]
-
-            # Generate demos for the worst performing seeds
-            new_demos, _, _ = ImitationLearning.generate_demos(self.pbot_pool, fail_seeds)
-            self.train_demos.extend(new_demos)
-
-        return eval_seed
