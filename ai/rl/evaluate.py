@@ -61,8 +61,8 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
         not_yet_done = np.ones((num_envs,), dtype=bool)
 
         if return_obss_actions:
-            obss = [[] for _ in range(num_envs)]
-            actions = [[] for _ in range(num_envs)]
+            all_obss = [[] for _ in range(num_envs)]
+            all_actions = [[] for _ in range(num_envs)]
 
         ts = time.time()
 
@@ -73,8 +73,8 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
             if return_obss_actions:
                 for i, o, a in zip(active_indices, many_obs, actions):
-                        obss[i].append(o)
-                        actions[i].append(a)
+                    all_obss[i].append(o)
+                    all_actions[i].append(a)
 
             many_obs, reward, terminated, truncated, _ = env.step(actions, active_indices)
             done = np.asarray(terminated) | np.asarray(truncated)
@@ -97,7 +97,7 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
         logs["duration_per_episode"].extend(list(durations))
         logs["seed_per_episode"].extend(list(seeds))
         if return_obss_actions:
-            logs["observations_per_episode"].extend(obss)
-            logs["actions_per_episode"].extend(actions)
+            logs["observations_per_episode"].extend(all_obss)
+            logs["actions_per_episode"].extend(all_actions)
 
     return logs
