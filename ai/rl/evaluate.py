@@ -68,7 +68,7 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
         while np.any(not_yet_done):
             active_indices = np.flatnonzero(not_yet_done)
-            actions = agent.get_actions(many_obs)
+            actions = agent.get_actions(many_obs, active_indices)
             assert len(active_indices) == len(actions) == len(many_obs)
 
             if return_obss_actions:
@@ -78,7 +78,7 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
             many_obs, reward, terminated, truncated, _ = env.step(actions, active_indices)
             done = np.asarray(terminated) | np.asarray(truncated)
-            agent.analyze_feedbacks(reward, done)
+            agent.analyze_feedbacks(reward, done, active_indices)
 
             if pause:
                 time.sleep(pause)
