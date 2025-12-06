@@ -1,7 +1,9 @@
 import numpy as np
 import time
+import torch
 
 from rl.torch_ac.utils import ParallelEnv
+from rl.utils import device
 
 class ManyEnvs(ParallelEnv):
     def __init__(self, penv_pool, *args, **kwargs):
@@ -34,9 +36,9 @@ class ManyEnvs(ParallelEnv):
         raise NotImplementedError
 
 
-# Returns the performance of the agent on the environment for a
-# particular number of episodes.
-def batch_evaluate(agent, penv_pool, seed, episodes,
+# Evaluate the model with a specific number of episodes starting from
+# a seed value
+def batch_evaluate(acmodel, penv_pool, argmax, seed, episodes,
                    return_obss_actions=False, pause=0.0):
     logs = {
         "num_frames_per_episode": [],
@@ -49,6 +51,9 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
     num_envs = min(len(penv_pool.envs), episodes)
     env = ManyEnvs(penv_pool)
+
+    if acmodel.recurrent:
+        memories = torch.zeros(num_envs, acmodel.memory_size, device=device)
 
     for offset in range(0, episodes, num_envs):
         num_envs = min(episodes - offset, num_envs)
@@ -68,7 +73,25 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
         while np.any(not_yet_done):
             active_indices = np.flatnonzero(not_yet_done)
-            actions = agent.get_actions(many_obs, active_indices)
+            with torch.no_grad():
+                preprocessed_obss = preprocess_obss(many_obs, device=device)
+                if acmodel.recurrent:
+                    memories = memories[active_indices]
+                    dist, _, memories = acmodel(preprocessed_obss, memories)
+                    memories[active_indices] = memories
+                else:
+                    dist, _ = acmodel(preprocessed_obss)
+
+                assert len(dist) == self.num_levels
+
+            if self.argmax:
+                actions = dist.probs.max(1, keepdim=True)[1]
+            else:
+                actions = dist.sample()
+
+            # Actions shape (P)
+            actions = actions.cpu().numpy()
+
             assert len(active_indices) == len(actions) == len(many_obs)
 
             if return_obss_actions:
@@ -78,7 +101,6 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
 
             many_obs, reward, terminated, truncated, _ = env.step(actions, active_indices)
             done = np.asarray(terminated) | np.asarray(truncated)
-            agent.analyze_feedbacks(reward, done, active_indices)
 
             if pause:
                 time.sleep(pause)
@@ -86,6 +108,10 @@ def batch_evaluate(agent, penv_pool, seed, episodes,
             # For the next round keep only active observations
             many_obs = np.array(many_obs)[~done]
             just_done_indices = active_indices[done]
+
+            if acmodel.recurrent:
+                # Zero out what's ended
+                memories[just_done_indices] = 0
 
             returns[active_indices] += reward
             num_frames[active_indices] += 1

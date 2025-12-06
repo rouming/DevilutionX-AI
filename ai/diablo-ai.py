@@ -1133,22 +1133,14 @@ def train_ai(args, gameconfig):
             txt_logger.info("Evaluating the model's {} episodes with {} environments".format(
                 args.eval_episodes, num_envs))
 
-            agent = utils.Agent.from_internal_model(
-                penv_pool.envs[0].observation_space,
-                penv_pool.envs[0].action_space,
-                model_dir, args.cnn_arch, argmax=True,
-                num_envs=num_envs,
-                embedding_dim=args.embedding_dim,
-                use_memory=True, use_text=False)
-
-            # Setting the agent model to the current model
-            agent.acmodel = acmodel
-            agent.acmodel.eval()
+            # Evaluate on the current model
+            acmodel.eval()
             start_time = time.time()
-            vlogs = batch_evaluate(agent, penv_pool, args.eval_seed,
-                                   args.eval_episodes)
+            vlogs = batch_evaluate(acmodel, penv_pool, argmax=True,
+                                   seed=args.eval_seed,
+                                   episodes=args.eval_episodes)
             elapsed_time = time.time() - start_time
-            agent.acmodel.train()
+            acmodel.train()
 
             returns = vlogs['return_per_episode']
             success_rate = np.mean([1 if r > 0 else 0 for r in returns])
@@ -1417,16 +1409,21 @@ def play_ai(args, gameconfig):
 
     print(f"Environments are loaded\n")
 
-    agent = utils.Agent.from_internal_model(
-        penv_pool.envs[0].observation_space,
-        penv_pool.envs[0].action_space,
-        model_dir, args.cnn_arch, best=args.best,
-        argmax=args.argmax, num_envs=num_envs,
-        embedding_dim=args.embedding_dim,
-        use_memory=True, use_text=False)
+    obs_space = penv_pool.envs[0].observation_space
+    action_space = penv_pool.envs[0].action_space
 
-    logs = batch_evaluate(agent, penv_pool, args.seed, args.episodes_int,
-                          pause=args.pause)
+    obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
+    acmodel = ACModel(obs_space, action_space, args.cnn_arch,
+                      embedding_dim=args.embedding_dim,
+                      use_memory=True, use_text=False)
+    acmodel.load_state_dict(utils.get_model_state(model_dir, best=args.best))
+    acmodel.to(device)
+    acmodel.eval()
+    if hasattr(preprocess_obss, "vocab"):
+        preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
+
+    logs = batch_evaluate(acmodel, penv_pool, args.argmax, args.seed,
+                          args.episodes_int, pause=args.pause)
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']

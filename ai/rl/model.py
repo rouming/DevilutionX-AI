@@ -529,9 +529,9 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
                 # memory: B x M
                 mask = (obs.instr != 0).float()
                 embed_text = embed_text[:, :mask.shape[1]]
-                # If memory is zeroed out (episone is done, see the
-                # analyze_feedback()) keys will be near-zero if
-                # self.memory2key is a Linear layer with no bias
+                # If memory is zeroed out (episone is done) keys will
+                # be near-zero if self.memory2key is a Linear layer
+                # with no bias
                 keys = self.memory2key(memory)
                 # When keys are near-zero (memory is zeroed out)
                 # pre_softmax becomes almost uniform across non-zero
