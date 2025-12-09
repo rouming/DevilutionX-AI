@@ -1,22 +1,23 @@
 import multiprocessing
-import gymnasium as gym
 
 
 def worker(conn, env):
     while True:
         cmd, data = conn.recv()
         if cmd == "step":
-            result = env.step(data)
-            terminated, truncated = result[2:4]
-            if terminated or truncated:
-                # Be careful here - the last observation is returned
-                # right after reset, not the actual observation that
-                # causes termination. This should not cause any
-                # harm for training because the algorithm does not
-                # actually use the next observation when done=True.
-                # See @ParallelEnv.step()
-                obs, _ = env.reset()
-                result = (obs,) + result[1:]
+            action, auto_reset = data
+            result = env.step(action)
+            if auto_reset:
+                terminated, truncated = result[2:4]
+                if terminated or truncated:
+                    # Be careful here - the last observation is returned
+                    # right after reset, not the actual observation that
+                    # causes termination. This should not cause any
+                    # harm for training because the algorithm does not
+                    # actually use the next observation when done=True.
+                    # See @ParallelEnv.step()
+                    obs, _ = env.reset()
+                    result = (obs,) + result[1:]
 
             conn.send(result)
         elif cmd == "reset":
@@ -41,46 +42,85 @@ class ParallelEnvPool:
             remote.close()
 
 
-class ParallelEnv(gym.Env):
+class ParallelEnv:
     """A concurrent execution of environments in multiple processes."""
 
-    def __init__(self, penv_pool, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, penv_pool, auto_reset=False):
         self.p = penv_pool
+        self.auto_reset = auto_reset
 
-        # For bot environment spaces are missing
-        if hasattr(self.p.envs[0], 'observation_space'):
-            self.observation_space = self.p.envs[0].observation_space
-        if hasattr(self.p.envs[0], 'action_space'):
-            self.action_space = self.p.envs[0].action_space
 
-    def reset(self, seeds=None):
-        if seeds is not None:
-            assert len(seeds) and len(seeds) <= len(self.p.envs)
-        else:
+    def ext_reset(self, seeds=None, active_indices=None):
+        if seeds is None and active_indices is None:
             seeds = [None] * len(self.p.envs)
+            active_indices = range(0, len(self.p.envs))
+        elif seeds is None and active_indices is not None:
+            assert len(active_indices)
+            seeds = [None] * len(active_indices)
+        elif seeds is not None and active_indices is None:
+            assert len(seeds) == len(self.p.envs)
+            active_indices = range(0, len(self.p.envs))
+        elif seeds is not None and active_indices is not None:
+            assert len(active_indices)
+            assert len(seeds) == len(active_indices)
+            assert len(active_indices) <= len(self.p.envs)
+        else:
+            assert 0, "Unknown seeds/active_indices combination"
 
-        for local, seed in zip(self.p.locals, seeds[1:]):
-            local.send(("reset", seed))
+        for i, ind in enumerate(active_indices):
+            if ind > 0:
+                local, seed = self.p.locals[ind - 1], seeds[i]
+                local.send(("reset", seed))
 
-        results = [self.p.envs[0].reset(seed=seeds[0])] + \
-            [local.recv() for local, _ in zip(self.p.locals, seeds[1:])]
+        results = []
+        for i, ind in enumerate(active_indices):
+            if ind == 0:
+                result = self.p.envs[0].reset(seed=seeds[i])
+            else:
+                local = self.p.locals[ind - 1]
+                result = local.recv()
+            results.append(result)
+
         return zip(*results)
 
-    def step(self, actions):
-        assert len(actions) and len(actions) <= len(self.p.envs)
 
-        for local, action in zip(self.p.locals, actions[1:]):
-            local.send(("step", action))
+    def ext_step(self, actions, active_indices=None):
+        if active_indices is None:
+            assert len(actions) == len(self.p.envs)
+            active_indices = range(0, len(self.p.envs))
+        else:
+            assert active_indices is not None and len(active_indices)
+            assert len(actions) == len(active_indices)
+            assert len(active_indices) <= len(self.p.envs)
 
-        result = self.p.envs[0].step(actions[0])
-        terminated, truncated = result[2:4]
-        if terminated or truncated:
-            # See the comment in @worker above
-            obs, _ = self.p.envs[0].reset()
-            result = (obs,) + result[1:]
+        for i, ind in enumerate(active_indices):
+            if ind > 0:
+                local, action = self.p.locals[ind - 1], actions[i]
+                local.send(("step", (action, self.auto_reset)))
 
-        return zip(*[result] + [local.recv() for local, _ in zip(self.p.locals, actions[1:])])
+        results = []
+        for i, ind in enumerate(active_indices):
+            if ind == 0:
+                result = self.p.envs[0].step(actions[i])
+                obs, _, terminated, truncated, info = result
+                if self.auto_reset and (terminated or truncated):
+                    # See the comment in @worker above
+                    obs, _ = self.p.envs[0].reset()
+            else:
+                local = self.p.locals[ind - 1]
+                result = local.recv()
+                obs, _, terminated, truncated, info = result
+
+            # HRL-aware rewards with the shape (P, L) and a special
+            # opt-changed flag
+            reward = info["hierarchy/rewards"]
+            opt_changed = info["hierarchy/opt-changed"]
+
+            result = obs, reward, terminated, truncated, info, opt_changed
+            results.append(result)
+
+        return zip(*results)
+
 
     def render(self):
         raise NotImplementedError
