@@ -1,6 +1,7 @@
 import multiprocessing
 import gymnasium as gym
 
+from rl import utils
 
 def worker(conn, env):
     while True:
@@ -20,7 +21,10 @@ def worker(conn, env):
 
             conn.send(result)
         elif cmd == "reset":
-            obs, info = env.reset(seed=data)
+            seed = data
+            if seed is not None:
+                utils.seed(seed)
+            obs, info = env.reset(seed=seed)
             conn.send((obs, info))
         else:
             raise NotImplementedError
@@ -62,6 +66,9 @@ class ParallelEnv(gym.Env):
 
         for local, seed in zip(self.p.locals, seeds[1:]):
             local.send(("reset", seed))
+
+        if seeds[0] is not None:
+            utils.seed(seeds[0])
 
         results = [self.p.envs[0].reset(seed=seeds[0])] + \
             [local.recv() for local, _ in zip(self.p.locals, seeds[1:])]
