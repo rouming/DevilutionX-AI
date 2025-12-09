@@ -1439,11 +1439,13 @@ def play_ai(args, gameconfig):
     durations = logs['duration_per_episode']
     seeds = logs['seed_per_episode']
 
-    for f, d, r, s in zip(frames, durations, returns, seeds):
-        success = np.all(np.array(r) > 0.0)
+    # Sort by seed
+    z = sorted(zip(frames, durations, returns, seeds), key=lambda x: x[3])
+    for f, d, r, s in z:
+        success = np.all(np.asarray(r) > 0.0)
         print(f"seed {s:2d} | {'success' if success else 'failure'} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
 
-    success_rate = np.mean([1 if np.all(np.array(r) > 0.0) else 0 for r in returns])
+    success_rate = np.mean([1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns])
     print(f"average success rate {success_rate:.2f} for {args.episodes_int} episodes")
 
     return 0

@@ -62,7 +62,7 @@ class BaseAlgo(ABC):
 
         # Store parameters
 
-        self.env = ParallelEnv(penv_pool)
+        self.env = ParallelEnv(penv_pool, auto_reset=True)
         self.acmodel = acmodel
         self.device = device
         self.num_levels = num_levels
@@ -100,7 +100,7 @@ class BaseAlgo(ABC):
         # (T, P, L)
         shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
 
-        self.obs, _ = self.env.reset()
+        self.obs, _ = self.env.ext_reset()
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
@@ -161,10 +161,10 @@ class BaseAlgo(ABC):
             # (P, L)
             actions = torch.stack([d.sample() for d in dist], dim=1)
 
-            obs, reward, terminated, truncated, info = self.env.step(actions.cpu().numpy())
+            obs, reward, terminated, truncated, _, opt_changed = \
+                self.env.ext_step(actions.cpu().numpy())
             assert reward.shape == (self.num_procs, self.num_levels)
             done = tuple(a | b for a, b in zip(terminated, truncated))
-            opt_changed = tuple(i["hierarchy/opt-changed"] for i in info)
 
             # Update experiences values
 
