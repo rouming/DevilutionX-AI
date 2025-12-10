@@ -161,10 +161,11 @@ class BaseAlgo(ABC):
             # (P, L)
             actions = torch.stack([d.sample() for d in dist], dim=1)
 
-            obs, reward, terminated, truncated, _, opt_changed = \
+            obs, reward, terminated, truncated, info = \
                 self.env.ext_step(actions.cpu().numpy())
             assert reward.shape == (self.num_procs, self.num_levels)
-            done = tuple(a | b for a, b in zip(terminated, truncated))
+            done = np.logical_or(terminated, truncated)
+            opt_changed = np.array([inf["hierarchy/opt-changed"] for inf in info], dtype=bool)
 
             # Update experiences values
 

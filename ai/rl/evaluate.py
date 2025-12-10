@@ -4,6 +4,7 @@ import torch
 
 from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
+from rl.utils import sample_categorical_stateless
 
 class ManyEnvs(ParallelEnv):
     def __init__(self, penv_pool, *args, **kwargs):
@@ -39,11 +40,13 @@ class ManyEnvs(ParallelEnv):
 # Evaluate the model with a specific number of episodes starting from
 # a seed value
 def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
-                   episodes, pause=0.0):
+                   episodes, return_obss_actions=False, pause=0.0):
     logs = {
         "num_frames_per_episode": [],
         "return_per_episode": [],
         "duration_per_episode": [],
+        "observations_per_episode": [],
+        "actions_per_episode": [],
         "seed_per_episode": []
     }
 
@@ -58,9 +61,13 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
     timestamps = np.zeros((num_envs,), dtype=float)
     running_envs = np.ones((num_envs,), dtype=bool)
 
-    seeds = np.arange(seed, seed + num_envs, dtype=int)
+    seeds = torch.arange(seed, seed + num_envs, dtype=int, device=device)
     max_seed = seed + episodes
     next_seed = seed + num_envs
+
+    if return_obss_actions:
+        log_obss = [[] for _ in range(num_envs)]
+        log_actions = [[] for _ in range(num_envs)]
 
     timestamps[:] = time.time()
 
@@ -68,8 +75,10 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         memories = torch.zeros(num_envs, acmodel.memory_size, device=device)
 
     active_indices = np.flatnonzero(running_envs)
-    obss, _ = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
+    obss, info = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
     obss = np.asarray(obss)
+    if not argmax:
+        stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
 
     while np.any(running_envs):
         active_indices = np.flatnonzero(running_envs)
@@ -85,27 +94,40 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
 
             assert len(dist) == num_levels
 
-        # Actions shape (P, L)
+        # Distributions shape (L, P) -> actions shape (P, L)
         if argmax:
             actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
         else:
-            actions = torch.stack([d.sample() for d in dist], dim=1)
+            # We use stateless and deterministic categorical sampling
+            aseeds = seeds[active_indices]
+            astats = stats[active_indices]
+            astats = (astats[:, 0], astats[:, 1])
+            actions = torch.stack([deterministic_sample(d.probs, seed, aseeds, *astats)
+                                   for d in dist], dim=1)
 
         actions = actions.cpu().numpy()
 
         assert len(active_indices) == len(actions) == len(obs)
         assert actions.shape[1] == num_levels
 
-        obs, reward, terminated, truncated, _, _ = env.ext_step(actions, active_indices)
-        done = np.asarray(terminated) | np.asarray(truncated)
+        if return_obss_actions:
+            for i, o, a in zip(active_indices, obs, actions):
+                log_obss[i].append(o)
+                log_actions[i].append(a)
+
+        obs, reward, terminated, truncated, info = env.ext_step(actions, active_indices)
+        done = np.logical_or(terminated, truncated)
 
         returns[active_indices] += reward
         obss[active_indices] = obs
         num_frames[active_indices] += 1
+        if not argmax:
+            st = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
+            stats[active_indices] = st
 
         just_done_indices = active_indices[done]
 
-        if just_done_indices.size:
+        if len(just_done_indices):
             done_num_frames = num_frames[just_done_indices]
             done_returns = returns[just_done_indices]
             done_durations = time.time() - timestamps[just_done_indices]
@@ -116,19 +138,31 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             logs["duration_per_episode"].extend(done_durations.tolist())
             logs["seed_per_episode"].extend(done_seeds.tolist())
 
-            end_seed = min(max_seed, next_seed + just_done_indices.size)
-            new_seeds = np.arange(next_seed, end_seed, dtype=int)
+            if return_obss_actions:
+                for i in just_done_indices:
+                    logs["observations_per_episode"].append(log_obss[i])
+                    logs["actions_per_episode"].append(log_actions[i])
+                    log_obss[i] = []
+                    log_actions[i] = []
+
+            end_seed = min(max_seed, next_seed + len(just_done_indices))
+            new_seeds = torch.arange(next_seed, end_seed, dtype=int, device=device)
             next_seed = end_seed
 
-            nr_restart = new_seeds.size
+            nr_restart = len(new_seeds)
 
             restart_indices = just_done_indices[:nr_restart]
             finished_indices = just_done_indices[nr_restart:]
             running_envs[finished_indices] = False
 
-            if restart_indices.size:
-                reset_obs, _ = env.ext_reset(seeds=new_seeds.tolist(), active_indices=restart_indices)
-                obss[restart_indices] = reset_obs
+            if len(restart_indices):
+                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), active_indices=restart_indices)
+
+                if not argmax:
+                    new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
+                    stats[restart_indices] = new_stats
+
+                obss[restart_indices] = new_obs
                 seeds[restart_indices] = new_seeds
                 timestamps[restart_indices] = time.time()
                 num_frames[restart_indices] = 0

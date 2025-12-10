@@ -4,7 +4,6 @@ import torch
 import logging
 import sys
 
-import rl.utils as utils
 from .other import device
 
 

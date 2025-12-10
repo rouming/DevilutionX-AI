@@ -8,7 +8,7 @@ def worker(conn, env):
             action, auto_reset = data
             result = env.step(action)
             if auto_reset:
-                terminated, truncated = result[2:4]
+                obs, reward, terminated, truncated, info = result
                 if terminated or truncated:
                     # Be careful here - the last observation is returned
                     # right after reset, not the actual observation that
@@ -16,8 +16,9 @@ def worker(conn, env):
                     # harm for training because the algorithm does not
                     # actually use the next observation when done=True.
                     # See @ParallelEnv.step()
-                    obs, _ = env.reset()
-                    result = (obs,) + result[1:]
+                    obs, reset_info = env.reset()
+                    info |= reset_info
+                    result = (obs, reward, terminated, truncated, info)
 
             conn.send(result)
         elif cmd == "reset":
@@ -105,18 +106,17 @@ class ParallelEnv:
                 obs, _, terminated, truncated, info = result
                 if self.auto_reset and (terminated or truncated):
                     # See the comment in @worker above
-                    obs, _ = self.p.envs[0].reset()
+                    obs, reset_info = self.p.envs[0].reset()
+                    info |= reset_info
             else:
                 local = self.p.locals[ind - 1]
                 result = local.recv()
                 obs, _, terminated, truncated, info = result
 
-            # HRL-aware rewards with the shape (P, L) and a special
-            # opt-changed flag
+            # HRL-aware rewards with the shape (P, L)
             reward = info["hierarchy/rewards"]
-            opt_changed = info["hierarchy/opt-changed"]
 
-            result = obs, reward, terminated, truncated, info, opt_changed
+            result = obs, reward, terminated, truncated, info
             results.append(result)
 
         return zip(*results)
