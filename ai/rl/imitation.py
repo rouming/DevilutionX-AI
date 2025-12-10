@@ -771,6 +771,7 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
+                #XXX put true-action into info
                 _, _, terminated, _, _, action = \
                     env.step(dummy_actions, active_indices)
                 done = np.asarray(terminated)

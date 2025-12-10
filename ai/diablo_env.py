@@ -161,6 +161,7 @@ class DiabloEnv(gym.Env):
             raise ValueError("game must be provided!")
         # No hierarchy
         self.num_levels = 1
+        self.resets_cnt = 0
         self.config = env_config
         self.game = game
         self.seed = self.config['seed']
@@ -277,6 +278,15 @@ class DiabloEnv(gym.Env):
             seed_data = (1, seed)
             self.seed = seed
 
+        if seed is not None or self.config.get("fixed-seed", False):
+            self.resets_cnt = 0
+        else:
+            # When a seed is not available, we need to distinguish
+            # between two resets to perform different probability
+            # sampling. See utils.sample_categorical_stateless() and
+            # its callers for details
+            self.resets_cnt += 1
+
         if self.paused:
             # Resume first
             self.pause_game(False)
@@ -334,7 +344,8 @@ class DiabloEnv(gym.Env):
         self.start_dungeon_level = d.player.plrlevel
 
         obss = {"env": env, "env-status": env_status}
-        return obss, {}
+        info = {"stats": (self.resets_cnt, self.steps_cnt)}
+        return obss, info
 
     def is_agent_timedout(self):
         # Should cover most of the cases
@@ -599,7 +610,8 @@ class DiabloEnv(gym.Env):
 
         obss = {"env": env, "env-status": env_status}
         info = {"hierarchy/opt-changed": False,
-                "hierarchy/rewards": [reward]}
+                "hierarchy/rewards": [reward],
+                "stats": (self.resets_cnt, self.steps_cnt)}
         return obss, reward, done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
