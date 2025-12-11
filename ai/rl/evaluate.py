@@ -111,8 +111,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         assert actions.shape[1] == num_levels
 
         if return_obss_actions:
-            for i, o, a in zip(active_indices, obs, actions):
-                log_obss[i].append(o)
+            for i, o, a, p in zip(active_indices, obs, actions, dist[0].probs):
+                log_obss[i].append((o, p))
                 log_actions[i].append(a)
 
         obs, reward, terminated, truncated, info = env.ext_step(actions, active_indices)

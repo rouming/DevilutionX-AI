@@ -1432,12 +1432,39 @@ def play_ai(args, gameconfig):
         preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
     logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
-                          args.seed, args.episodes_int, pause=args.pause)
+                          args.seed, args.episodes_int,
+                          #XXX
+                          return_obss_actions=True,
+                          pause=args.pause)
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']
     durations = logs['duration_per_episode']
     seeds = logs['seed_per_episode']
+
+    #XXX
+    if True:
+        log_seeds = logs['seed_per_episode']
+        log_obss = logs['observations_per_episode']
+        log_actions = logs['actions_per_episode']
+
+        for o, a, s in zip(log_obss, log_actions, log_seeds):
+            if s != 3:
+                continue
+            state = {
+                'seed': s,
+                'obss': o,
+                'actions': a
+            }
+
+            fn = f"seed-{s}-{len(a)}.pkl"
+            print(f"Saved obss {len(o)}, actions {len(a)} into the {fn}")
+
+            import pickle
+            with open(fn, "wb") as f:
+                pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+            break
+
 
     # Sort by seed
     z = sorted(zip(frames, durations, returns, seeds), key=lambda x: x[3])
