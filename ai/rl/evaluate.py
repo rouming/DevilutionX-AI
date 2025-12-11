@@ -4,37 +4,7 @@ import torch
 
 from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
-from rl.utils import sample_categorical_stateless
-
-class ManyEnvs(ParallelEnv):
-    def __init__(self, penv_pool, *args, **kwargs):
-        super().__init__(penv_pool, *args, **kwargs)
-
-    def reset(self, seeds=None):
-        results = super().reset(seeds=seeds)
-        return results
-
-    def step(self, actions, active_indices):
-        assert len(actions) == len(active_indices)
-
-        for i, ind in enumerate(active_indices):
-            if ind > 0:
-                local, action = self.p.locals[ind - 1], actions[i]
-                local.send(("step", action))
-
-        results = []
-        for i, ind in enumerate(active_indices):
-            if ind == 0:
-                result = self.p.envs[0].step(actions[i])
-            else:
-                local = self.p.locals[ind - 1]
-                result = local.recv()
-            results.append(result)
-
-        return zip(*results)
-
-    def render(self):
-        raise NotImplementedError
+from rl.utils import deterministic_sample
 
 
 # Evaluate the model with a specific number of episodes starting from

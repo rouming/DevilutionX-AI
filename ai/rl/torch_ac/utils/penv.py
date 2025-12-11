@@ -103,7 +103,7 @@ class ParallelEnv:
         for i, ind in enumerate(active_indices):
             if ind == 0:
                 result = self.p.envs[0].step(actions[i])
-                obs, _, terminated, truncated, info = result
+                obs, reward, terminated, truncated, info = result
                 if self.auto_reset and (terminated or truncated):
                     # See the comment in @worker above
                     obs, reset_info = self.p.envs[0].reset()
@@ -111,10 +111,7 @@ class ParallelEnv:
             else:
                 local = self.p.locals[ind - 1]
                 result = local.recv()
-                obs, _, terminated, truncated, info = result
-
-            # HRL-aware rewards with the shape (P, L)
-            reward = info["hierarchy/rewards"]
+                obs, reward, terminated, truncated, info = result
 
             result = obs, reward, terminated, truncated, info
             results.append(result)

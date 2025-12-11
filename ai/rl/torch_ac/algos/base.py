@@ -165,10 +165,13 @@ class BaseAlgo(ABC):
             # (P, L)
             actions = torch.stack([d.sample() for d in dist], dim=1)
 
-            obs, reward, terminated, truncated, info = \
+            obs, _, terminated, truncated, info = \
                 self.env.ext_step(actions.cpu().numpy())
-            assert reward.shape == (self.num_procs, self.num_levels)
             done = np.logical_or(terminated, truncated)
+            # HRL-aware rewards with the shape (P, L)
+            reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+            assert reward.shape == (self.num_procs, self.num_levels)
+            # HRL-aware opt-changed flag with the shape (P,)
             opt_changed = np.array([inf["hierarchy/opt-changed"] for inf in info], dtype=bool)
 
             # Update experiences values
