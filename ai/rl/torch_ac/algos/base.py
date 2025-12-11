@@ -22,8 +22,10 @@ from rl.torch_ac.utils import DictList, ParallelEnv
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, penv_pool, acmodel, device, num_levels, num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
-                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss, reshape_reward):
+    def __init__(self, penv_pool, seeds, acmodel, device, num_levels,
+                 num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+                 value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
+                 reshape_reward):
         """
         Initializes a `BaseAlgo` instance.
 
@@ -31,6 +33,8 @@ class BaseAlgo(ABC):
         ----------
         penv_pool : ParallelEnvPool
             a pool of environments
+        seeds : list
+            a list of initial environment seeds
         acmodel : torch.Module
             the model
         num_levels : int
@@ -100,7 +104,7 @@ class BaseAlgo(ABC):
         # (T, P, L)
         shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
 
-        self.obs, _ = self.env.ext_reset()
+        self.obs, _ = self.env.ext_reset(seeds=seeds)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)

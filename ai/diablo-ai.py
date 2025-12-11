@@ -77,7 +77,7 @@ def make_diablo_parser():
                      '--step-mode',
                      '--no-monsters',
                      '--harmless-barrels',
-                     '--seed',
+                     '--seed-base',
                      '--fixed-seed']
     }
 
@@ -130,14 +130,17 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--harmless-barrels", action="store_true",
         help="Disable explosive barrels, urns, or pods")
-    # See also `incompatible_options`
     common_parser.add_argument(
         "--seed", type=int, default=0,
-        help="Initial seed (default: 0).")
+        help="Initial global experiment seed (controls PyTorch, numpy, RNGs, etc) (default: 0)")
+    # See also `incompatible_options`
+    common_parser.add_argument(
+        "--seed-base", type=int, default=0,
+        help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
     # See also `incompatible_options`
     common_parser.add_argument(
         "--fixed-seed", action="store_true",
-        help="Every new game starts with the same seed, so the game world (dungeon) is identical each time.")
+        help="Every new game starts with the same initial seed, so the game world (dungeon) is identical each environment reset")
 
     #
     # sprout: reuse sprout's parser
@@ -981,7 +984,6 @@ def train_ai(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1034,10 +1036,11 @@ def train_ai(args, gameconfig):
     txt_logger.info("{}\n".format(acmodel))
 
     # Load algo
+    seeds = range(args.seed_base, args.seed_base + len(penv_pool.envs))
     reshape_reward = None
 
     if args.algo == "a2c":
-        algo = torch_ac.A2CAlgo(penv_pool, acmodel, device,
+        algo = torch_ac.A2CAlgo(penv_pool, seeds, acmodel, device,
                                 args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
@@ -1046,7 +1049,7 @@ def train_ai(args, gameconfig):
                                 args.optim_alpha, args.optim_eps,
                                 preprocess_obss, reshape_reward)
     elif args.algo == "ppo":
-        algo = torch_ac.PPOAlgo(penv_pool, acmodel, device,
+        algo = torch_ac.PPOAlgo(penv_pool, seeds, acmodel, device,
                                 args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
@@ -1224,7 +1227,7 @@ def demos_il(args, gameconfig):
 
     txt_logger.info("Bots are loaded\n")
 
-    seed = args.seed
+    seed = args.seed_base
 
     validation = hasattr(args, 'for-validation')
     demos_path = utils.get_demos_path(demos_dir, args.env, valid=validation)
@@ -1325,7 +1328,6 @@ def train_il(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1398,7 +1400,6 @@ def play_ai(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1432,7 +1433,7 @@ def play_ai(args, gameconfig):
         preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
     logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
-                          args.seed, args.episodes_int, pause=args.pause)
+                          args.seed_base, args.episodes_int, pause=args.pause)
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']
@@ -1463,7 +1464,6 @@ def play_bot(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
-        env_config['seed'] += i
 
         # Run or attach to Diablo (devilutionX) instance
         game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -1479,7 +1479,7 @@ def play_bot(args, gameconfig):
 
     print(f"Bots are loaded\n")
 
-    seeds = range(args.seed, args.seed + args.episodes_int)
+    seeds = range(args.seed_base, args.seed_base + args.episodes_int)
     demos, durations, num_frames = \
         ImitationLearning.generate_demos(pbot_pool, seeds, pause=args.pause)
 
@@ -1541,7 +1541,8 @@ def main():
         "diablo-bin-path": diablo_bin_path,
 
         # Common
-        "seed": args.seed,
+        "seed": args.seed_base, # Likely will be overridden by subsequent env reset
+        "fixed-seed": args.fixed_seed,
         "no-monsters": args.no_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
@@ -1551,8 +1552,6 @@ def main():
         "gui": args.gui,
 
         # AI
-        "fixed-seed": args.fixed_seed \
-            if hasattr(args, "fixed_seed") else False,
         "log-to-stdout": args.log_to_stdout \
             if hasattr(args, "log_to_stdout") else False,
         "no-actions": args.no_actions \

@@ -115,7 +115,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
                 log_obss[i].append(o)
                 log_actions[i].append(a)
 
-        obs, reward, terminated, truncated, info = env.ext_step(actions, active_indices)
+        obs, _, terminated, truncated, info = env.ext_step(actions, active_indices)
         done = np.logical_or(terminated, truncated)
 
         returns[active_indices] += reward

@@ -610,7 +610,7 @@ class DiabloEnv(gym.Env):
 
         obss = {"env": env, "env-status": env_status}
         info = {"hierarchy/opt-changed": False,
-                "hierarchy/rewards": [reward],
+                "hierarchy/reward": [reward],
                 "stats": (self.resets_cnt, self.steps_cnt)}
         return obss, reward, done, truncated, info
 
