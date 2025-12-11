@@ -572,6 +572,7 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
             embedding = torch.cat((embedding, embed_text), dim=1)
 
         x = self.actor(embedding)
+        x_logits = x
         dist = Categorical(logits=F.log_softmax(x, dim=1))
 
         x = self.critic(embedding)
@@ -580,7 +581,7 @@ class ACModel(nn.Module, torch_ac.RecurrentACModel):
         # Distribution is a list of categorical objects for each level
         # (L is 1 for this model), and the value is expected to be in
         # the (P, L) shape.
-        return [dist], value, memory
+        return x_logits, [dist], value, memory
 
     def _get_embed_text(self, text):
         _, hidden = self.text_rnn(self.word_embedding(text))

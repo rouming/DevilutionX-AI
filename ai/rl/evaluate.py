@@ -87,10 +87,10 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             preprocessed_obss = preprocess_obss(obs, device=device)
             if acmodel.recurrent:
                 memory = memories[active_indices]
-                dist, _, memory = acmodel(preprocessed_obss, memory)
+                logits, dist, _, memory = acmodel(preprocessed_obss, memory)
                 memories[active_indices] = memory
             else:
-                dist, _ = acmodel(preprocessed_obss)
+                logits, dist, _ = acmodel(preprocessed_obss)
 
             assert len(dist) == num_levels
 
@@ -111,8 +111,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         assert actions.shape[1] == num_levels
 
         if return_obss_actions:
-            for i, o, a, p in zip(active_indices, obs, actions, dist[0].probs):
-                log_obss[i].append((o, p))
+            for i, o, a, p, l in zip(active_indices, obs, actions, dist[0].probs.cpu().numpy(), logits.cpu().numpy()):
+                log_obss[i].append((o, p, l))
                 log_actions[i].append(a)
 
         obs, reward, terminated, truncated, info = env.ext_step(actions, active_indices)
