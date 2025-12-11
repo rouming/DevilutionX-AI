@@ -1,3 +1,4 @@
+import bisect
 import datetime
 import numpy as np
 import os
@@ -6,9 +7,9 @@ import time
 import torch
 
 from rl import utils
-from rl.evaluate import ManyEnvs
 from rl.evaluate import batch_evaluate
 from rl.model import ACModel
+from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
 import sprout
 
@@ -24,12 +25,10 @@ class BotEnv:
 
     def step(self, dummy_action):
         done, action = self.bot.step()
-        # Be aware of differences from the original environment step
-        # API call convention: dummy action is not used (bot knows how
-        # to act), but a true action from bot is returned as a last
-        # tuple element. Bot `done` flag is returned as a termination
-        # flag.
-        return None, None, done, False, None, action
+        # true action from a bot is returned as part of the info dict,
+        # the bot `done` flag is returned as a termination flag
+        info = {"true-action": action}
+        return None, None, done, False, info
 
 class EpochIndexSampler:
     """
@@ -353,7 +352,7 @@ class ImitationLearning(object):
         inds = [0]
 
         num_envs = min(len(self.penv_pool.envs), len(batch))
-        env = ManyEnvs(self.penv_pool)
+        env = ParallelEnv(self.penv_pool)
 
         # Generate observations based on true actions from demos.
         # Similar to collect experiences step for regular PPO
@@ -753,46 +752,74 @@ class ImitationLearning(object):
         durations = []
 
         num_envs = min(len(pbot_pool.envs), len(all_seeds))
-        env = ManyEnvs(pbot_pool)
+        env = ParallelEnv(pbot_pool)
 
-        for offset in range(0, len(all_seeds), num_envs):
-            size = min(len(all_seeds) - offset, num_envs)
-            seeds = all_seeds[offset: offset + size]
-            durs = np.zeros((size,), dtype=float)
+        # (P, ) shape
+        timestamps = np.zeros((num_envs,), dtype=float)
+        actions = [[] for _ in range(num_envs)]
+        running_envs = np.ones((num_envs,), dtype=bool)
 
-            _, _ = env.reset(seeds=seeds)
+        seeds = np.array(all_seeds[:num_envs])
+        max_seed_i = len(all_seeds)
+        next_seed_i = num_envs
 
-            actions = [[] for _ in range(size)]
-            steps = np.zeros((size,), dtype=int)
-            not_yet_done = np.ones((size,), dtype=bool)
+        timestamps[:] = time.time()
 
-            ts = time.time()
+        active_indices = np.flatnonzero(running_envs)
+        _, _ = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
 
-            while np.any(not_yet_done):
-                active_indices = np.flatnonzero(not_yet_done)
-                dummy_actions = np.zeros(active_indices.shape, dtype=int)
-                #XXX put true-action into info
-                _, _, terminated, _, _, action = \
-                    env.step(dummy_actions, active_indices)
-                done = np.asarray(terminated)
+        while np.any(running_envs):
+            active_indices = np.flatnonzero(running_envs)
+            dummy_actions = np.zeros(active_indices.shape, dtype=int)
+            _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
+            done = np.asarray(terminated)
+            true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
 
-                if pause:
-                    time.sleep(pause)
+            for i, d, a in zip(active_indices, done, true_action):
+                if d:
+                    # Skip last NOOP action, thus all active indices except done
+                    continue
+                actions[i].append(a)
+                steps_cnt += 1
 
-                for i, a, d in zip(active_indices, action, done):
-                    # Skip last NOOP action
-                    if not d:
-                        actions[i].append(a)
-                        steps[i] += 1
+            # Skip last NOOP action, thus all active indices except done
+            #not_done_indices = active_indices[~done]
+            #for i in not_done_indices:
+            #    actions[i].append(true_action[i])
+            #steps_cnt += len(not_done_indices)
 
-                just_done_indices = active_indices[done]
-                durs[just_done_indices] = time.time() - ts
-                not_yet_done[just_done_indices] = False
+            just_done_indices = active_indices[done]
 
-            durations.extend(durs.tolist())
-            for seed_, actions_ in zip(seeds, actions):
-                demos.append((seed_, actions_))
+            if len(just_done_indices):
+                done_durations = time.time() - timestamps[just_done_indices]
+                durations.extend(done_durations.tolist())
+                for i in just_done_indices:
+                    demos.append((seeds[i], actions[i]))
 
-            steps_cnt += np.sum(steps)
+                new_seeds = all_seeds[next_seed_i: next_seed_i + len(just_done_indices)]
+                next_seed_i += len(just_done_indices)
+
+                nr_restart = len(new_seeds)
+
+                restart_indices = just_done_indices[:nr_restart]
+                finished_indices = just_done_indices[nr_restart:]
+                running_envs[finished_indices] = False
+
+                if len(restart_indices):
+                    _, _ = env.ext_reset(seeds=new_seeds, active_indices=restart_indices)
+
+                    seeds[restart_indices] = new_seeds
+                    timestamps[restart_indices] = time.time()
+                    for i in restart_indices:
+                        actions[i] = []
+
+            if pause:
+                time.sleep(pause)
+
+        # Keep demos and durations sorted by seed
+        sort_by_seed = lambda x: x[0]
+        order = [i for i, _ in sorted(enumerate(demos), key=lambda v: v[1][0])]
+        demos = [demos[i] for i in order]
+        durations = [durations[i] for i in order]
 
         return demos, durations, steps_cnt
