@@ -6,6 +6,7 @@ import time
 import torch
 
 from rl import utils
+from rl.torch_ac.utils import ParallelEnv
 from rl.evaluate import ManyEnvs
 from rl.evaluate import batch_evaluate
 from rl.model import ACModel
@@ -24,12 +25,10 @@ class BotEnv:
 
     def step(self, dummy_action):
         done, action = self.bot.step()
-        # Be aware of differences from the original environment step
-        # API call convention: dummy action is not used (bot knows how
-        # to act), but a true action from bot is returned as a last
-        # tuple element. Bot `done` flag is returned as a termination
-        # flag.
-        return None, None, done, False, None, action
+        # true action from a bot is returned as part of the info dict,
+        # the bot `done` flag is returned as a termination flag
+        info = {"true-action": action}
+        return None, None, done, False, info
 
 class EpochIndexSampler:
     """
@@ -353,7 +352,7 @@ class ImitationLearning(object):
         inds = [0]
 
         num_envs = min(len(self.penv_pool.envs), len(batch))
-        env = ManyEnvs(self.penv_pool)
+        env = ParallelEnv(self.penv_pool)
 
         # Generate observations based on true actions from demos.
         # Similar to collect experiences step for regular PPO
@@ -753,14 +752,16 @@ class ImitationLearning(object):
         durations = []
 
         num_envs = min(len(pbot_pool.envs), len(all_seeds))
-        env = ManyEnvs(pbot_pool)
+        env = ParallelEnv(pbot_pool)
 
         for offset in range(0, len(all_seeds), num_envs):
             size = min(len(all_seeds) - offset, num_envs)
             seeds = all_seeds[offset: offset + size]
             durs = np.zeros((size,), dtype=float)
 
-            _, _ = env.reset(seeds=seeds)
+            active_indices = range(0, size)
+
+            _, _ = env.ext_reset(seeds=seeds, active_indices=active_indices)
 
             actions = [[] for _ in range(size)]
             steps = np.zeros((size,), dtype=int)
@@ -771,15 +772,14 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
-                #XXX put true-action into info
-                _, _, terminated, _, _, action = \
-                    env.step(dummy_actions, active_indices)
+                _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
+                true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
 
                 if pause:
                     time.sleep(pause)
 
-                for i, a, d in zip(active_indices, action, done):
+                for i, a, d in zip(active_indices, true_action, done):
                     # Skip last NOOP action
                     if not d:
                         actions[i].append(a)
