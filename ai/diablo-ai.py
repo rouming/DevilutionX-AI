@@ -1440,9 +1440,7 @@ def play_ai(args, gameconfig):
     durations = logs['duration_per_episode']
     seeds = logs['seed_per_episode']
 
-    # Sort by seed
-    z = sorted(zip(frames, durations, returns, seeds), key=lambda x: x[3])
-    for f, d, r, s in z:
+    for f, d, r, s in zip(frames, durations, returns, seeds):
         success = np.all(np.asarray(r) > 0.0)
         print(f"seed {s:2d} | {'success' if success else 'failure'} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
 

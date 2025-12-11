@@ -1,4 +1,3 @@
-import bisect
 import datetime
 import numpy as np
 import os
@@ -781,12 +780,6 @@ class ImitationLearning(object):
                     continue
                 actions[i].append(a)
                 steps_cnt += 1
-
-            # Skip last NOOP action, thus all active indices except done
-            #not_done_indices = active_indices[~done]
-            #for i in not_done_indices:
-            #    actions[i].append(true_action[i])
-            #steps_cnt += len(not_done_indices)
 
             just_done_indices = active_indices[done]
 

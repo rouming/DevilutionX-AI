@@ -87,6 +87,9 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
 
         obs, _, terminated, truncated, info = env.ext_step(actions, active_indices)
         done = np.logical_or(terminated, truncated)
+        # HRL-aware rewards with the shape (P, L)
+        reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+        assert reward.shape == (len(actions), num_levels)
 
         returns[active_indices] += reward
         obss[active_indices] = obs
@@ -143,5 +146,11 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
 
         if pause:
             time.sleep(pause)
+
+    # Keep all logs sorted by seed
+    order = np.argsort(logs["seed_per_episode"])
+    for key, value in logs.items():
+        if len(value):
+            logs[key] = [value[i] for i in order]
 
     return logs
