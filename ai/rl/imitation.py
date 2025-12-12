@@ -745,6 +745,58 @@ class ImitationLearning(object):
         return best_success_rate
 
     @staticmethod
+    def old_generate_demos(pbot_pool, all_seeds, pause=0.0):
+        steps_cnt = 0
+        demos = []
+        durations = []
+
+        num_envs = min(len(pbot_pool.envs), len(all_seeds))
+        env = ParallelEnv(pbot_pool)
+
+        for offset in range(0, len(all_seeds), num_envs):
+            size = min(len(all_seeds) - offset, num_envs)
+            seeds = all_seeds[offset: offset + size]
+            durs = np.zeros((size,), dtype=float)
+
+            active_indices = range(0, size)
+
+            _, _ = env.ext_reset(seeds=seeds, active_indices=active_indices)
+
+            actions = [[] for _ in range(size)]
+            steps = np.zeros((size,), dtype=int)
+            not_yet_done = np.ones((size,), dtype=bool)
+
+            ts = time.time()
+
+            while np.any(not_yet_done):
+                active_indices = np.flatnonzero(not_yet_done)
+                dummy_actions = np.zeros(active_indices.shape, dtype=int)
+                _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
+                done = np.asarray(terminated)
+                true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
+
+                if pause:
+                    time.sleep(pause)
+
+                for i, a, d in zip(active_indices, true_action, done):
+                    # Skip last NOOP action
+                    if not d:
+                        actions[i].append(a)
+                        steps[i] += 1
+
+                just_done_indices = active_indices[done]
+                durs[just_done_indices] = time.time() - ts
+                not_yet_done[just_done_indices] = False
+
+            durations.extend(durs.tolist())
+            for seed_, actions_ in zip(seeds, actions):
+                demos.append((seed_, actions_))
+
+            steps_cnt += np.sum(steps)
+
+        return demos, durations, steps_cnt
+
+    @staticmethod
     def generate_demos(pbot_pool, all_seeds, pause=0.0):
         steps_cnt = 0
         demos = []
