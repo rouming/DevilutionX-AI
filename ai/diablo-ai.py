@@ -1432,8 +1432,10 @@ def play_ai(args, gameconfig):
     if hasattr(preprocess_obss, "vocab"):
         preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
+    ts = time.time()
     logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
                           args.seed_base, args.episodes_int, pause=args.pause)
+    duration = time.time() - ts
 
     returns = logs['return_per_episode']
     frames = logs['num_frames_per_episode']
@@ -1446,6 +1448,7 @@ def play_ai(args, gameconfig):
 
     success_rate = np.mean([1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns])
     print(f"average success rate {success_rate:.2f} for {args.episodes_int} episodes")
+    print(f"overall evaluation time {duration:.2f}s")
 
     return 0
 
@@ -1477,14 +1480,17 @@ def play_bot(args, gameconfig):
 
     print(f"Bots are loaded\n")
 
+    ts = time.time()
     seeds = range(args.seed_base, args.seed_base + args.episodes_int)
     demos, durations, num_frames = \
         ImitationLearning.generate_demos(pbot_pool, seeds, pause=args.pause)
+    duration = time.time() - ts
 
     for demo, d in zip(demos, durations):
         s, actions = demo
         f = len(actions)
         print(f"seed {s:2d} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
+    print(f"overall generation time {duration:.2f}s")
 
     return 0
 
