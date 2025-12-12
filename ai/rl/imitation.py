@@ -750,17 +750,33 @@ class ImitationLearning(object):
         demos = []
         durations = []
 
+        D1, D2, D3, D4, D5, D6, D7 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        N1, N2, N3, N4, N5, N6, N7 = 0, 0, 0, 0, 0, 0, 0
+
         num_envs = min(len(pbot_pool.envs), len(all_seeds))
         env = ParallelEnv(pbot_pool)
 
         for offset in range(0, len(all_seeds), num_envs):
+            #XXX
+            P0 = time.time()
+
             size = min(len(all_seeds) - offset, num_envs)
             seeds = all_seeds[offset: offset + size]
             durs = np.zeros((size,), dtype=float)
 
             active_indices = range(0, size)
 
+            #XXX
+            P1 = time.time()
+            D1 += P1 - P0
+            N1 += size
+
             _, _ = env.ext_reset(seeds=seeds, active_indices=active_indices)
+
+            #XXX
+            P2 = time.time()
+            D2 += P2 - P1
+            N2 += size
 
             actions = [[] for _ in range(size)]
             steps = np.zeros((size,), dtype=int)
@@ -768,12 +784,25 @@ class ImitationLearning(object):
 
             ts = time.time()
 
+            #XXX
+            P3 = time.time()
+            D3 += P3 - P2
+            N3 += size
+
             while np.any(not_yet_done):
+                #XXX
+                P3 = time.time()
+
                 active_indices = np.flatnonzero(not_yet_done)
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
                 _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
                 true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
+
+                #XXX
+                P4 = time.time()
+                D4 += P4 - P3
+                N4 += len(active_indices)
 
                 if pause:
                     time.sleep(pause)
@@ -784,9 +813,23 @@ class ImitationLearning(object):
                         actions[i].append(a)
                         steps[i] += 1
 
+                #XXX
+                P5 = time.time()
+                D5 += P5 - P4
+                N5 += len(active_indices)
+
                 just_done_indices = active_indices[done]
                 durs[just_done_indices] = time.time() - ts
                 not_yet_done[just_done_indices] = False
+
+                #XXX
+                P6 = time.time()
+                D6 += P6 - P5
+                N6 += len(just_done_indices)
+
+
+            #XXX
+            P6 = time.time()
 
             durations.extend(durs.tolist())
             for seed_, actions_ in zip(seeds, actions):
@@ -794,13 +837,29 @@ class ImitationLearning(object):
 
             steps_cnt += np.sum(steps)
 
+            #XXX
+            P7 = time.time()
+            D7 += P7 - P6
+            N7 += size
+
+        print(f"D1 {D1:.3f}, N1 {N1}, norm(D1) {D1/N1:.3f}")
+        print(f"D2 {D2:.3f}, N2 {N2}, norm(D2) {D2/N2:.3f}")
+        print(f"D3 {D3:.3f}, N3 {N3}, norm(D3) {D3/N3:.3f}")
+        print(f"D4 {D4:.3f}, N4 {N4}, norm(D4) {D4/N4:.3f}")
+        print(f"D5 {D5:.3f}, N5 {N5}, norm(D5) {D5/N5:.3f}")
+        print(f"D6 {D6:.3f}, N6 {N6}, norm(D6) {D6/N6:.3f}")
+        print(f"D7 {D7:.3f}, N7 {N7}, norm(D7) {D7/N7:.3f}")
+
         return demos, durations, steps_cnt
 
     @staticmethod
-    def generate_demos(pbot_pool, all_seeds, pause=0.0):
+    def new_generate_demos(pbot_pool, all_seeds, pause=0.0):
         steps_cnt = 0
         demos = []
         durations = []
+
+        D1, D2, D3, D4, D5, D6, D7, D8, D9 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        N1, N2, N3, N4, N5, N6, N7, N8, N9 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 
         num_envs = min(len(pbot_pool.envs), len(all_seeds))
         env = ParallelEnv(pbot_pool)
@@ -819,12 +878,21 @@ class ImitationLearning(object):
         active_indices = np.flatnonzero(running_envs)
         _, _ = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
 
+
         while np.any(running_envs):
+            #XXX
+            P0 = time.time()
+
             active_indices = np.flatnonzero(running_envs)
             dummy_actions = np.zeros(active_indices.shape, dtype=int)
             _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
             done = np.asarray(terminated)
             true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
+
+            #XXX
+            P1 = time.time()
+            D1 += P1 - P0
+            N1 += len(active_indices)
 
             for i, d, a in zip(active_indices, done, true_action):
                 if d:
@@ -833,7 +901,17 @@ class ImitationLearning(object):
                 actions[i].append(a)
                 steps_cnt += 1
 
+            #XXX
+            P2 = time.time()
+            D2 += P2 - P1
+            N2 += len(active_indices)
+
             just_done_indices = active_indices[done]
+
+            #XXX
+            P3 = time.time()
+            D3 += P3 - P2
+            N3 += len(active_indices)
 
             if len(just_done_indices):
                 done_durations = time.time() - timestamps[just_done_indices]
@@ -841,25 +919,54 @@ class ImitationLearning(object):
                 for i in just_done_indices:
                     demos.append((seeds[i], actions[i]))
 
+                #XXX
+                P4 = time.time()
+                D4 += P4 - P3
+                N4 += len(just_done_indices)
+
                 new_seeds = all_seeds[next_seed_i: next_seed_i + len(just_done_indices)]
                 next_seed_i += len(just_done_indices)
 
                 nr_restart = len(new_seeds)
 
+                #XXX
+                P5 = time.time()
+                D5 += P5 - P4
+                N5 += len(just_done_indices)
+
                 restart_indices = just_done_indices[:nr_restart]
                 finished_indices = just_done_indices[nr_restart:]
                 running_envs[finished_indices] = False
 
+                #XXX
+                P6 = time.time()
+                D6 += P6 - P5
+                N6 += len(just_done_indices)
+
                 if len(restart_indices):
                     _, _ = env.ext_reset(seeds=new_seeds, active_indices=restart_indices)
+
+                    #XXX
+                    P7 = time.time()
+                    D7 += P7 - P6
+                    N7 += len(restart_indices)
 
                     seeds[restart_indices] = new_seeds
                     timestamps[restart_indices] = time.time()
                     for i in restart_indices:
                         actions[i] = []
 
+                    #XXX
+                    P8 = time.time()
+                    D8 += P8 - P7
+                    N8 += len(restart_indices)
+
+
             if pause:
                 time.sleep(pause)
+
+        #XXX
+        P8 = time.time()
 
         # Keep demos and durations sorted by seed
         sort_by_seed = lambda x: x[0]
@@ -867,4 +974,25 @@ class ImitationLearning(object):
         demos = [demos[i] for i in order]
         durations = [durations[i] for i in order]
 
+        #XXX
+        P9 = time.time()
+        D9 += P9 - P8
+        N9 += len(order)
+
+        print(f"D1 {D1:.3f}, N1 {N1}, norm(D1) {D1/N1:.3f}")
+        print(f"D2 {D2:.3f}, N2 {N2}, norm(D2) {D2/N2:.3f}")
+        print(f"D3 {D3:.3f}, N3 {N3}, norm(D3) {D3/N3:.3f}")
+        print(f"D4 {D4:.3f}, N4 {N4}, norm(D4) {D4/N4:.3f}")
+        print(f"D5 {D5:.3f}, N5 {N5}, norm(D5) {D5/N5:.3f}")
+        print(f"D6 {D6:.3f}, N6 {N6}, norm(D6) {D6/N6:.3f}")
+        print(f"D7 {D7:.3f}, N7 {N7}, norm(D7) {D7/N7:.3f}")
+        print(f"D8 {D8:.3f}, N8 {N8}, norm(D8) {D8/N8:.3f}")
+        print(f"D9 {D9:.3f}, N9 {N9}, norm(D9) {D9/N9:.3f}")
+
         return demos, durations, steps_cnt
+
+    @staticmethod
+    def generate_demos(pbot_pool, all_seeds, pause=0.0):
+        if True:
+            return ImitationLearning.new_generate_demos(pbot_pool, all_seeds, pause)
+        return ImitationLearning.old_generate_demos(pbot_pool, all_seeds, pause)
