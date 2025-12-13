@@ -45,7 +45,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         memories = torch.zeros(num_envs, acmodel.memory_size, device=device)
 
     active_indices = np.flatnonzero(running_envs)
-    obss, info = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
+    obss, info = env.ext_reset(seeds=seeds.tolist(), indices=active_indices)
     obss = np.asarray(obss)
     if not argmax:
         stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
@@ -98,9 +98,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             st = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
             stats[active_indices] = st
 
-        just_done_indices = active_indices[done]
-
-        if len(just_done_indices):
+        if np.any(done):
+            just_done_indices = active_indices[done]
             done_num_frames = num_frames[just_done_indices]
             done_returns = returns[just_done_indices]
             done_durations = time.time() - timestamps[just_done_indices]
@@ -129,7 +128,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             running_envs[finished_indices] = False
 
             if len(restart_indices):
-                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), active_indices=restart_indices)
+                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), indices=restart_indices)
 
                 if not argmax:
                     new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)

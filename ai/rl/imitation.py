@@ -760,7 +760,7 @@ class ImitationLearning(object):
 
             active_indices = range(0, size)
 
-            _, _ = env.ext_reset(seeds=seeds, active_indices=active_indices)
+            _, _ = env.ext_reset(seeds=seeds, indices=active_indices)
 
             actions = [[] for _ in range(size)]
             steps = np.zeros((size,), dtype=int)
@@ -808,6 +808,7 @@ class ImitationLearning(object):
         # (P, ) shape
         timestamps = np.zeros((num_envs,), dtype=float)
         actions = [[] for _ in range(num_envs)]
+        pending_resets = np.zeros((num_envs,), dtype=bool)
         running_envs = np.ones((num_envs,), dtype=bool)
 
         seeds = np.array(all_seeds[:num_envs])
@@ -817,10 +818,16 @@ class ImitationLearning(object):
         timestamps[:] = time.time()
 
         active_indices = np.flatnonzero(running_envs)
-        _, _ = env.ext_reset(seeds=seeds.tolist(), active_indices=active_indices)
+        _, _ = env.ext_reset(seeds=seeds.tolist(), indices=active_indices)
 
         while np.any(running_envs):
-            active_indices = np.flatnonzero(running_envs)
+            if np.any(pending_resets):
+                # Do a blocking call if all running environments are pending
+                nonblock = (len(running_envs) != len(pending_resets))
+                reseted_indices, _, _ = env.poll_resets(nonblock=nonblock)
+                pending_resets[reseted_indices] = False
+
+            active_indices = np.flatnonzero(running_envs & ~pending_resets)
             dummy_actions = np.zeros(active_indices.shape, dtype=int)
             _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
             done = np.asarray(terminated)
@@ -833,9 +840,8 @@ class ImitationLearning(object):
                 actions[i].append(a)
                 steps_cnt += 1
 
-            just_done_indices = active_indices[done]
-
-            if len(just_done_indices):
+            if np.any(done):
+                just_done_indices = active_indices[done]
                 done_durations = time.time() - timestamps[just_done_indices]
                 durations.extend(done_durations.tolist())
                 for i in just_done_indices:
@@ -844,19 +850,21 @@ class ImitationLearning(object):
                 new_seeds = all_seeds[next_seed_i: next_seed_i + len(just_done_indices)]
                 next_seed_i += len(just_done_indices)
 
-                nr_restart = len(new_seeds)
+                nr_resets = len(new_seeds)
 
-                restart_indices = just_done_indices[:nr_restart]
-                finished_indices = just_done_indices[nr_restart:]
+                reset_indices = just_done_indices[:nr_resets]
+                finished_indices = just_done_indices[nr_resets:]
                 running_envs[finished_indices] = False
 
-                if len(restart_indices):
-                    _, _ = env.ext_reset(seeds=new_seeds, active_indices=restart_indices)
-
-                    seeds[restart_indices] = new_seeds
-                    timestamps[restart_indices] = time.time()
-                    for i in restart_indices:
+                if len(reset_indices):
+                    pending_resets[reset_indices] = True
+                    seeds[reset_indices] = new_seeds
+                    timestamps[reset_indices] = time.time()
+                    for i in reset_indices:
                         actions[i] = []
+
+                    env.nonblock_reset(seeds=new_seeds, indices=reset_indices)
+
 
             if pause:
                 time.sleep(pause)
