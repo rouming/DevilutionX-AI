@@ -745,7 +745,32 @@ class ImitationLearning(object):
         return best_success_rate
 
     @staticmethod
-    def old_generate_demos(pbot_pool, all_seeds, pause=0.0):
+    def generate_demos(pbot_pool, all_seeds, pause=0.0):
+        """Generates number of demo episodes for each seed.
+
+        Note: Before optimizing this function and creating a tight
+        loop where no environments are idle and the next seed is
+        picked up immediately after an episode is completed, consider
+        this carefully. Most likely, this optimization won't be
+        effective. The issue lies in the resets, which should run in
+        parallel. The more resets you perform in parallel, the more
+        gain you achieve. This function accomplishes exactly that: a
+        batch of episodes runs to completion, and then all of them are
+        reset simultaneously. Yes, this means environments can be idle
+        if their episode has completed earlier, but the subsequent
+        resets are all executed in parallel. A few numbers as proof:
+
+        1000 demo episodes:
+                  RUNNERS    32   64  101  251  501
+        -----------------  ----  ---  ---  ---  ---
+                  v1.5-ai  113s  95s  84s  67s  84s
+            this-function   70s  51s  41s  30s  60s
+               tight-loop   97s  79s  70s  51s  70s
+          tight-loop-nbr*   97s  79s  70s  46s  64s
+
+        nbr* - means tight loop with nonblock resets
+        """
+
         steps_cnt = 0
         demos = []
         durations = []
@@ -797,7 +822,7 @@ class ImitationLearning(object):
         return demos, durations, steps_cnt
 
     @staticmethod
-    def generate_demos(pbot_pool, all_seeds, pause=0.0):
+    def tight_loop_nbr__generate_demos(pbot_pool, all_seeds, pause=0.0):
         steps_cnt = 0
         demos = []
         durations = []

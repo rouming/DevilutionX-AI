@@ -121,27 +121,27 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             new_seeds = torch.arange(next_seed, end_seed, dtype=int, device=device)
             next_seed = end_seed
 
-            nr_restart = len(new_seeds)
+            nr_resets = len(new_seeds)
 
-            restart_indices = just_done_indices[:nr_restart]
-            finished_indices = just_done_indices[nr_restart:]
+            reset_indices = just_done_indices[:nr_resets]
+            finished_indices = just_done_indices[nr_resets:]
             running_envs[finished_indices] = False
 
-            if len(restart_indices):
-                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), indices=restart_indices)
+            if len(reset_indices):
+                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), indices=reset_indices)
 
                 if not argmax:
                     new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
-                    stats[restart_indices] = new_stats
+                    stats[reset_indices] = new_stats
 
-                obss[restart_indices] = new_obs
-                seeds[restart_indices] = new_seeds
-                timestamps[restart_indices] = time.time()
-                num_frames[restart_indices] = 0
-                returns[restart_indices] = 0
+                obss[reset_indices] = new_obs
+                seeds[reset_indices] = new_seeds
+                timestamps[reset_indices] = time.time()
+                num_frames[reset_indices] = 0
+                returns[reset_indices] = 0
 
                 if acmodel.recurrent:
-                    memories[restart_indices] = 0
+                    memories[reset_indices] = 0
 
         if pause:
             time.sleep(pause)
