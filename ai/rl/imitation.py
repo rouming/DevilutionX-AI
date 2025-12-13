@@ -785,10 +785,9 @@ class ImitationLearning(object):
 
             active_indices = range(0, size)
 
-            _, _ = env.ext_reset(seeds=seeds, indices=active_indices)
+            _, _ = env.reset(seeds=seeds, indices=active_indices)
 
             actions = [[] for _ in range(size)]
-            steps = np.zeros((size,), dtype=int)
             not_yet_done = np.ones((size,), dtype=bool)
 
             ts = time.time()
@@ -796,7 +795,7 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
-                _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
+                _, _, terminated, _, info = env.step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
                 true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
 
@@ -807,7 +806,7 @@ class ImitationLearning(object):
                     # Skip last NOOP action
                     if not d:
                         actions[i].append(a)
-                        steps[i] += 1
+                        steps_cnt += 1
 
                 just_done_indices = active_indices[done]
                 durs[just_done_indices] = time.time() - ts
@@ -816,8 +815,6 @@ class ImitationLearning(object):
             durations.extend(durs.tolist())
             for seed_, actions_ in zip(seeds, actions):
                 demos.append((seed_, actions_))
-
-            steps_cnt += np.sum(steps)
 
         return demos, durations, steps_cnt
 
@@ -843,7 +840,7 @@ class ImitationLearning(object):
         timestamps[:] = time.time()
 
         active_indices = np.flatnonzero(running_envs)
-        _, _ = env.ext_reset(seeds=seeds.tolist(), indices=active_indices)
+        _, _ = env.reset(seeds=seeds.tolist(), indices=active_indices)
 
         while np.any(running_envs):
             if np.any(pending_resets):
@@ -854,7 +851,7 @@ class ImitationLearning(object):
 
             active_indices = np.flatnonzero(running_envs & ~pending_resets)
             dummy_actions = np.zeros(active_indices.shape, dtype=int)
-            _, _, terminated, _, info = env.ext_step(dummy_actions, active_indices)
+            _, _, terminated, _, info = env.step(dummy_actions, active_indices)
             done = np.asarray(terminated)
             true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
 

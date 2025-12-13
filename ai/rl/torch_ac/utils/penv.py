@@ -92,7 +92,7 @@ class ParallelEnv:
         return indices, obss, infos
 
 
-    def ext_reset(self, seeds=None, indices=None):
+    def reset(self, seeds=None, indices=None):
         obss = []
         infos = []
         self.nonblock_reset(seeds=seeds, indices=indices)
@@ -104,7 +104,7 @@ class ParallelEnv:
         return obss, infos
 
 
-    def ext_step(self, actions, indices=None):
+    def step(self, actions, indices=None):
         if indices is None:
             assert len(actions) == len(self.p.envs)
             indices = range(0, len(self.p.envs))

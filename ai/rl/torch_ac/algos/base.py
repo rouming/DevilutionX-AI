@@ -104,7 +104,7 @@ class BaseAlgo(ABC):
         # (T, P, L)
         shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
 
-        self.obs, _ = self.env.ext_reset(seeds=seeds)
+        self.obs, _ = self.env.reset(seeds=seeds)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
@@ -165,8 +165,7 @@ class BaseAlgo(ABC):
             # (P, L)
             actions = torch.stack([d.sample() for d in dist], dim=1)
 
-            obs, _, terminated, truncated, info = \
-                self.env.ext_step(actions.cpu().numpy())
+            obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
             done = np.logical_or(terminated, truncated)
             # HRL-aware rewards with the shape (P, L)
             reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)

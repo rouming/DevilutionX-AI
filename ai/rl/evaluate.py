@@ -46,7 +46,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         memories = torch.zeros(num_envs, acmodel.memory_size, device=device)
 
     active_indices = np.flatnonzero(running_envs)
-    obss, info = env.ext_reset(seeds=seeds.tolist(), indices=active_indices)
+    obss, info = env.reset(seeds=seeds.tolist(), indices=active_indices)
     obss = np.asarray(obss)
     if not argmax:
         stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
@@ -57,12 +57,10 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             nonblock = (len(running_envs) != len(pending_resets))
             reseted_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
             pending_resets[reseted_indices] = False
-
+            obss[reseted_indices] = new_obs
             if not argmax:
                 new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
                 stats[reseted_indices] = new_stats
-
-            obss[reseted_indices] = new_obs
 
         active_indices = np.flatnonzero(running_envs & ~pending_resets)
         obs = obss[active_indices]
@@ -98,7 +96,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
                 log_obss[i].append(o)
                 log_actions[i].append(a)
 
-        obs, _, terminated, truncated, info = env.ext_step(actions, active_indices)
+        obs, _, terminated, truncated, info = env.step(actions, active_indices)
         done = np.logical_or(terminated, truncated)
         # HRL-aware rewards with the shape (P, L)
         reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
