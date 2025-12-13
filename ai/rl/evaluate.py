@@ -29,6 +29,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
     # (P, ) shape
     num_frames = np.zeros((num_envs,), dtype=int)
     timestamps = np.zeros((num_envs,), dtype=float)
+    pending_resets = np.zeros((num_envs,), dtype=bool)
     running_envs = np.ones((num_envs,), dtype=bool)
 
     seeds = torch.arange(seed, seed + num_envs, dtype=int, device=device)
@@ -51,7 +52,19 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
 
     while np.any(running_envs):
-        active_indices = np.flatnonzero(running_envs)
+        if np.any(pending_resets):
+            # Do a blocking call if all running environments are pending
+            nonblock = (len(running_envs) != len(pending_resets))
+            reseted_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
+            pending_resets[reseted_indices] = False
+
+            if not argmax:
+                new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
+                stats[reseted_indices] = new_stats
+
+            obss[reseted_indices] = new_obs
+
+        active_indices = np.flatnonzero(running_envs & ~pending_resets)
         obs = obss[active_indices]
         with torch.no_grad():
             preprocessed_obss = preprocess_obss(obs, device=device)
@@ -128,13 +141,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             running_envs[finished_indices] = False
 
             if len(reset_indices):
-                new_obs, info = env.ext_reset(seeds=new_seeds.tolist(), indices=reset_indices)
-
-                if not argmax:
-                    new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
-                    stats[reset_indices] = new_stats
-
-                obss[reset_indices] = new_obs
+                pending_resets[reset_indices] = True
                 seeds[reset_indices] = new_seeds
                 timestamps[reset_indices] = time.time()
                 num_frames[reset_indices] = 0
@@ -142,6 +149,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
 
                 if acmodel.recurrent:
                     memories[reset_indices] = 0
+
+                env.nonblock_reset(seeds=new_seeds.tolist(), indices=reset_indices)
 
         if pause:
             time.sleep(pause)
