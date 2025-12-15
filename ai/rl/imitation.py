@@ -373,15 +373,18 @@ class ImitationLearning(object):
             while np.any(not_yet_done):
                 active_indices = np.flatnonzero(not_yet_done)
                 actions = [true_actions[i][steps[i]] for i in active_indices]
-                new_obss, reward, terminated, truncated, info = \
+                new_obss, _, terminated, truncated, info = \
                     env.step(actions, active_indices)
-                done = np.asarray(terminated) | np.asarray(truncated)
+                done = np.logical_or(terminated, truncated)
 
-                for i, o, r, d, inf in zip(active_indices, obs, reward, done, info):
+                for i, o, d, inf in zip(active_indices, obs, done, info):
                     obss[i].append(o)
                     dones[i].append(d)
+                    # HRL-aware rewards with the shape (L,)
+                    r = inf["hierarchy/reward"]
+                    assert len(r) == self.acmodel.num_levels
                     rewards[i].append(r)
-                    opt_changed[i].append(inf.get("opt-changed", False))
+                    opt_changed[i].append(inf["hierarchy/opt-changed"])
                     steps[i] += 1
 
                 obs = new_obss
