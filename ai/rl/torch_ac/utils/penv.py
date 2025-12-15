@@ -1,5 +1,6 @@
 import multiprocessing
 import selectors
+import numpy as np
 
 
 def worker(conn, env):
@@ -75,6 +76,8 @@ class ParallelEnv:
             local, seed = self.p.conns[ind], seeds[i]
             local.send(("reset", seed))
 
+        return len(indices)
+
 
     def poll_resets(self, *, nonblock):
         indices = []
@@ -93,14 +96,19 @@ class ParallelEnv:
 
 
     def reset(self, seeds=None, indices=None):
-        obss = []
-        infos = []
-        self.nonblock_reset(seeds=seeds, indices=indices)
-        while len(obss) != len(indices):
-            _, obs, info = self.poll_resets(nonblock=False)
-            obss.extend(obs)
-            infos.extend(info)
+        nr_resets = self.nonblock_reset(seeds=seeds, indices=indices)
+        obss = np.zeros((nr_resets,), dtype=object)
+        infos = np.zeros((nr_resets,), dtype=object)
+        indices = []
+        while len(indices) != nr_resets:
+            ind, obs, info = self.poll_resets(nonblock=False)
+            obss[ind] = obs
+            infos[ind] = info
+            indices.extend(ind)
 
+        order = sorted(indices)
+        obss = obss[order].tolist()
+        infos = infos[order].tolist()
         return obss, infos
 
 

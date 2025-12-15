@@ -55,12 +55,12 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         if np.any(pending_resets):
             # Do a blocking call if all running environments are pending
             nonblock = (len(running_envs) != len(pending_resets))
-            reseted_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
-            pending_resets[reseted_indices] = False
-            obss[reseted_indices] = new_obs
+            reset_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
+            pending_resets[reset_indices] = False
+            obss[reset_indices] = new_obs
             if not argmax:
                 new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
-                stats[reseted_indices] = new_stats
+                stats[reset_indices] = new_stats
 
         active_indices = np.flatnonzero(running_envs & ~pending_resets)
         obs = obss[active_indices]
@@ -152,6 +152,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
 
         if pause:
             time.sleep(pause)
+
+    assert not np.any(pending_resets)
 
     # Keep all logs sorted by seed
     order = np.argsort(logs["seed_per_episode"])
