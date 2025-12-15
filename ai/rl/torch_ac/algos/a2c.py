@@ -22,13 +22,13 @@ from rl.torch_ac.algos.base import BaseAlgo
 class A2CAlgo(BaseAlgo):
     """The Advantage Actor-Critic algorithm."""
 
-    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None, num_levels=1,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None,
                  num_frames_per_proc=None, discount=0.99, lr=0.01, gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  rmsprop_alpha=0.99, rmsprop_eps=1e-8, preprocess_obss=None, reshape_reward=None):
         num_frames_per_proc = num_frames_per_proc or 8
 
-        super().__init__(penv_pool, global_seed, seeds, acmodel, device, num_levels,
+        super().__init__(penv_pool, global_seed, seeds, acmodel, device,
                          num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                          value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
                          reshape_reward)

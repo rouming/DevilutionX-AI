@@ -14,6 +14,7 @@ Author: Roman Penyaev, 2025
 """
 
 from abc import ABC, abstractmethod
+import numpy
 import torch
 
 from rl.torch_ac.format import default_preprocess_obss
@@ -23,7 +24,7 @@ from rl.torch_ac.utils import DictList, ParallelEnv, deterministic_sample
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, penv_pool, global_seed, seeds, acmodel, device, num_levels,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device,
                  num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                  value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
                  reshape_reward):
@@ -40,8 +41,6 @@ class BaseAlgo(ABC):
             a list of initial environment seeds
         acmodel : torch.Module
             the model
-        num_levels : int
-            the number of hierarchical policies
         num_frames_per_proc : int
             the number of frames collected by every process for an update
         discount : float
@@ -71,10 +70,9 @@ class BaseAlgo(ABC):
 
         self.env = ParallelEnv(penv_pool, auto_reset=True)
         self.global_seed = global_seed
-        self.seeds = seeds
         self.acmodel = acmodel
         self.device = device
-        self.num_levels = num_levels
+        self.num_levels = acmodel.num_levels
         self.num_frames_per_proc = num_frames_per_proc
         self.discount = discount
         self.lr = lr
@@ -111,7 +109,7 @@ class BaseAlgo(ABC):
 
         self.obs, info = self.env.reset(seeds=seeds)
         self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
-                                         dtype=int, device=device)
+                                         dtype=int, device=self.device)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
@@ -125,6 +123,7 @@ class BaseAlgo(ABC):
         self.rewards = torch.zeros(*shape, device=self.device)
         self.advantages = torch.zeros(*shape, device=self.device)
         self.log_probs = torch.zeros(*shape, device=self.device)
+        self.seeds = torch.tensor(seeds, dtype=int, device=self.device)
 
         # Initialize log values
 
@@ -170,19 +169,20 @@ class BaseAlgo(ABC):
             assert len(dist) == self.num_levels
             assert value.shape == (self.num_procs, self.num_levels)
 
-            env_counters = (self.env_counters[:, 0], env_counters[:, 1])
+            env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
             # (P, L)
             actions = torch.stack([deterministic_sample(d.probs, self.global_seed,
                                                         self.seeds, *env_counters)
                                    for d in dist], dim=1)
 
             obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
-            done = np.logical_or(terminated, truncated)
+            done = numpy.logical_or(terminated, truncated)
             # HRL-aware rewards with the shape (P, L)
-            reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+            reward = numpy.array([inf["hierarchy/reward"] for inf in info], dtype=float)
             assert reward.shape == (self.num_procs, self.num_levels)
             # HRL-aware opt-changed flag with the shape (P,)
-            opt_changed = np.array([inf["hierarchy/opt-changed"] for inf in info], dtype=bool)
+            opt_changed = numpy.array([inf["hierarchy/opt-changed"] for inf in info],
+                                      dtype=bool)
 
             # Update experiences values
 
@@ -192,7 +192,7 @@ class BaseAlgo(ABC):
                 self.memories[i] = self.memory
                 self.memory = memory
             self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
-                                             dtype=int, device=device)
+                                             dtype=int, device=self.device)
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
             self.opt_masks[i] = self.opt_mask

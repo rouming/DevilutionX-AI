@@ -15,6 +15,10 @@ def deterministic_sample(probs, seed, env_seeds, env_resets, env_steps):
     Returns:
         actions (Tensor): (Batch,) Selected action indices.
     """
+    assert((env_seeds.dtype, env_seeds.device, env_seeds.shape) ==
+           (env_resets.dtype, env_resets.device, env_resets.shape) ==
+           (env_steps.dtype, env_steps.device, env_steps.shape))
+
     # Mix inputs using large primes
     # We use XOR (^) to combine the streams
     mixed_input = (env_seeds  * 0x1B873593) ^ \

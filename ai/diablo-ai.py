@@ -1040,8 +1040,8 @@ def train_ai(args, gameconfig):
     reshape_reward = None
 
     if args.algo == "a2c":
-        algo = torch_ac.A2CAlgo(penv_pool, seeds, acmodel, device,
-                                args.frames_per_env_runner,
+        algo = torch_ac.A2CAlgo(penv_pool, args.seed, seeds, acmodel,
+                                device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -1049,8 +1049,8 @@ def train_ai(args, gameconfig):
                                 args.optim_alpha, args.optim_eps,
                                 preprocess_obss, reshape_reward)
     elif args.algo == "ppo":
-        algo = torch_ac.PPOAlgo(penv_pool, seeds, acmodel, device,
-                                args.frames_per_env_runner,
+        algo = torch_ac.PPOAlgo(penv_pool, args.seed, seeds, acmodel,
+                                device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -1063,7 +1063,7 @@ def train_ai(args, gameconfig):
 
     if "optimizer_state" in status:
         algo.optimizer.load_state_dict(status["optimizer_state"])
-        txt_logger.info("Optimizer loaded from the state\n")
+        txt_logger.info("Optimizer loaded from the state")
 
     # Create exponential decay LR scheduler, so every N steps LR
     # reduced by gamma
@@ -1077,6 +1077,8 @@ def train_ai(args, gameconfig):
     update = status["update"]
     start_time = time.time()
 
+    txt_logger.info(f"Start training from {num_frames} frames\n")
+
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
@@ -1085,13 +1087,14 @@ def train_ai(args, gameconfig):
         logs = {**logs1, **logs2}
         update_end_time = time.time()
 
-        scheduler.step()
+        if not args.dry_run:
+            scheduler.step()
 
         num_frames += logs["num_frames"]
         update += 1
 
         success_per_episode = utils.synthesize(
-            [1 if r > 0 else 0 for r in logs["return_per_episode"]])
+            [1 if np.all(np.asarray(r) > 0.0) else 0 for r in logs["return_per_episode"]])
         success_rate = success_per_episode['mean']
         duration = int(time.time() - start_time)
 
@@ -1103,6 +1106,8 @@ def train_ai(args, gameconfig):
             rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
 
+            info_header = "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | S {:.2f} | F:μσmM {:.1f} {:.1f} {} {}"
+
             header = ["update", "frames", "FPS", "duration"]
             data = [update, num_frames, fps, duration]
             header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
@@ -1111,12 +1116,29 @@ def train_ai(args, gameconfig):
             data += [success_rate]
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
             data += num_frames_per_episode.values()
-            header += ["entropy", "value", "policy_loss", "value_loss", "kl", "grad_norm"]
-            data += [logs["entropy"], logs["value"], logs["policy_loss"], logs["value_loss"], logs["kl"], logs["grad_norm"]]
 
-            txt_logger.info(
-                "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | S {:.2f} | F:μσmM {:.1f} {:.1f} {} {} | H {:.3f} | V {:.3f} | pL {:.3f} | vL {:.3f} | KL {:.3f} | ∇ {:.3f}"
-                .format(*data))
+            # HRL-aware metrics
+            metrics = [("entropy", "H"),
+                       ("value", "V"),
+                       ("policy_loss", "pL"),
+                       ("value_loss", "vL"),
+                       ("kl", "KL")]
+            for m in metrics:
+                v = logs[m[0]]
+
+                if v.shape == (1,):
+                    header += [m[0]]
+                    info_header += f" | {m[1]} {{:.3f}}"
+                else:
+                    header += [f"{m[0]}_lvl{i}" for i in range(len(v))]
+                    info_header += f" | {m[1]}{i} {{:.3f}}"
+                data += v.tolist()
+
+            header += ["grad_norm"]
+            data += [logs["grad_norm"]]
+            info_header += " | ∇ {:.3f}"
+
+            txt_logger.info(info_header.format(*data))
 
             header += ["return_" + key for key in return_per_episode.keys()]
             data += return_per_episode.values()
@@ -1146,7 +1168,7 @@ def train_ai(args, gameconfig):
             acmodel.train()
 
             returns = vlogs['return_per_episode']
-            success_rate = np.mean([1 if r > 0 else 0 for r in returns])
+            success_rate = np.mean([1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns])
             returns = np.mean(returns)
 
             header = ["evaluation_success_rate", "evaluation_returns"]

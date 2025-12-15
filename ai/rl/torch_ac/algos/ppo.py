@@ -23,14 +23,14 @@ class PPOAlgo(BaseAlgo):
     """The Proximal Policy Optimization algorithm
     ([Schulman et al., 2015](https://arxiv.org/abs/1707.06347))."""
 
-    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None, num_levels=1,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None,
                  num_frames_per_proc=None, discount=0.99, lr=0.001, gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  adam_eps=1e-8, clip_eps=0.2, epochs=4, batch_size=256, preprocess_obss=None,
                  reshape_reward=None):
         num_frames_per_proc = num_frames_per_proc or 128
 
-        super().__init__(penv_pool, global_seed, seeds, acmodel, device, num_levels,
+        super().__init__(penv_pool, global_seed, seeds, acmodel, device,
                          num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                          value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
                          reshape_reward)
@@ -60,11 +60,11 @@ class PPOAlgo(BaseAlgo):
             for inds in self._get_batches_starting_indexes():
                 # Initialize batch values
 
-                batch_entropy = np.zeros((self.num_levels, ))
-                batch_value = np.zeros((self.num_levels, ))
-                batch_policy_loss = np.zeros((self.num_levels, ))
-                batch_value_loss = np.zeros((self.num_levels, ))
-                batch_kl = np.zeros((self.num_levels, ))
+                batch_entropy = numpy.zeros((self.num_levels, ))
+                batch_value = numpy.zeros((self.num_levels, ))
+                batch_policy_loss = numpy.zeros((self.num_levels, ))
+                batch_value_loss = numpy.zeros((self.num_levels, ))
+                batch_kl = numpy.zeros((self.num_levels, ))
 
                 # Will be promoted to a tensor on the correct device
                 batch_loss_tensor = 0
@@ -109,7 +109,7 @@ class PPOAlgo(BaseAlgo):
 
                     # PPO ratio: exp(log pi_theta(a|s) - log pi_old(a|s))
                     # (S, L) -> (L, )
-                    new_log_prob = torch.stack([dist[j].log_prob(sb.actions[:, j])
+                    new_log_prob = torch.stack([dist[j].log_prob(sb.action[:, j])
                                                 for j in range(self.num_levels)],
                                                dim=1)
                     ratio = torch.exp(new_log_prob - sb.log_prob)
@@ -135,11 +135,11 @@ class PPOAlgo(BaseAlgo):
 
                     # Update batch values
 
-                    batch_entropy += entropy.cpu().numpy()
-                    batch_value += value.mean(axis=0).cpu().numpy()
-                    batch_policy_loss += policy_loss.cpu().numpy()
-                    batch_value_loss += value_loss.cpu().numpy()
-                    batch_kl += kl.cpu().numpy()
+                    batch_entropy += entropy.detach().cpu().numpy()
+                    batch_value += value.detach().mean(axis=0).cpu().numpy()
+                    batch_policy_loss += policy_loss.detach().cpu().numpy()
+                    batch_value_loss += value_loss.detach().cpu().numpy()
+                    batch_kl += kl.detach().cpu().numpy()
                     batch_loss_tensor += loss
 
                     # Save detached memory for the future recurrence
