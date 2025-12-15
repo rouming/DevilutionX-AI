@@ -2,9 +2,8 @@ import numpy as np
 import time
 import torch
 
-from rl.torch_ac.utils import ParallelEnv
+from rl.torch_ac.utils import ParallelEnv, deterministic_sample
 from rl.utils import device
-from rl.utils import deterministic_sample
 
 
 # Evaluate the model with a specific number of episodes starting from
@@ -49,7 +48,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
     obss, info = env.reset(seeds=seeds.tolist(), indices=active_indices)
     obss = np.asarray(obss)
     if not argmax:
-        stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
+        counters = torch.tensor([inf["env_counters"] for inf in info],
+                                dtype=int, device=device)
 
     while np.any(running_envs):
         if np.any(pending_resets):
@@ -59,8 +59,9 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             pending_resets[reset_indices] = False
             obss[reset_indices] = new_obs
             if not argmax:
-                new_stats = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
-                stats[reset_indices] = new_stats
+                new_counters = torch.tensor([inf["env_counters"] for inf in info],
+                                            dtype=int, device=device)
+                counters[reset_indices] = new_counters
 
         active_indices = np.flatnonzero(running_envs & ~pending_resets)
         obs = obss[active_indices]
@@ -80,10 +81,11 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
         else:
             # We use stateless and deterministic categorical sampling
-            aseeds = seeds[active_indices]
-            astats = stats[active_indices]
-            astats = (astats[:, 0], astats[:, 1])
-            actions = torch.stack([deterministic_sample(d.probs, seed, aseeds, *astats)
+            active_seeds = seeds[active_indices]
+            active_counters = counters[active_indices]
+            active_counters = (active_counters[:, 0], active_counters[:, 1])
+            actions = torch.stack([deterministic_sample(d.probs, seed, active_seeds,
+                                                        *active_counters)
                                    for d in dist], dim=1)
 
         actions = actions.cpu().numpy()
@@ -106,8 +108,9 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
         obss[active_indices] = obs
         num_frames[active_indices] += 1
         if not argmax:
-            st = torch.tensor([inf["stats"] for inf in info], dtype=int, device=device)
-            stats[active_indices] = st
+            active_counters = torch.tensor([inf["env_counters"] for inf in info],
+                                           dtype=int, device=device)
+            counters[active_indices] = active_counters
 
         if np.any(done):
             just_done_indices = active_indices[done]

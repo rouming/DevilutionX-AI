@@ -3,6 +3,7 @@ HRL Adaptation of torch-ac,
 based on torch-ac by lcswillems.
 
 Changes:
+- Deterministic sampling.
 - Adapted storage and collection to support 'num_levels' dimension (P x L).
 - Manager and Worker steps are aligned for joint optimization.
 - Implemented shared Encoder/Memory with multi-head outputs.
@@ -22,16 +23,17 @@ class PPOAlgo(BaseAlgo):
     """The Proximal Policy Optimization algorithm
     ([Schulman et al., 2015](https://arxiv.org/abs/1707.06347))."""
 
-    def __init__(self, penv_pool, seeds, acmodel, device=None, num_levels=1,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device=None, num_levels=1,
                  num_frames_per_proc=None, discount=0.99, lr=0.001, gae_lambda=0.95,
                  entropy_coef=0.01, value_loss_coef=0.5, max_grad_norm=0.5, recurrence=4,
                  adam_eps=1e-8, clip_eps=0.2, epochs=4, batch_size=256, preprocess_obss=None,
                  reshape_reward=None):
         num_frames_per_proc = num_frames_per_proc or 128
 
-        super().__init__(penv_pool, seeds, acmodel, device, num_levels, num_frames_per_proc,
-                         discount, lr, gae_lambda, entropy_coef, value_loss_coef,
-                         max_grad_norm, recurrence, preprocess_obss, reshape_reward)
+        super().__init__(penv_pool, global_seed, seeds, acmodel, device, num_levels,
+                         num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
+                         value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
+                         reshape_reward)
 
         self.clip_eps = clip_eps
         self.epochs = epochs

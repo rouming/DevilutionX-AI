@@ -283,8 +283,8 @@ class DiabloEnv(gym.Env):
         else:
             # When a seed is not available, we need to distinguish
             # between two resets to perform different probability
-            # sampling. See utils.sample_categorical_stateless() and
-            # its callers for details
+            # sampling. See determenistic_sample() and its callers for
+            # details
             self.resets_cnt += 1
 
         if self.paused:
@@ -344,7 +344,7 @@ class DiabloEnv(gym.Env):
         self.start_dungeon_level = d.player.plrlevel
 
         obss = {"env": env, "env-status": env_status}
-        info = {"stats": (self.resets_cnt, self.steps_cnt)}
+        info = {"env_counters": (self.resets_cnt, self.steps_cnt)}
         return obss, info
 
     def is_agent_timedout(self):
@@ -611,7 +611,7 @@ class DiabloEnv(gym.Env):
         obss = {"env": env, "env-status": env_status}
         info = {"hierarchy/opt-changed": False,
                 "hierarchy/reward": [reward],
-                "stats": (self.resets_cnt, self.steps_cnt)}
+                "env_counters": (self.resets_cnt, self.steps_cnt)}
         return obss, reward, done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):

@@ -3,6 +3,7 @@ HRL Adaptation of torch-ac,
 based on torch-ac by lcswillems.
 
 Changes:
+- Deterministic sampling.
 - Adapted storage and collection to support 'num_levels' dimension (P x L).
 - Manager and Worker steps are aligned for joint optimization.
 - Implemented shared Encoder/Memory with multi-head outputs.
@@ -16,13 +17,13 @@ from abc import ABC, abstractmethod
 import torch
 
 from rl.torch_ac.format import default_preprocess_obss
-from rl.torch_ac.utils import DictList, ParallelEnv
+from rl.torch_ac.utils import DictList, ParallelEnv, deterministic_sample
 
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
 
-    def __init__(self, penv_pool, seeds, acmodel, device, num_levels,
+    def __init__(self, penv_pool, global_seed, seeds, acmodel, device, num_levels,
                  num_frames_per_proc, discount, lr, gae_lambda, entropy_coef,
                  value_loss_coef, max_grad_norm, recurrence, preprocess_obss,
                  reshape_reward):
@@ -33,6 +34,8 @@ class BaseAlgo(ABC):
         ----------
         penv_pool : ParallelEnvPool
             a pool of environments
+        global_seed: int
+            initial global experiment seed
         seeds : list
             a list of initial environment seeds
         acmodel : torch.Module
@@ -67,6 +70,8 @@ class BaseAlgo(ABC):
         # Store parameters
 
         self.env = ParallelEnv(penv_pool, auto_reset=True)
+        self.global_seed = global_seed
+        self.seeds = seeds
         self.acmodel = acmodel
         self.device = device
         self.num_levels = num_levels
@@ -104,7 +109,9 @@ class BaseAlgo(ABC):
         # (T, P, L)
         shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
 
-        self.obs, _ = self.env.reset(seeds=seeds)
+        self.obs, info = self.env.reset(seeds=seeds)
+        self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
+                                         dtype=int, device=device)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
             self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
@@ -162,8 +169,12 @@ class BaseAlgo(ABC):
                     dist, value = self.acmodel(preprocessed_obs)
             assert len(dist) == self.num_levels
             assert value.shape == (self.num_procs, self.num_levels)
+
+            env_counters = (self.env_counters[:, 0], env_counters[:, 1])
             # (P, L)
-            actions = torch.stack([d.sample() for d in dist], dim=1)
+            actions = torch.stack([deterministic_sample(d.probs, self.global_seed,
+                                                        self.seeds, *env_counters)
+                                   for d in dist], dim=1)
 
             obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
             done = np.logical_or(terminated, truncated)
@@ -180,6 +191,8 @@ class BaseAlgo(ABC):
             if self.acmodel.recurrent:
                 self.memories[i] = self.memory
                 self.memory = memory
+            self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
+                                             dtype=int, device=device)
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
             self.opt_masks[i] = self.opt_mask
