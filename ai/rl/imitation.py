@@ -420,12 +420,14 @@ class ImitationLearning(object):
         obss, actions_true, dones, rewards, opt_changed = \
             (flat_batch[:, 0], flat_batch[:, 1], flat_batch[:, 2],
              flat_batch[:, 3], flat_batch[:, 4])
-        # (P, ) shape
+        # (P, L) shape
         actions_true = torch.as_tensor(actions_true.astype(dtype=int, copy=False),
                                        device=device, dtype=torch.long)
-        # (P, ) shape
+        # (P, 1) shape for old demo episodes which have (P, ) shapes
+        actions_true = actions_true.unsqueeze(1) if actions_true.ndim == 1 else actions_true
+        # (P, 1) shape
         opt_changed = torch.as_tensor(opt_changed.astype(dtype=np.float32, copy=False),
-                                      device=device, dtype=torch.float32)
+                                      device=device, dtype=torch.float32).unsqueeze(1)
         # (P, L) shape
         rewards = torch.as_tensor(np.stack(rewards, axis=0).astype(np.float32, copy=False),
                                   device=device, dtype=torch.float32)
@@ -519,7 +521,7 @@ class ImitationLearning(object):
             entropy = torch.stack([d.entropy().mean() for d in dist])
 
             action_pred = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
-            policy_accuracy += (action_pred == action_step).float().mean(axis=0).cpu().numpy()
+            policy_accuracy += (action_pred == action_step).float().mean(axis=0).detach().cpu().numpy()
 
             if self.train_policy and not self.train_critic:
                 final_loss_tensor += policy_loss - self.args.entropy_coef * entropy
@@ -532,9 +534,9 @@ class ImitationLearning(object):
                 assert 0, "Unknown training mode"
 
             # Accumulate
-            final_entropy += entropy.cpu().numpy()
-            final_policy_loss += policy_loss.cpu().numpy()
-            final_value_loss += value_loss.cpu().numpy()
+            final_entropy += entropy.detach().cpu().numpy()
+            final_policy_loss += policy_loss.detach().cpu().numpy()
+            final_value_loss += value_loss.detach().cpu().numpy()
 
             indexes += 1
 
