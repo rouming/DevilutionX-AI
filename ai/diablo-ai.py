@@ -137,10 +137,6 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--seed-base", type=int, default=0,
         help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
-    # See also `incompatible_options`
-    common_parser.add_argument(
-        "--fixed-seed", action="store_true",
-        help="Every new game starts with the same initial seed, so the game world (dungeon) is identical each environment reset")
 
     #
     # sprout: reuse sprout's parser
@@ -162,6 +158,10 @@ def make_diablo_parser():
     play_parser.add_argument(
         "--no-env-log", action="store_true",
         help="Disable environment log on TUI screen.")
+    # See also `incompatible_options`
+    play_parser.add_argument(
+        "--fixed-seed", action="store_true",
+        help="Every new game starts with the same initial seed, so the game world (dungeon) is identical each environment reset")
 
     #
     # common_ai
