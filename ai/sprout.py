@@ -256,7 +256,7 @@ def make_cli_opts(parser, params):
 
     return [parser.prog] + opts + missing
 
-def format_cli_opts(cli_opts, prefix=""):
+def format_cli_opts(cli_opts, fit_terminal_width=True, prefix=""):
     if not sys.stdout.isatty():
         width = 80
     else:
@@ -266,7 +266,7 @@ def format_cli_opts(cli_opts, prefix=""):
     for opt in cli_opts:
         piece = ("" if current == prefix else " ") + opt
         end = " \\"
-        if len(current) + len(piece) + len(end) > width:
+        if fit_terminal_width and len(current) + len(piece) + len(end) > width:
             # close current line with backslash
             lines.append(current + end)
             current = prefix + opt
@@ -1435,7 +1435,7 @@ def cli_log(args,
             print(color(title, bold=True))
             if default_parser:
                 cli_opts = make_cli_opts(default_parser, run_params)
-                opts = format_cli_opts(cli_opts, prefix="  ")
+                opts = format_cli_opts(cli_opts, fit_terminal_width=False)
                 print(f"{opts}")
                 print()
             if i == 0:
