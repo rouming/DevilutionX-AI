@@ -8,8 +8,8 @@ from rl.utils import device
 
 # Evaluate the model with a specific number of episodes starting from
 # a seed value
-def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
-                   episodes, return_obss_actions=False, pause=0.0):
+def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
+                   seed_base, episodes, return_obss_actions=False, pause=0.0):
     logs = {
         "num_frames_per_episode": [],
         "return_per_episode": [],
@@ -31,9 +31,9 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
     pending_resets = np.zeros((num_envs,), dtype=bool)
     running_envs = np.ones((num_envs,), dtype=bool)
 
-    seeds = torch.arange(seed, seed + num_envs, dtype=int, device=device)
-    max_seed = seed + episodes
-    next_seed = seed + num_envs
+    seeds = torch.arange(seed_base, seed_base + num_envs, dtype=int, device=device)
+    max_seed = seed_base + episodes
+    next_seed = seed_base + num_envs
 
     if return_obss_actions:
         log_obss = [[] for _ in range(num_envs)]
@@ -84,7 +84,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, seed,
             active_seeds = seeds[active_indices]
             active_counters = counters[active_indices]
             active_counters = (active_counters[:, 0], active_counters[:, 1])
-            actions = torch.stack([deterministic_sample(d.probs, seed, active_seeds,
+            actions = torch.stack([deterministic_sample(d.probs, global_seed,
+                                                        active_seeds,
                                                         *active_counters)
                                    for d in dist], dim=1)
 

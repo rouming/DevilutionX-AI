@@ -1164,7 +1164,8 @@ def train_ai(args, gameconfig):
             acmodel.eval()
             start_time = time.time()
             vlogs = batch_evaluate(acmodel, preprocess_obss, penv_pool,
-                                   argmax=True, seed=args.eval_seed,
+                                   argmax=True, global_seed=args.seed,
+                                   seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
             elapsed_time = time.time() - start_time
             acmodel.train()
@@ -1458,7 +1459,8 @@ def play_ai(args, gameconfig):
 
     ts = time.time()
     logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
-                          args.seed_base, args.episodes_int, pause=args.pause)
+                          args.seed, args.seed_base, args.episodes_int,
+                          pause=args.pause)
     duration = time.time() - ts
 
     returns = logs['return_per_episode']

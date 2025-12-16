@@ -580,7 +580,9 @@ class ImitationLearning(object):
         for _ in env_names:
             logs += [batch_evaluate(self.acmodel, self.preprocess_obss,
                                     self.penv_pool, argmax=True,
-                                    seed=self.val_seed, episodes=episodes)]
+                                    global_seed=self.args.seed,
+                                    seed_base=self.val_seed,
+                                    episodes=episodes)]
             self.val_seed += episodes
         self.acmodel.train()
 
