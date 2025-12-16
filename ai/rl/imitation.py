@@ -258,8 +258,6 @@ class ImitationLearning(object):
         train_mode = status.get('il_train_mode')
         self.train_mode_changed = (train_mode != (train_policy, train_critic))
         status['il_train_mode'] = (train_policy, train_critic)
-        # Remove previous RL optimizer state if any
-        status.pop('optimizer_state', None)
         if not self.train_mode_changed :
             # We load the optimizer state if this is a continuation of
             # the training
@@ -592,6 +590,9 @@ class ImitationLearning(object):
                              format(self.args.batch_size, len(self.train_demos)))
 
         status = utils.get_status(self.model_phase_dir)
+        # Remove previous RL optimizer state if any, IL alternative
+        # will be used instead
+        status.pop("optimizer_state", None)
 
         # Load best training status if exists
         best_success_rate = 0.0
