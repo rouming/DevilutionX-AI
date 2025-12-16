@@ -693,7 +693,7 @@ class ImitationLearning(object):
                     self.txt_logger.info(("Validation: D {:.0f} | pA {:.3f} | vA {:.3f} " +
                                           "| R {:.3f} " * len(mean_return) +
                                           "| S {:.3f} " * len(success_rate) +
-                                          "| bS {:.3f}",
+                                          "| bS {:.3f}"
                                           ).format(elapsed_time,
                                                    *validation_data,
                                                    best_success_rate))
