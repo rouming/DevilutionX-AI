@@ -26,7 +26,7 @@ class BotEnv:
         done, action = self.bot.step()
         # true action from a bot is returned as part of the info dict,
         # the bot `done` flag is returned as a termination flag
-        info = {"true-action": action}
+        info = {"bot/action": action}
         return None, None, done, False, info
 
 class EpochIndexSampler:
@@ -672,8 +672,9 @@ class ImitationLearning(object):
                                                status['num_frames'] >= self.args.frames_int):
                 valid_log = self.validate(self.args.val_episodes)
                 mean_return = [np.mean(log['return_per_episode']) for log in valid_log]
-                success_rate = [np.mean([1 if r > 0 else 0 for r in log['return_per_episode']]) for log in
-                                valid_log]
+                success_rate = [np.mean([1 if np.all(np.asarray(r) > 0.0) else 0
+                                         for r in log['return_per_episode']])
+                                for log in valid_log]
                 mean_success_rate = np.mean(success_rate)
 
                 if self.args.log_interval > 0 and (status['update'] % self.args.log_interval == 0 or
@@ -804,7 +805,7 @@ class ImitationLearning(object):
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
                 _, _, terminated, _, info = env.step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
-                true_action = np.array([inf["true-action"] for inf in info], dtype=bool)
+                true_action = [inf["bot/action"] for inf in info]
 
                 if pause:
                     time.sleep(pause)
