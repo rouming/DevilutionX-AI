@@ -601,6 +601,8 @@ class ImitationLearning(object):
             try:
                 best_status = utils.get_status(self.model_phase_dir, best=True)
                 best_success_rate = best_status.get("success_rate", 0.0)
+                # Old statuses can contain an array
+                best_success_rate = np.mean(best_success_rate)
             except OSError:
                 pass
 
@@ -703,7 +705,7 @@ class ImitationLearning(object):
                         self.tb_writer.add_scalar(key, float(value), status['num_frames'])
                     self.csv_logger.writerow(train_data + validation_data)
 
-                status.update({"success_rate": success_rate,
+                status.update({"success_rate": mean_success_rate,
                                "model_state": self.acmodel.state_dict(),
                                "il_optimizer_state": self.optimizer.state_dict() })
                 if hasattr(self.preprocess_obss, "vocab"):

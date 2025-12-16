@@ -1014,6 +1014,8 @@ def train_ai(args, gameconfig):
     try:
         best_status = utils.get_status(model_dir, best=True)
         best_success_rate = best_status.get("success_rate", 0.0)
+        # Old statuses can contain an array
+        best_success_rate = np.mean(best_success_rate)
     except OSError:
         pass
 
