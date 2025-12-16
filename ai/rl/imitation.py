@@ -192,12 +192,10 @@ class ImitationLearning(object):
                 self.pbot_pool, seeds)
 
         # Load training status
-        need_save = False
         try:
             status = utils.get_status(model_phase_dir)
         except OSError:
             status = {'num_frames': 0, 'update': 0, 'patience': 0}
-            need_save = True
 
         txt_logger.info("Training status loaded\n")
 
@@ -255,9 +253,9 @@ class ImitationLearning(object):
                                               self.args.lr,
                                               eps=self.args.optim_eps)
 
-        train_mode = status.get('il_train_mode')
+        train_mode = status.get("il_train_mode")
         self.train_mode_changed = (train_mode != (train_policy, train_critic))
-        status['il_train_mode'] = (train_policy, train_critic)
+        status["il_train_mode"] = (train_policy, train_critic)
         if not self.train_mode_changed :
             # We load the optimizer state if this is a continuation of
             # the training
@@ -272,13 +270,17 @@ class ImitationLearning(object):
             step_size=args.lr_steps,
             gamma=args.lr_gamma)
 
-        if need_save:
-            # Model saved initially for the first validation step
-            status.update({"model_state": self.acmodel.state_dict(),
-                           "il_optimizer_state": self.optimizer.state_dict()})
-            if hasattr(preprocess_obss, "vocab"):
-                status["vocab"] = preprocess_obss.vocab.vocab
-            utils.save_status(status, model_phase_dir)
+        # Remove previous RL optimizer state if any, IL alternative
+        # will be used instead
+        status.pop("optimizer_state", None)
+
+        if "model_state" not in status:
+            status["model_state"] = self.acmodel.state_dict()
+        if "il_optimizer_state" not in status:
+            status["il_optimizer_state"] = self.optimizer.state_dict()
+        if "vocab" not in status and hasattr(preprocess_obss, "vocab"):
+            status["vocab"] = preprocess_obss.vocab.vocab
+        utils.save_status(status, model_phase_dir)
 
     def starting_indexes(self, num_frames):
         if num_frames % self.args.recurrence == 0:
@@ -590,9 +592,6 @@ class ImitationLearning(object):
                              format(self.args.batch_size, len(self.train_demos)))
 
         status = utils.get_status(self.model_phase_dir)
-        # Remove previous RL optimizer state if any, IL alternative
-        # will be used instead
-        status.pop("optimizer_state", None)
 
         # Load best training status if exists
         best_success_rate = 0.0
