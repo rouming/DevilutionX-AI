@@ -18,7 +18,7 @@ import numpy
 import torch
 
 from rl.torch_ac.format import default_preprocess_obss
-from rl.torch_ac.utils import DictList, ParallelEnv, deterministic_sample
+from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
 
 
 class BaseAlgo(ABC):
@@ -170,10 +170,12 @@ class BaseAlgo(ABC):
             assert value.shape == (self.num_procs, self.num_levels)
 
             env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
+            noise = calculate_deterministic_noise(self.global_seed, self.seeds, *env_counters,
+                                                  dims=self.num_levels)
             # (P, L)
-            actions = torch.stack([deterministic_sample(d.probs, self.global_seed,
-                                                        self.seeds, *env_counters)
-                                   for d in dist], dim=1)
+            actions = torch.stack([
+                deterministic_sample(d.probs, noise[:, i]) for i, d in enumerate(dist)
+            ], dim=1)
 
             obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
             done = numpy.logical_or(terminated, truncated)

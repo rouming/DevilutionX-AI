@@ -2,7 +2,7 @@ import numpy as np
 import time
 import torch
 
-from rl.torch_ac.utils import ParallelEnv, deterministic_sample
+from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
 from rl.utils import device
 
 
@@ -84,10 +84,14 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
             active_seeds = seeds[active_indices]
             active_counters = counters[active_indices]
             active_counters = (active_counters[:, 0], active_counters[:, 1])
-            actions = torch.stack([deterministic_sample(d.probs, global_seed,
-                                                        active_seeds,
-                                                        *active_counters)
-                                   for d in dist], dim=1)
+
+            noise = calculate_deterministic_noise(global_seed, active_seeds,
+                                                  *active_counters,
+                                                  dims=num_levels)
+            # (P, L)
+            actions = torch.stack([
+                deterministic_sample(d.probs, noise[:, i]) for i, d in enumerate(dist)
+            ], dim=1)
 
         actions = actions.cpu().numpy()
 
