@@ -3,6 +3,7 @@ import time
 import torch
 
 from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
+from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
 
 
@@ -66,13 +67,22 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
         active_indices = np.flatnonzero(running_envs & ~pending_resets)
         obs = obss[active_indices]
         with torch.no_grad():
+            if not argmax:
+                active_seeds = seeds[active_indices]
+                active_counters = counters[active_indices]
+                active_counters = (active_counters[:, 0], active_counters[:, 1])
+                noise = calculate_deterministic_noise(global_seed, active_seeds,
+                                                      *active_counters,
+                                                      dims=num_levels)
+            else:
+                noise = None
             preprocessed_obss = preprocess_obss(obs, device=device)
             if acmodel.recurrent:
                 memory = memories[active_indices]
-                dist, _, memory = acmodel(preprocessed_obss, memory)
+                dist, _, memory = acmodel(preprocessed_obss, noise, memory)
                 memories[active_indices] = memory
             else:
-                dist, _ = acmodel(preprocessed_obss)
+                dist, _ = acmodel(preprocessed_obss, noise)
 
             assert len(dist) == num_levels
 
@@ -81,13 +91,6 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
             actions = torch.stack([d.probs.argmax(dim=1) for d in dist], dim=1)
         else:
             # We use stateless and deterministic categorical sampling
-            active_seeds = seeds[active_indices]
-            active_counters = counters[active_indices]
-            active_counters = (active_counters[:, 0], active_counters[:, 1])
-
-            noise = calculate_deterministic_noise(global_seed, active_seeds,
-                                                  *active_counters,
-                                                  dims=num_levels)
             # (P, L)
             actions = torch.stack([
                 deterministic_sample(d.probs, noise[:, i]) for i, d in enumerate(dist)

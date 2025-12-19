@@ -70,8 +70,10 @@ class A2CAlgo(BaseAlgo):
                 # temporally extended skills.
                 h = memory * sb.mask # episode resets
                 h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
+                #XXX NOISE?
                 dist, value, memory = self.acmodel(sb.obs, h)
             else:
+                #XXX NOISE?
                 dist, value = self.acmodel(sb.obs)
 
             num_seqs = len(inds)
@@ -96,11 +98,11 @@ class A2CAlgo(BaseAlgo):
 
             # Update batch values
 
-            update_entropy += entropy.cpu().numpy()
-            update_value += value.mean(axis=0).cpu().numpy()
-            update_policy_loss += policy_loss.cpu().numpy()
-            update_value_loss += value_loss.cpu().numpy()
-            update_kl += kl.cpu().numpy()
+            update_entropy += entropy.detach().cpu().numpy()
+            update_value += value.mean(axis=0).detach().cpu().numpy()
+            update_policy_loss += policy_loss.detach().cpu().numpy()
+            update_value_loss += value_loss.detach().cpu().numpy()
+            update_kl += kl.detach().cpu().numpy()
             update_loss_tensor += loss
 
         # Update update values

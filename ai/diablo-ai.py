@@ -1572,7 +1572,8 @@ def main():
 
         # Common
         "seed": args.seed_base, # Likely will be overridden by subsequent env reset
-        "fixed-seed": args.fixed_seed,
+        "fixed-seed": args.fixed_seed \
+            if hasattr(args, "log_to_stdout") else False,
         "no-monsters": args.no_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments

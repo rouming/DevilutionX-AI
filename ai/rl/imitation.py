@@ -450,6 +450,7 @@ class ImitationLearning(object):
                 preprocessed_obs = self.preprocess_obss(obs, device=device)
                 # taking the memory till len(inds), as demos beyond
                 # that have already finished
+                # XXX NOISE???
                 _, _, new_memory = self.acmodel(preprocessed_obs,
                                                 memory[:len(inds), :])
             memories[inds, :] = memory[:len(inds), :]
@@ -491,6 +492,7 @@ class ImitationLearning(object):
             h = memory * mask_step # episode resets
             h = h * (1 - opt_changed_step) + h.detach() * opt_changed_step # option boundaries
             # Recurrent chain through memory
+            #XXX NOISE????
             dist, value, memory = self.acmodel(preprocessed_obs, h)
             r = returns[indexes]
 

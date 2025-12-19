@@ -79,11 +79,7 @@ class PPOAlgo(BaseAlgo):
 
                 for i in range(self.recurrence):
                     # Create a sub-batch of experience
-
                     sb = exps[inds + i]
-
-                    # sb.obs: tensor [S, ...]  (S = sequences_per_subbatch = batch_size // recurrence)
-                    # sb.action, sb.log_prob, sb.advantage, sb.returnn, sb.value are all aligned [S, ...]
 
                     # Compute loss
 
@@ -94,9 +90,11 @@ class PPOAlgo(BaseAlgo):
                         h = memory * sb.mask # episode resets
                         h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
                         # Recurrent chain through memory
-                        dist, value, memory = self.acmodel(sb.obs, h)
+                        #XXX ACTION FOR MANAGER
+                        dist, value, memory = self.acmodel(sb.obs, sb.action, h)
                     else:
-                        dist, value = self.acmodel(sb.obs)
+                        #XXX 
+                        dist, value = self.acmodel(sb.obs, sb.action)
 
                     num_seqs = len(inds)
 
@@ -136,7 +134,7 @@ class PPOAlgo(BaseAlgo):
                     # Update batch values
 
                     batch_entropy += entropy.detach().cpu().numpy()
-                    batch_value += value.detach().mean(axis=0).cpu().numpy()
+                    batch_value += value.mean(axis=0).detach().cpu().numpy()
                     batch_policy_loss += policy_loss.detach().cpu().numpy()
                     batch_value_loss += value_loss.detach().cpu().numpy()
                     batch_kl += kl.detach().cpu().numpy()
