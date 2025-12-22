@@ -172,6 +172,10 @@ def make_diablo_parser():
         choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn35", "cnn4"],
         help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
     common_ai_parser.add_argument(
+        "--policy-arch", default="flat",
+        choices=["flat", "hrl"],
+        help="Actor-critic architecture: flat | hrl")
+    common_ai_parser.add_argument(
         "--embedding-dim", type=int, default=256,
         help="dimension of embeddings (default: 256)")
     common_ai_parser.add_argument(
@@ -958,7 +962,8 @@ def prepare_directory_for_run(args, dir_name):
 def train_ai(args, gameconfig):
     from rl import torch_ac
     from rl.evaluate import batch_evaluate
-    from rl.model import ACModel
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
     from rl.torch_ac.utils import ParallelEnvPool
     from rl.utils import device
     import tensorboardX
@@ -1028,9 +1033,18 @@ def train_ai(args, gameconfig):
     txt_logger.info("Observations preprocessor loaded")
 
     # Load model
-    acmodel = ACModel(obs_space, envs[0].action_space, args.cnn_arch,
-                      embedding_dim=args.embedding_dim,
-                      use_memory=True, use_text=False)
+    if args.policy_arch == "flat":
+        acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
+                              embedding_dim=args.embedding_dim,
+                              use_memory=True, use_text=False)
+    elif args.policy_arch == "hrl":
+        acmodel = HRLACModel(obs_space, envs[0].action_space, args.cnn_arch,
+                             embedding_dim=args.embedding_dim,
+                             use_memory=True, use_text=False)
+    else:
+        raise ValueError("Incorrect actor-critic architecture name: {}".format(
+            args.policy_arch))
+
     if "model_state" in status:
         acmodel.load_state_dict(status["model_state"])
     acmodel.to(device)
@@ -1407,7 +1421,8 @@ def train_il(args, gameconfig):
 def play_ai(args, gameconfig):
     from rl.evaluate import batch_evaluate
     from rl.imitation import BotEnv
-    from rl.model import ACModel
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
     from rl.torch_ac.utils import ParallelEnvPool
     from rl.utils import device
 
@@ -1448,9 +1463,19 @@ def play_ai(args, gameconfig):
     action_space = penv_pool.envs[0].action_space
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
-    acmodel = ACModel(obs_space, action_space, args.cnn_arch,
-                      embedding_dim=args.embedding_dim,
-                      use_memory=True, use_text=False)
+
+    if args.policy_arch == "flat":
+        acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                              embedding_dim=args.embedding_dim,
+                              use_memory=True, use_text=False)
+    elif args.policy_arch == "hrl":
+        acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                             embedding_dim=args.embedding_dim,
+                             use_memory=True, use_text=False)
+    else:
+        raise ValueError("Incorrect actor-critic architecture name: {}".format(
+            args.policy_arch))
+
     acmodel.load_state_dict(utils.get_model_state(model_dir, best=args.best))
     acmodel.to(device)
     acmodel.eval()

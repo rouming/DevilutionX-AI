@@ -7,7 +7,8 @@ import torch
 
 from rl import utils
 from rl.evaluate import batch_evaluate
-from rl.model import ACModel
+from rl.flat_model import FlatACModel
+from rl.hrl_model import HRLACModel
 from rl.torch_ac.utils import ParallelEnv
 from rl.utils import device
 import sprout
@@ -208,9 +209,18 @@ class ImitationLearning(object):
         self.preprocess_obss = preprocess_obss
 
         # Load model
-        self.acmodel = ACModel(obs_space, action_space, args.cnn_arch,
-                               embedding_dim=args.embedding_dim,
-                               use_memory=True, use_text=False)
+        if args.policy_arch == "flat":
+            self.acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                                       embedding_dim=args.embedding_dim,
+                                       use_memory=True, use_text=False)
+        elif args.policy_arch == "hrl":
+            self.acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                                      embedding_dim=args.embedding_dim,
+                                      use_memory=True, use_text=False)
+        else:
+            raise ValueError("Incorrect actor-critic architecture name: {}".format(
+                args.policy_arch))
+
         assert self.acmodel.recurrent, "Currently, non-recurrent models are not supported."
 
         # Training the critic only requires special attention

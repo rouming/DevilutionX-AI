@@ -2,8 +2,9 @@ from abc import abstractmethod, abstractproperty
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ACModel:
+class BaseACModel:
     recurrent = False
+    num_levels = 1
 
     @abstractmethod
     def __init__(self, obs_space, action_space):
@@ -13,8 +14,9 @@ class ACModel:
     def forward(self, obs):
         pass
 
-class RecurrentACModel(ACModel):
+class RecurrentACModel(BaseACModel):
     recurrent = True
+    num_levels = 1
 
     @abstractmethod
     def forward(self, obs, memory):

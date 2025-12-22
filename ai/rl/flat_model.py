@@ -313,7 +313,7 @@ class CNN4(nn.Module):
 # controllers, etc.) are trained end-to-end via PPO or another RL algorithm.
 # https://medium.com/@dlgkswn3124/summary-squeeze-and-excitation-networks-senet-a510e902e668
 #
-class ACModel(nn.Module, torch_ac.RecurrentACModel):
+class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
     def __init__(self, obs_space, action_space,
                  cnn_arch,
                  embedding_dim=256,
