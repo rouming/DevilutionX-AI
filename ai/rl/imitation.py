@@ -266,12 +266,16 @@ class ImitationLearning(object):
         train_mode = status.get("il_train_mode")
         self.train_mode_changed = (train_mode != (train_policy, train_critic))
         status["il_train_mode"] = (train_policy, train_critic)
-        if not self.train_mode_changed :
+        if not self.train_mode_changed:
             # We load the optimizer state if this is a continuation of
             # the training
             if "il_optimizer_state" in status:
                 self.optimizer.load_state_dict(status["il_optimizer_state"])
                 txt_logger.info("Optimizer loaded from the state\n")
+        else:
+            # Remove previous IL optimizer state if the training mode
+            # has changed
+            status.pop("il_optimizer_state", None)
 
         # Create exponential decay LR scheduler, so every N steps LR
         # reduced by gamma
@@ -431,7 +435,7 @@ class ImitationLearning(object):
             (flat_batch[:, 0], flat_batch[:, 1], flat_batch[:, 2],
              flat_batch[:, 3], flat_batch[:, 4])
         # (P, L) shape
-        true_actions = torch.as_tensor(true_actions.astype(dtype=int, copy=False),
+        true_actions = torch.as_tensor(true_actions.tolist(),
                                        device=device, dtype=torch.long)
         # (P, 1) shape for old demo episodes which have (P, ) shapes
         true_actions = true_actions.unsqueeze(1) if true_actions.ndim == 1 else true_actions
@@ -821,12 +825,12 @@ class ImitationLearning(object):
                 dummy_actions = np.zeros(active_indices.shape, dtype=int)
                 _, _, terminated, _, info = env.step(dummy_actions, active_indices)
                 done = np.asarray(terminated)
-                true_action = [inf["bot/action"] for inf in info]
+                true_actions = [inf["bot/action"] for inf in info]
 
                 if pause:
                     time.sleep(pause)
 
-                for i, a, d in zip(active_indices, true_action, done):
+                for i, a, d in zip(active_indices, true_actions, done):
                     # Skip last NOOP action
                     if not d:
                         actions[i].append(a)

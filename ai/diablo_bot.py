@@ -135,8 +135,8 @@ class FindRandomGoal_Bot:
         self.routes_rebuilds = 0
 
 
-    def step(self) -> tuple[bool, int]:
-        """Executes one reasoning-and-action cycle of the agent.
+    def step(self) -> tuple[bool, list[int]]:
+        """Executes one reasoning-and-action cycle of the bot.
 
         The method performs the following operations:
           - Extracts the local environment around the player using
@@ -384,7 +384,7 @@ class FindRandomGoal_Bot:
                   ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
             self.game.submit_key(key)
 
-        return False, action
+        return False, [action]
 
 
     def save_state(self, d, player_pos, next_unexplored, offset,

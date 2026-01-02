@@ -1310,7 +1310,7 @@ def demos_il(args, gameconfig):
                 seeds = list(seeds_set)
 
         seed += num_envs
-        demos, _, steps = ImitationLearning.generate_demos(pbot_pool, seeds, txt_logger)
+        demos, _, steps = ImitationLearning.generate_demos(pbot_pool, seeds)
         all_steps_cnt += steps
         steps_cnt += steps
         all_demos += demos
@@ -1598,7 +1598,7 @@ def main():
         # Common
         "seed": args.seed_base, # Likely will be overridden by subsequent env reset
         "fixed-seed": args.fixed_seed \
-            if hasattr(args, "log_to_stdout") else False,
+            if hasattr(args, "fixed_seed") else False,
         "no-monsters": args.no_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments

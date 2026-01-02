@@ -575,6 +575,11 @@ class DiabloEnv(gym.Env):
     def step(self, action):
         self.steps_cnt += 1
 
+        # HRL-awareness: (L,) shape
+        assert isinstance(action, list) or isinstance(action, np.ndarray)
+        assert len(action) == 1
+        action = action[0]
+
         if self.paused:
             # Resume first
             self.pause_game(False)

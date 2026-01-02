@@ -18,6 +18,7 @@ import numpy
 import torch
 
 from rl.torch_ac.format import default_preprocess_obss
+from rl.torch_ac.utils import DictList, ParallelEnv
 from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
 
 
