@@ -237,7 +237,7 @@ def make_cli_opts(parser, params):
                 missing.append(f"{opt_string} ${name.upper()}")
 
         # Include if new param overrides default
-        elif new_val is not None and new_val != default_val:
+        elif new_val is not None and str(new_val) != str(default_val):
             opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
                 if new_val:
