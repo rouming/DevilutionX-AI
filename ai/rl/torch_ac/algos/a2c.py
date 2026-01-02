@@ -70,11 +70,9 @@ class A2CAlgo(BaseAlgo):
                 # temporally extended skills.
                 h = memory * sb.mask # episode resets
                 h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
-                #XXX NOISE?
-                dist, value, memory = self.acmodel(sb.obs, h)
+                dist, value, memory = self.acmodel(sb.obs, h, action=sb.action)
             else:
-                #XXX NOISE?
-                dist, value = self.acmodel(sb.obs)
+                dist, value = self.acmodel(sb.obs, action=sb.action)
 
             num_seqs = len(inds)
 

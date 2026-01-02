@@ -370,7 +370,7 @@ class ImitationLearning(object):
             episodes = batch[offset: offset + size]
 
             seeds, true_actions = zip(*episodes)
-            obs, _ = env.reset(seeds=seeds)
+            obs, info = env.reset(seeds=seeds)
 
             obss = [[] for _ in range(size)]
             dones = [[] for _ in range(size)]
@@ -427,14 +427,14 @@ class ImitationLearning(object):
         mask = torch.tensor(mask, device=device, dtype=torch.float).unsqueeze(1)
 
         # For each of the stored demonstrations
-        obss, actions_true, dones, rewards, opt_changed = \
+        obss, true_actions, dones, rewards, opt_changed = \
             (flat_batch[:, 0], flat_batch[:, 1], flat_batch[:, 2],
              flat_batch[:, 3], flat_batch[:, 4])
         # (P, L) shape
-        actions_true = torch.as_tensor(actions_true.astype(dtype=int, copy=False),
+        true_actions = torch.as_tensor(true_actions.astype(dtype=int, copy=False),
                                        device=device, dtype=torch.long)
         # (P, 1) shape for old demo episodes which have (P, ) shapes
-        actions_true = actions_true.unsqueeze(1) if actions_true.ndim == 1 else actions_true
+        true_actions = true_actions.unsqueeze(1) if true_actions.ndim == 1 else true_actions
         # (P, 1) shape
         opt_changed = torch.as_tensor(opt_changed.astype(dtype=np.float32, copy=False),
                                       device=device, dtype=torch.float32).unsqueeze(1)
@@ -456,13 +456,14 @@ class ImitationLearning(object):
             # taking observations and done located at inds
             obs = obss[inds]
             done_step = dones[inds]
+            action_step = true_actions[inds]
             with torch.no_grad():
                 preprocessed_obs = self.preprocess_obss(obs, device=device)
                 # taking the memory till len(inds), as demos beyond
                 # that have already finished
-                # XXX NOISE???
                 _, _, new_memory = self.acmodel(preprocessed_obs,
-                                                memory[:len(inds), :])
+                                                memory[:len(inds), :],
+                                                action=action_step)
             memories[inds, :] = memory[:len(inds), :]
             memory[:len(inds), :] = new_memory
             episode_ids[inds] = range(len(inds))
@@ -493,7 +494,7 @@ class ImitationLearning(object):
         for _ in range(self.args.recurrence):
             obs = obss[indexes]
             preprocessed_obs = self.preprocess_obss(obs, device=device)
-            action_step = actions_true[indexes]
+            action_step = true_actions[indexes]
             mask_step = mask[indexes]
             opt_changed_step = opt_changed[indexes]
 
@@ -502,8 +503,7 @@ class ImitationLearning(object):
             h = memory * mask_step # episode resets
             h = h * (1 - opt_changed_step) + h.detach() * opt_changed_step # option boundaries
             # Recurrent chain through memory
-            #XXX NOISE????
-            dist, value, memory = self.acmodel(preprocessed_obs, h)
+            dist, value, memory = self.acmodel(preprocessed_obs, h, action=action_step)
             r = returns[indexes]
 
             num_seqs = len(indexes)

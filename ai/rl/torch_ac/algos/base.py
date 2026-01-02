@@ -108,7 +108,7 @@ class BaseAlgo(ABC):
         shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
 
         self.obs, info = self.env.reset(seeds=seeds)
-        self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
+        self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
                                          dtype=int, device=self.device)
         self.obss = [None] * (shape[0])
         if self.acmodel.recurrent:
@@ -118,7 +118,6 @@ class BaseAlgo(ABC):
         self.masks = torch.zeros(*shape[:2], device=self.device)
         self.opt_mask = torch.ones(shape[1], device=self.device)
         self.opt_masks = torch.zeros(*shape[:2], device=self.device)
-        self.noises = torch.zeros(*shape, device=self.device)
         self.actions = torch.zeros(*shape, device=self.device, dtype=torch.int)
         self.values = torch.zeros(*shape, device=self.device)
         self.rewards = torch.zeros(*shape, device=self.device)
@@ -169,10 +168,10 @@ class BaseAlgo(ABC):
                 preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
                 if self.acmodel.recurrent:
                     dist, value, memory = self.acmodel(
-                        preprocessed_obs, noise,
-                        self.memory * self.mask.unsqueeze(1))
+                        preprocessed_obs, self.memory * self.mask.unsqueeze(1),
+                        noise=noise)
                 else:
-                    dist, value = self.acmodel(preprocessed_obs, noise)
+                    dist, value = self.acmodel(preprocessed_obs, noise=noise)
 
             assert len(dist) == self.num_levels
             assert value.shape == (self.num_procs, self.num_levels)
@@ -198,7 +197,7 @@ class BaseAlgo(ABC):
             if self.acmodel.recurrent:
                 self.memories[i] = self.memory
                 self.memory = memory
-            self.env_counters = torch.tensor([inf["env_counters"] for inf in info],
+            self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
                                              dtype=int, device=self.device)
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
@@ -206,7 +205,6 @@ class BaseAlgo(ABC):
             self.opt_mask = 1 - torch.tensor(opt_changed, device=self.device, dtype=torch.float)
             self.actions[i] = actions
             self.values[i] = value
-            self.noises[i] = noise
             if self.reshape_reward is not None:
                 self.rewards[i] = torch.tensor([
                     self.reshape_reward(obs_, action_, reward_, opt_changed_, done_)
@@ -248,10 +246,10 @@ class BaseAlgo(ABC):
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             if self.acmodel.recurrent:
                 _, next_value, _ = self.acmodel(
-                    preprocessed_obs, noise,
-                    self.memory * self.mask.unsqueeze(1))
+                    preprocessed_obs, self.memory * self.mask.unsqueeze(1),
+                    noise=noise)
             else:
-                _, next_value = self.acmodel(preprocessed_obs, noise)
+                _, next_value = self.acmodel(preprocessed_obs, noise=noise)
 
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
@@ -283,7 +281,6 @@ class BaseAlgo(ABC):
         # for all tensors below, T x P x L -> P x T x L -> (P * T) x L
         exps.action = self.actions.transpose(0, 1).reshape(-1, *self.actions.shape[2:])
         exps.value = self.values.transpose(0, 1).reshape(-1, *self.values.shape[2:])
-        exps.noise = self.noises.transpose(0, 1).reshape(-1, *self.noises.shape[2:])
         exps.reward = self.rewards.transpose(0, 1).reshape(-1, *self.rewards.shape[2:])
         exps.advantage = self.advantages.transpose(0, 1).reshape(-1, *self.advantages.shape[2:])
         exps.returnn = exps.value + exps.advantage

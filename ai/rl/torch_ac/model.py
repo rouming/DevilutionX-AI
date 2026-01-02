@@ -11,7 +11,7 @@ class BaseACModel:
         pass
 
     @abstractmethod
-    def forward(self, obs):
+    def forward(self, obs, **kwargs):
         pass
 
 class RecurrentACModel(BaseACModel):
@@ -19,7 +19,7 @@ class RecurrentACModel(BaseACModel):
     num_levels = 1
 
     @abstractmethod
-    def forward(self, obs, memory):
+    def forward(self, obs, memory, **kwargs):
         pass
 
     @property

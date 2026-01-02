@@ -344,7 +344,7 @@ class DiabloEnv(gym.Env):
         self.start_dungeon_level = d.player.plrlevel
 
         obss = {"env": env, "env-status": env_status}
-        info = {"env_counters": (self.resets_cnt, self.steps_cnt)}
+        info = {"env-counters": (self.resets_cnt, self.steps_cnt)}
         return obss, info
 
     def is_agent_timedout(self):
@@ -611,7 +611,7 @@ class DiabloEnv(gym.Env):
         obss = {"env": env, "env-status": env_status}
         info = {"hierarchy/opt-changed": False,
                 "hierarchy/reward": [reward],
-                "env_counters": (self.resets_cnt, self.steps_cnt)}
+                "env-counters": (self.resets_cnt, self.steps_cnt)}
         return obss, reward, done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):

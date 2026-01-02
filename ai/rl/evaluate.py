@@ -49,7 +49,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
     obss, info = env.reset(seeds=seeds.tolist(), indices=active_indices)
     obss = np.asarray(obss)
     if not argmax:
-        counters = torch.tensor([inf["env_counters"] for inf in info],
+        counters = torch.tensor([inf["env-counters"] for inf in info],
                                 dtype=int, device=device)
 
     while np.any(running_envs):
@@ -60,7 +60,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
             pending_resets[reset_indices] = False
             obss[reset_indices] = new_obs
             if not argmax:
-                new_counters = torch.tensor([inf["env_counters"] for inf in info],
+                new_counters = torch.tensor([inf["env-counters"] for inf in info],
                                             dtype=int, device=device)
                 counters[reset_indices] = new_counters
 
@@ -79,10 +79,10 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
             preprocessed_obss = preprocess_obss(obs, device=device)
             if acmodel.recurrent:
                 memory = memories[active_indices]
-                dist, _, memory = acmodel(preprocessed_obss, noise, memory)
+                dist, _, memory = acmodel(preprocessed_obss, memory, noise=noise)
                 memories[active_indices] = memory
             else:
-                dist, _ = acmodel(preprocessed_obss, noise)
+                dist, _ = acmodel(preprocessed_obss, noise=noise)
 
             assert len(dist) == num_levels
 
@@ -116,7 +116,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
         obss[active_indices] = obs
         num_frames[active_indices] += 1
         if not argmax:
-            active_counters = torch.tensor([inf["env_counters"] for inf in info],
+            active_counters = torch.tensor([inf["env-counters"] for inf in info],
                                            dtype=int, device=device)
             counters[active_indices] = active_counters
 

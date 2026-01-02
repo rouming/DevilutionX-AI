@@ -11,6 +11,7 @@ from torch.distributions.categorical import Categorical
 from rl.torch_ac.utils.sampling import deterministic_sample
 import rl.torch_ac as torch_ac
 
+
 class CNN32(nn.Module):
     def __init__(self, in_channels=16, output_dim=512):
         super(CNN32, self).__init__()
@@ -54,6 +55,7 @@ class CNN32(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+MANAGER_LEVEL = 1
 
 class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
     def __init__(self, obs_space, action_space, cnn_arch='cnn32',
@@ -141,7 +143,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
     def semi_memory_size(self):
         return self.image_embedding_size
 
-    def forward(self, obs, noise, memory, cached_option=None):
+    def forward(self, obs, memory, *, noise=None, action=None):
         # Convert (B, H, W, C) to (B, C, H, W)
         x = obs.image.transpose(1, 3).transpose(2, 3)
         x = self.image_conv(x)
@@ -157,16 +159,16 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         manager_logits = self.manager_actor(embedding)
         dist_manager = Categorical(logits=F.log_softmax(manager_logits, dim=1))
 
-        if cached_option is not None:
-            # TRAINING MODE: we must use the option that was actually taken
-            # in the history to correctly train the worker.
-            # Ensure shape is (B, ) usually passed as sb.action[:, 1]
-            active_option = cached_option
+        if action is not None:
+            # TRAINING MODE - we must use the option that was actually
+            # taken in the history to correctly train the worker.
+            assert self.training and noise is None
+            active_option = action[:, MANAGER_LEVEL]
         else:
-            # INFERENCE/COLLECTION MODE
-            # We use stateless and deterministic categorical sampling
-            # Shape (B, ), manager has index 1
-            active_option = deterministic_sample(dist_manager.prob, noise[:, 1])
+            # COLLECTION MODE - we use stateless and deterministic
+            # categorical sampling
+            assert noise is not None
+            active_option = deterministic_sample(dist_manager.prob, noise[:, MANAGER_LEVEL])
 
         # Worker pass, embed the chosen option
         opt_emb = self.option_embedding(active_option) # (B, 64)

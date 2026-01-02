@@ -90,11 +90,9 @@ class PPOAlgo(BaseAlgo):
                         h = memory * sb.mask # episode resets
                         h = h * sb.opt_mask + h.detach() * (1 - sb.opt_mask) # option boundaries
                         # Recurrent chain through memory
-                        #XXX ACTION FOR MANAGER
-                        dist, value, memory = self.acmodel(sb.obs, sb.action, h)
+                        dist, value, memory = self.acmodel(sb.obs, h, action=sb.action)
                     else:
-                        #XXX 
-                        dist, value = self.acmodel(sb.obs, sb.action)
+                        dist, value = self.acmodel(sb.obs, action=sb.action)
 
                     num_seqs = len(inds)
 

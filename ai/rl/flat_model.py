@@ -523,7 +523,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
     def semi_memory_size(self):
         return self.image_embedding_size
 
-    def forward(self, obs, noise, memory):
+    def forward(self, obs, memory, **kwargs):
         if self.use_text:
             embed_text = self._get_embed_text(obs.text)
 
