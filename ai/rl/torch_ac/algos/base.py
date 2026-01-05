@@ -3,7 +3,7 @@ import torch
 
 from rl.torch_ac.format import default_preprocess_obss
 from rl.torch_ac.utils import DictList, ParallelEnv
-
+import time
 
 class BaseAlgo(ABC):
     """The base class for RL algorithms."""
@@ -103,7 +103,7 @@ class BaseAlgo(ABC):
         self.log_reshaped_return = [0] * self.num_procs
         self.log_num_frames = [0] * self.num_procs
 
-    def collect_experiences(self):
+    def collect_experiences(self, ts_points):
         """Collects rollouts and computes advantages.
 
         Runs several environments concurrently. The next actions are computed
@@ -124,22 +124,39 @@ class BaseAlgo(ABC):
             reward, policy loss, value loss, etc.
         """
 
+        def save(name, P):
+            ts_points[name] = ts_points.get(name, 0) + (time.time() - P)
+
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
 
             with torch.no_grad():
+                P = time.time()
                 preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+                save('CE_P2', P)
+
+                P = time.time()
                 if self.acmodel.recurrent:
                     dist, value, memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
                 else:
                     dist, value = self.acmodel(preprocessed_obs)
-            action = dist.sample()
+                save('CE_P3', P)
 
+            P = time.time()
+            action = dist.sample()
+            save('CE_P4', P)
+
+            P = time.time()
             obs, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy())
+            save('CE_P5', P)
+
+            P = time.time()
             done = tuple(a | b for a, b in zip(terminated, truncated))
+            save('CE_P6', P)
 
             # Update experiences values
 
+            P = time.time()
             self.obss[i] = self.obs
             self.obs = obs
             if self.acmodel.recurrent:
@@ -157,9 +174,11 @@ class BaseAlgo(ABC):
             else:
                 self.rewards[i] = torch.tensor(reward, device=self.device)
             self.log_probs[i] = dist.log_prob(action)
+            save('CE_P7', P)
 
             # Update log values
 
+            P = time.time()
             self.log_episode_return += torch.tensor(reward, device=self.device, dtype=torch.float)
             self.log_episode_reshaped_return += self.rewards[i]
             self.log_episode_num_frames += torch.ones(self.num_procs, device=self.device)
@@ -174,9 +193,11 @@ class BaseAlgo(ABC):
             self.log_episode_return *= self.mask
             self.log_episode_reshaped_return *= self.mask
             self.log_episode_num_frames *= self.mask
+            save('CE_P8', P)
 
         # Add advantage and return to experiences
 
+        P = time.time()
         with torch.no_grad():
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             if self.acmodel.recurrent:
@@ -184,6 +205,10 @@ class BaseAlgo(ABC):
             else:
                 _, next_value = self.acmodel(preprocessed_obs)
 
+        save('CE_P9', P)
+
+
+        P = time.time()
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
             next_value = self.values[i+1] if i < self.num_frames_per_proc - 1 else next_value
@@ -191,6 +216,7 @@ class BaseAlgo(ABC):
 
             delta = self.rewards[i] + self.discount * next_value * next_mask - self.values[i]
             self.advantages[i] = delta + self.discount * self.gae_lambda * next_advantage * next_mask
+        save('CE_P10', P)
 
         # Define experiences:
         #   the whole experience is the concatenation of the experience
@@ -200,6 +226,7 @@ class BaseAlgo(ABC):
         #   - P is self.num_procs,
         #   - D is the dimensionality.
 
+        P = time.time()
         exps = DictList()
         exps.obs = [self.obss[i][j]
                     for j in range(self.num_procs)
@@ -236,6 +263,8 @@ class BaseAlgo(ABC):
         self.log_return = self.log_return[-self.num_procs:]
         self.log_reshaped_return = self.log_reshaped_return[-self.num_procs:]
         self.log_num_frames = self.log_num_frames[-self.num_procs:]
+
+        save('CE_P11', P)
 
         return exps, logs
 

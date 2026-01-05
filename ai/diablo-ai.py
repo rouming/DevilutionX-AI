@@ -1174,15 +1174,29 @@ def train_ai(args, gameconfig):
     update = status["update"]
     start_time = time.time()
 
+    ts_points = {}
+    cnt = 0
+
+    def save(name, P):
+        ts_points[name] = ts_points.get(name, 0) + (time.time() - P)
+
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
-        exps, logs1 = algo.collect_experiences()
-        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
+        P = time.time()
+        exps, logs1 = algo.collect_experiences(ts_points)
+        save('CE_P0', P)
+
+        P = time.time()
+        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run, ts_points=ts_points)
+        save('UP_P0', P)
         logs = {**logs1, **logs2}
         update_end_time = time.time()
 
         scheduler.step()
+
+        #XXX
+        cnt += logs["num_frames"]
 
         num_frames += logs["num_frames"]
         update += 1
@@ -1282,6 +1296,11 @@ def train_ai(args, gameconfig):
                 # Save info about best status backup into Sprout as custom dict
                 best = { 'best': { 'frames': num_frames, 'success_rate': success_rate }}
                 spr.edit(head=args.model, custom_dict=best)
+
+    #XXX
+    for name, diff in sorted(ts_points.items(), key=lambda i: i[0]):
+        print(f"{name}: {diff/cnt}, {diff} for overall {cnt}")
+
     return 0
 
 
