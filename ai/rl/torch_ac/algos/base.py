@@ -204,21 +204,11 @@ class BaseAlgo(ABC):
             P = time.time()
             done = numpy.logical_or(terminated, truncated)
             # HRL-aware rewards with the shape (P, L)
-            #reward = numpy.array([inf["hierarchy/reward"] for inf in info], dtype=float)
-            #assert reward.shape == (self.num_procs, self.num_levels)
-            reward = numpy.zeros((self.num_procs, self.num_levels), dtype=float)
-            opt_changed = numpy.zeros((self.num_procs,), dtype=bool)
-            env_counters = numpy.zeros((self.num_procs, 2), dtype=int)
-
-            for ii, inf in enumerate(info):
-                reward[ii] = inf["hierarchy/reward"]
-                opt_changed[ii] = inf["hierarchy/opt-changed"]
-                env_counters[ii] = inf["env-counters"]
-
-
+            reward = numpy.array([inf["hierarchy/reward"] for inf in info], dtype=float)
+            assert reward.shape == (self.num_procs, self.num_levels)
             # HRL-aware opt-changed flag with the shape (P,)
-            #opt_changed = numpy.array([inf["hierarchy/opt-changed"] for inf in info],
-            #                          dtype=bool)
+            opt_changed = numpy.array([inf["hierarchy/opt-changed"] for inf in info],
+                                      dtype=bool)
             save('CE_P6', P)
 
             # Update experiences values
@@ -229,7 +219,7 @@ class BaseAlgo(ABC):
             if self.acmodel.recurrent:
                 self.memories[i] = self.memory
                 self.memory = memory
-            self.env_counters = torch.tensor(env_counters,
+            self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
                                              dtype=int, device=self.device)
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
