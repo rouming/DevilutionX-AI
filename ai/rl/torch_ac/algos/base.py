@@ -161,6 +161,8 @@ class BaseAlgo(ABC):
 
         def save(name, P):
             ts_points[name] = ts_points.get(name, 0) + (time.time() - P)
+        def add(name, V):
+            ts_points[name] = ts_points.get(name, 0) + V
 
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
@@ -200,6 +202,13 @@ class BaseAlgo(ABC):
             P = time.time()
             obs, _, terminated, truncated, info = self.env.step(actions.cpu().numpy())
             save('CE_P5', P)
+
+            reset_diffs = [inf['reset-diff'] for inf in info
+                           if 'reset-diff' in inf]
+            if len(reset_diffs):
+                add('CE_P5.resets-cnt', 1)
+                add('CE_P5.resets-pcnt', len(reset_diffs))
+                add('CE_P5.resets-diff', max(reset_diffs))
 
             P = time.time()
             done = numpy.logical_or(terminated, truncated)

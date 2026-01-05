@@ -1,6 +1,7 @@
 import multiprocessing
 import selectors
 import numpy as np
+import time
 
 
 def worker(conn, env):
@@ -18,8 +19,10 @@ def worker(conn, env):
                     # harm for training because the algorithm does not
                     # actually use the next observation when done=True.
                     # See @ParallelEnv.step()
+                    P = time.time()
                     obs, reset_info = env.reset()
-                    info |= reset_info
+                    diff = time.time() - P
+                    info |= reset_info | {"reset-diff": diff}
                     result = (obs, reward, terminated, truncated, info)
 
             conn.send(result)
