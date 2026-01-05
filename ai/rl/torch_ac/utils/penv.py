@@ -53,6 +53,7 @@ class ParallelEnv:
     def __init__(self, penv_pool, auto_reset=False):
         self.p = penv_pool
         self.auto_reset = auto_reset
+        self.inv = np.empty(len(self.p.envs), dtype=int)
 
 
     def nonblock_reset(self, seeds=None, indices=None):
@@ -97,19 +98,31 @@ class ParallelEnv:
 
     def reset(self, seeds=None, indices=None):
         nr_resets = self.nonblock_reset(seeds=seeds, indices=indices)
-        obss = np.zeros((nr_resets,), dtype=object)
-        infos = np.zeros((nr_resets,), dtype=object)
-        indices = []
-        while len(indices) != nr_resets:
-            ind, obs, info = self.poll_resets(nonblock=False)
-            obss[ind] = obs
-            infos[ind] = info
-            indices.extend(ind)
 
-        order = sorted(indices)
-        obss = obss[order].tolist()
-        infos = infos[order].tolist()
-        return obss, infos
+        obss = np.empty(nr_resets, dtype=object)
+        infos = np.empty(nr_resets, dtype=object)
+
+        # Check if we do need the reverse mapping
+        if indices is None:
+            use_inverse = False
+        else:
+            sched_indices = np.asarray(indices, dtype=int)
+            use_inverse = not np.all(sched_indices == np.arange(nr_resets))
+
+            if use_inverse:
+                self.inv[sched_indices] = np.arange(nr_resets)
+
+        done = 0
+        while done < nr_resets:
+            ind, obs, info = self.poll_resets(nonblock=False)
+            ind = np.asarray(ind, dtype=int)
+
+            pos = self.inv[ind] if use_inverse else ind
+            obss[pos] = obs
+            infos[pos] = info
+            done += len(ind)
+
+        return obss.tolist(), infos.tolist()
 
 
     def step(self, actions, indices=None):
