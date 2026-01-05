@@ -1096,16 +1096,30 @@ def train_ai(args, gameconfig):
 
     txt_logger.info(f"Start training from {num_frames} frames\n")
 
+    ts_points = {}
+    cnt = 0
+
+    def save(name, P):
+        ts_points[name] = ts_points.get(name, 0) + (time.time() - P)
+
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
-        exps, logs1 = algo.collect_experiences()
-        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
+        P = time.time()
+        exps, logs1 = algo.collect_experiences(ts_points)
+        save('CE_P0', P)
+
+        P = time.time()
+        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run, ts_points=ts_points)
+        save('UP_P0', P)
         logs = {**logs1, **logs2}
         update_end_time = time.time()
 
         if not args.dry_run:
             scheduler.step()
+
+        #XXX
+        cnt += logs["num_frames"]
 
         num_frames += logs["num_frames"]
         update += 1
@@ -1225,6 +1239,11 @@ def train_ai(args, gameconfig):
             else:
                 spr.edit(head=args.model, custom_dict=last,
                          custom_update=True)
+
+    #XXX
+    for name, diff in sorted(ts_points.items(), key=lambda i: i[0]):
+        print(f"{name}: {diff} / {diff/cnt:.2f}")
+
     return 0
 
 

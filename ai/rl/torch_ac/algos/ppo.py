@@ -16,6 +16,7 @@ Author: Roman Penyaev, 2025
 import numpy
 import torch
 import torch.nn.functional as F
+import time
 
 from rl.torch_ac.algos.base import BaseAlgo
 
@@ -44,8 +45,11 @@ class PPOAlgo(BaseAlgo):
         self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
         self.batch_num = 0
 
-    def update_parameters(self, exps, apply_update=True):
+    def update_parameters(self, exps, apply_update=True, ts_points=None):
         # Collect experiences
+
+        def save(name, P):
+            ts_points[name] = ts_points.get(name, 0) + (time.time() - P)
 
         for _ in range(self.epochs):
             # Initialize log values
@@ -83,6 +87,8 @@ class PPOAlgo(BaseAlgo):
 
                     # Compute loss
 
+                    P = time.time()
+
                     if self.acmodel.recurrent:
                         # We detach memory if and only if the option
                         # changed, to prevent interference between
@@ -94,10 +100,14 @@ class PPOAlgo(BaseAlgo):
                     else:
                         dist, value = self.acmodel(sb.obs, action=sb.action)
 
+                    save('UP_P1', P)
+
                     num_seqs = len(inds)
 
                     assert len(dist) == self.num_levels
                     assert value.shape == (num_seqs, self.num_levels)
+
+                    P = time.time()
 
                     # Entropy (scalar) averaged over the sub-batch (S)
                     # for each distribution, resulting in the shape (L, )
@@ -153,7 +163,11 @@ class PPOAlgo(BaseAlgo):
                     if self.acmodel.recurrent and i < self.recurrence - 1:
                         exps.memory[inds + i + 1] = memory.detach()
 
+                    save('UP_P2', P)
+
                 # Update batch values
+
+                P = time.time()
 
                 batch_entropy /= self.recurrence
                 batch_value /= self.recurrence
@@ -172,6 +186,8 @@ class PPOAlgo(BaseAlgo):
                     self.optimizer.step()
                 else:
                     grad_norm = 0.0
+
+                save('UP_P3', P)
 
                 # Update log values
 
