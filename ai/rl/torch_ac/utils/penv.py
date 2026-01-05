@@ -1,13 +1,13 @@
 import multiprocessing
 import gymnasium as gym
-
+import time
 
 def worker(conn, env):
     while True:
         cmd, data = conn.recv()
         if cmd == "step":
             result = env.step(data)
-            terminated, truncated = result[2:4]
+            obs, reward, terminated, truncated, info = result
             if terminated or truncated:
                 # Be careful here - the last observation is returned
                 # right after reset, not the actual observation that
@@ -15,8 +15,11 @@ def worker(conn, env):
                 # harm for training because the algorithm does not
                 # actually use the next observation when done=True.
                 # See @ParallelEnv.step()
-                obs, _ = env.reset()
-                result = (obs,) + result[1:]
+                P = time.time()
+                obs, reset_info = env.reset()
+                diff = time.time() - P
+                info |= reset_info | {"reset-diff": diff}
+                result = (obs, reward, terminated, truncated, info)
 
             conn.send(result)
         elif cmd == "reset":
