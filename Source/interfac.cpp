@@ -691,13 +691,19 @@ void ShowProgress(interface_mode uMsg)
 	}
 
 	// Begin loading
-	static interface_mode loadTarget;
-	loadTarget = uMsg;
-	SdlThread loadThread = SdlThread([]() {
-		const uint32_t start = SDL_GetTicks();
-		DoLoad(loadTarget);
-		LogVerbose("Load thread finished in {}ms", SDL_GetTicks() - start);
-	});
+	SdlThread loadThread;
+	if (!HeadlessMode) {
+		static interface_mode loadTarget;
+		loadThread = SdlThread([]() {
+			const uint32_t start = SDL_GetTicks();
+			DoLoad(loadTarget);
+			LogVerbose("Load thread finished in {}ms", SDL_GetTicks() - start);
+		});
+	} else {
+		// Load directly, for headless mode this significantly speeds
+		// up resets for AI agents
+		DoLoad(uMsg);
+	}
 
 	const auto processEvent = [&](const SDL_Event &event) {
 		CheckShouldSkipRendering();
@@ -705,7 +711,8 @@ void ShowProgress(interface_mode uMsg)
 			HandleMessage(event, SDL_GetModState());
 		}
 		if (ProgressEventHandlerState.done) {
-			loadThread.join();
+			if (!HeadlessMode)
+				loadThread.join();
 			return false;
 		}
 		return true;
