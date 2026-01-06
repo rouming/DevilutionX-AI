@@ -419,6 +419,10 @@ int pcurs;
 
 void InitCursor()
 {
+	if (HeadlessMode && pCursCels)
+		// Load cursors once to speed up resets for AI agents
+		return;
+
 	assert(!pCursCels);
 #ifdef UNPACKED_MPQS
 	pCursCels = LoadClx("data\\inv\\objcurs.clx");
@@ -436,6 +440,10 @@ void InitCursor()
 
 void FreeCursor()
 {
+	if (HeadlessMode)
+		// Never free cursors, see InitCursor()
+		return;
+
 	pCursCels = std::nullopt;
 	pCursCels2 = std::nullopt;
 	ClearCursor();

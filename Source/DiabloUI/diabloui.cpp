@@ -520,6 +520,8 @@ bool IsInsideRect(const SDL_Event &event, const SDL_Rect &rect)
 
 void LoadHeros()
 {
+	if (HeadlessMode)
+		return;
 	constexpr unsigned PortraitHeight = 76;
 	ArtHero = LoadPcxSpriteList("ui_art\\heros", -static_cast<int>(PortraitHeight));
 	if (!ArtHero)
@@ -545,6 +547,8 @@ void LoadHeros()
 
 void LoadUiGFX()
 {
+	if (HeadlessMode)
+		return;
 	if (gbIsHellfire) {
 		ArtLogo = LoadPcxSpriteList("ui_art\\hf_logo2", /*numFrames=*/16, /*transparentColor=*/0);
 	} else {
@@ -571,6 +575,8 @@ ClxSprite UiGetHeroDialogSprite(size_t heroClassIndex)
 
 void UnloadUiGFX()
 {
+	if (HeadlessMode)
+		return;
 	ArtHero = std::nullopt;
 	for (OptionalOwnedClxSpriteList &override : ArtHeroOverrides)
 		override = std::nullopt;
@@ -583,6 +589,8 @@ void UnloadUiGFX()
 
 void UiInitialize()
 {
+	if (HeadlessMode)
+		return;
 	LoadUiGFX();
 
 	if (ArtCursor) {
@@ -594,6 +602,8 @@ void UiInitialize()
 
 void UiDestroy()
 {
+	if (HeadlessMode)
+		return;
 	UnloadFonts();
 	UnloadUiGFX();
 }

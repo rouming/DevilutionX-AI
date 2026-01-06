@@ -691,13 +691,7 @@ void ShowProgress(interface_mode uMsg)
 	}
 
 	// Begin loading
-	static interface_mode loadTarget;
-	loadTarget = uMsg;
-	SdlThread loadThread = SdlThread([]() {
-		const uint32_t start = SDL_GetTicks();
-		DoLoad(loadTarget);
-		LogVerbose("Load thread finished in {}ms", SDL_GetTicks() - start);
-	});
+	DoLoad(uMsg);
 
 	const auto processEvent = [&](const SDL_Event &event) {
 		CheckShouldSkipRendering();
@@ -705,7 +699,6 @@ void ShowProgress(interface_mode uMsg)
 			HandleMessage(event, SDL_GetModState());
 		}
 		if (ProgressEventHandlerState.done) {
-			loadThread.join();
 			return false;
 		}
 		return true;
