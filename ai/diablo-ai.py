@@ -989,6 +989,7 @@ def train_ai(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1251,7 +1252,8 @@ def demos_il(args, gameconfig):
     bots_envs = []
     ts = 0
     for i in range(num_envs):
-        env_config = gameconfig
+        env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Run or attach to Diablo (devilutionX) instance
         game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -1367,6 +1369,7 @@ def train_il(args, gameconfig):
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1440,6 +1443,7 @@ def play_ai(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -1516,6 +1520,7 @@ def play_bot(args, gameconfig):
     ts = 0
     for i in range(num_envs):
         env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = i
 
         # Run or attach to Diablo (devilutionX) instance
         game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -1596,7 +1601,8 @@ def main():
         "diablo-bin-path": diablo_bin_path,
 
         # Common
-        "seed": args.seed_base, # Likely will be overridden by subsequent env reset
+        "index": 0, # Just a sequential number, will be overridden for each instance
+        "seed": args.seed_base, # Will be overridden by a subsequent env reset with a valid seed
         "fixed-seed": args.fixed_seed \
             if hasattr(args, "fixed_seed") else False,
         "no-monsters": args.no_monsters,

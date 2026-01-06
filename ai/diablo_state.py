@@ -830,7 +830,7 @@ class DiabloGame:
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
                          )
 
-        prefix = "diablo-%d-%d-" % (config["seed"], os.getpid())
+        prefix = "diablo-%d-%d-" % (config["index"], os.getpid())
         state_dir = tempfile.TemporaryDirectory(prefix=prefix)
         cfg_file = open(state_dir.name + "/diablo.ini", "w")
         cfg_file.write(cfg)
