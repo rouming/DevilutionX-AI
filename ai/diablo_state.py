@@ -824,6 +824,7 @@ class DiabloGame:
                          game_ticks_per_step=game_ticks_per_step,
                          step_mode=0 if config["gui"] else 1 if step_mode else 0,
                          mshared_filename=mshared_filename,
+                         invincible_player=1 if config["invincible-player"] else 0,
                          no_monsters=1 if config["no-monsters"] else 0,
                          harmless_barrels=1 if config["harmless-barrels"] else 0,
                          no_auto_walk_on_seconday_action=

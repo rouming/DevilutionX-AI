@@ -75,6 +75,7 @@ def make_diablo_parser():
     incompatible_options = {
         '--attach': ['--game-ticks-per-step',
                      '--step-mode',
+                     '--invincible-player',
                      '--no-monsters',
                      '--harmless-barrels',
                      '--seed-base',
@@ -122,6 +123,10 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--gui", action="store_true",
         help="Start Diablo in GUI mode only")
+    # See also `incompatible_options`
+    common_parser.add_argument(
+        "--invincible-player", action="store_true",
+        help="Enable invincible player mode")
     # See also `incompatible_options`
     common_parser.add_argument(
         "--no-monsters", action="store_true",
@@ -1605,6 +1610,7 @@ def main():
         "seed": args.seed_base, # Will be overridden by a subsequent env reset with a valid seed
         "fixed-seed": args.fixed_seed \
             if hasattr(args, "fixed_seed") else False,
+        "invincible-player": args.invincible_player,
         "no-monsters": args.no_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments

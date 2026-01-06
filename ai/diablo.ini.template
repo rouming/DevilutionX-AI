@@ -105,6 +105,7 @@ Run the game loop in step mode={step_mode}
 Automap active on start={automap_active}
 Disable explosive barrels, urns, or pods={harmless_barrels}
 Disable auto-walk when pressing the secondary action={no_auto_walk_on_seconday_action}
+Enable invincible player mode={invincible_player}
 
 [Network]
 Port=6112
