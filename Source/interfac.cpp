@@ -700,7 +700,7 @@ void ShowProgress(interface_mode uMsg)
 			LogVerbose("Load thread finished in {}ms", SDL_GetTicks() - start);
 		});
 	} else {
-		// Load directly, for headless mode this significantly speeds
+		// Load directly. For headless mode, this significantly speeds
 		// up resets for AI agents
 		DoLoad(uMsg);
 	}

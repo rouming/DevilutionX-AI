@@ -883,6 +883,15 @@ def run_tui(stdscr, args, gameconfig):
     # Run or attach to Diablo
     game = diablo_state.DiabloGame.run_or_attach(gameconfig)
 
+    #XXX TO RUN A PERF TEST CHANGE TO TRUE
+    if False:
+        for i in range(1000):
+            key = ring.RingEntryType.RING_ENTRY_KEY_NEW | \
+                  ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
+            game.submit_key(key, data=(1, i + 1))
+
+        return
+
     # Disable cursor and enable keypad input
     curses.curs_set(0)
     stdscr.nodelay(True)

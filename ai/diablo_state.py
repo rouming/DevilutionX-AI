@@ -742,8 +742,8 @@ class DiabloGame:
             self.proc.terminate()
         if self.log_file:
             self.log_file.close()
-        if self.state_dir:
-            self.state_dir.cleanup()
+        #if self.state_dir:
+        #    self.state_dir.cleanup()
 
     def ticks(self, d=None):
         t = self.state.game_ticks.value if d is None else d.game_ticks.value
@@ -831,7 +831,7 @@ class DiabloGame:
                          )
 
         prefix = "diablo-%d-%d-" % (config["index"], os.getpid())
-        state_dir = tempfile.TemporaryDirectory(prefix=prefix)
+        state_dir = tempfile.TemporaryDirectory(prefix=prefix, delete=False)
         cfg_file = open(state_dir.name + "/diablo.ini", "w")
         cfg_file.write(cfg)
         cfg_file.close()
@@ -852,6 +852,7 @@ class DiabloGame:
         # and helps to init SDL properly in a child app (devilutionx).
         if "SDL_AUDIODRIVER" in env:
             del env["SDL_AUDIODRIVER"]
+        print(cmd)
         proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=env)
         state_path = state_dir.name
         mshared_path = os.path.abspath(state_dir.name + "/" + mshared_filename)

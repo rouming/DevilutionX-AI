@@ -6,6 +6,9 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#include <map>
+#include <string>
+#include <iostream>
 
 #include <fmt/format.h>
 
@@ -116,6 +119,29 @@
 
 namespace devilution {
 
+static inline uint64_t nsecs(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+	return (((uint64_t)ts.tv_sec * 1000000000ull) + ts.tv_nsec);
+}
+
+std::map<std::string, std::pair<uint64_t, uint64_t>> ts_points;
+
+static inline uint64_t save(const std::string &name, uint64_t p)
+{
+	uint64_t now = nsecs();
+	if (!ts_points.contains(name)) {
+		ts_points[name] = std::pair(1, now - p);
+	} else {
+		auto &v = ts_points[name];
+		v.first += 1;
+		v.second += now - p;
+	}
+	return now;
+}
+
+
 uint32_t DungeonSeeds[NUMLEVELS];
 std::optional<uint32_t> LevelSeeds[NUMLEVELS];
 Point MousePosition;
@@ -166,22 +192,32 @@ bool was_ui_init = false;
 
 void StartGame(interface_mode uMsg)
 {
+	uint64_t P = nsecs();
 	CalcViewportGeometry();
+	P = save("GL_P1.2.1", P);
 	cineflag = false;
 	InitCursor();
+	P = save("GL_P1.2.2", P);  // <<<< 2.4 sec
 #ifdef _DEBUG
 	LoadDebugGFX();
 #endif
+	P = save("GL_P1.2.3", P);    // <<<< 0.01 sec
 	assert(HeadlessMode || ghMainWnd);
 	music_stop();
+	P = save("GL_P1.2.4", P);
 	InitMonsterHealthBar();
+	P = save("GL_P1.2.5", P);
 	InitXPBar();
+	P = save("GL_P1.2.6", P);
 	ShowProgress(uMsg);
+	P = save("GL_P1.2.7", P); // <<<< 25 secs
 	gmenu_init_menu();
+	P = save("GL_P1.2.8", P);
 	InitLevelCursor();
 	sgnTimeoutCurs = CURSOR_NONE;
 	sgbMouseDown = CLICK_NONE;
 	LastMouseButtonAction = MouseActionType::None;
+	save("GL_P1.2.9", P);
 }
 
 void FreeGame()
@@ -1032,21 +1068,40 @@ static void update_shared_state()
 
 void RunGameLoop(interface_mode uMsg)
 {
-	demo::NotifyGameLoopStart();
+	uint64_t P;
 
+	P = nsecs();
+	demo::NotifyGameLoopStart();
+	save("GL_P1.1", P);
+
+	P = nsecs();
 	nthread_ignore_mutex(true);
 	StartGame(uMsg);
+	save("GL_P1.2", P);
+
+	P = nsecs();
 	assert(HeadlessMode || ghMainWnd);
 	EventHandler newHandler = { GameEventHandler, SDL_PollEvent };
 	EventHandler previousHandler = SetEventHandler(newHandler);
+	save("GL_P1.3", P);
+
+	P = nsecs();
 	run_delta_info();
 	gbRunGame = true;
 	gbProcessPlayers = IsDiabloAlive(true);
 	gbRunGameResult = true;
+	save("GL_P1.4", P);
 
 	printf(">> %s\n", __func__);
 
+	P = nsecs();
+
 	RedrawEverything();
+
+	save("GL_P2", P);
+
+	P = nsecs();
+
 	if (!HeadlessMode) {
 		while (IsRedrawEverything()) {
 			// In direct rendering mode with double/triple buffering, we need
@@ -1055,12 +1110,20 @@ void RunGameLoop(interface_mode uMsg)
 		}
 	}
 
+	save("GL_P3", P);
+
+	P = nsecs();
+
 	LoadPWaterPalette();
 	PaletteFadeIn(8);
 	InitBackbufferState();
 	RedrawEverything();
 	gbGameLoopStartup = true;
 	nthread_ignore_mutex(false);
+
+	save("GL_P4", P);
+
+	P = nsecs();
 
 	discord_manager::StartGame();
 	LuaEvent("GameStart");
@@ -1073,7 +1136,11 @@ void RunGameLoop(interface_mode uMsg)
 		StartNewLvl(*MyPlayer, interface_mode::WM_DIABNEXTLVL,
 					*GetOptions().Gameplay.gameLevel);
 
+	save("GL_P5", P);
+
 	while (gbRunGame) {
+
+		P = nsecs();
 
 #ifdef _DEBUG
 		if (!gbGameLoopStartup && !DebugCmdsFromCommandLine.empty()) {
@@ -1085,18 +1152,28 @@ void RunGameLoop(interface_mode uMsg)
 		}
 #endif
 
+		save("GL_P6", P);
+
+		P = nsecs();
+
 		SDL_Event event;
 		uint16_t modState;
 		while (FetchMessage(&event, &modState)) {
+			P = save("GL_P7", P);
 			if (event.type == SDL_QUIT) {
 				gbRunGameResult = false;
 				gbRunGame = false;
 				break;
 			}
 			HandleMessage(event, modState);
+			P = save("GL_P8", P);
 		}
+
 		if (!gbRunGame)
 			break;
+
+
+		P = nsecs();
 
 		//
 		// Injected events and throttling logic
@@ -1158,17 +1235,28 @@ void RunGameLoop(interface_mode uMsg)
 			if (!runGameLoop) {
 				if (processInput)
 					ProcessInput();
-				if (!drawGame)
+				if (!drawGame) {
+					save("GL_P8", P);
 					continue;
+				}
 				RedrawViewport();
 				DrawAndBlit();
+				save("GL_P8", P);
 				continue;
 			}
 		}
 		if (running_loop_N_ticks)
 			run_ticks -= 1;
 
+		save("GL_P8", P);
+
+		P = nsecs();
+
 		update_shared_state();
+
+		save("GL_P9", P);
+
+		P = nsecs();
 
 		multi_process_network_packets();
 		if (game_loop(gbGameLoopStartup))
@@ -1180,7 +1268,12 @@ void RunGameLoop(interface_mode uMsg)
 		if (run_game_iteration++ == 0)
 			HeapProfilerDump("first_game_iteration");
 #endif
+
+
+		save("GL_P10", P);
 	}
+
+	P = nsecs();
 
 	demo::NotifyGameLoopEnd();
 
@@ -1202,6 +1295,8 @@ void RunGameLoop(interface_mode uMsg)
 		cineflag = false;
 		DoEnding();
 	}
+
+	save("GL_P11", P);
 }
 
 void PrintWithRightPadding(std::string_view str, size_t width)
@@ -2792,7 +2887,10 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 	printf(">> %s: newgame=%d, single=%d\n", __func__, bNewGame, bSinglePlayer);
 
+	uint64_t P;
+
 	do {
+		P = nsecs();
 		if (gbSeedNeedSet) {
 			// Initialize the seed once the initial seed is
 			// provided. If the seed is fixed, repeat seed
@@ -2803,11 +2901,14 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 			printf(">> %s: set seed=%d, fixedSeed=%d\n", __func__, gbSeed, fixedSeed);
 		}
+		save("SG_P1", P);
 
 		gbLoadGame = false;
 
+		P = nsecs();
 		if (!NetInit(bSinglePlayer, gbSkipMenu)) {
 			gbRunGameResult = true;
+			save("SG_P2", P);
 			break;
 		}
 		gbSkipMenu = false;
@@ -2818,6 +2919,10 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 		gbSelectProvider = false;
 
+		save("SG_P2", P);
+
+		P = nsecs();
+
 		if (bNewGame || !gbValidSaveFile) {
 			InitLevels();
 			InitQuests();
@@ -2825,22 +2930,46 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 			InitDungMsgs(*MyPlayer);
 			DeltaSyncJunk();
 		}
+
+		save("SG_P3", P);
+
+		P = nsecs();
+
 		giNumberOfLevels = gbIsHellfire ? 25 : 17;
 		interface_mode uMsg = WM_DIABNEWGAME;
 		if (gbValidSaveFile && gbLoadGame) {
 			uMsg = WM_DIABLOADGAME;
 		}
 		RunGameLoop(uMsg);
+
+		save("SG_P4", P);
+
+		P = nsecs();
+
 		NetClose();
 		UnloadFonts();
+
+		save("SG_P5", P);
+
+		P = nsecs();
 
 		// If the player left the game into the main menu,
 		// initialize main menu resources.
 		if (gbRunGameResult)
 			UiInitialize();
+
+		save("SG_P6", P);
+
 		if (ReturnToMainMenu)
 			return true;
 	} while (gbRunGameResult);
+
+
+	for (const auto& [name, v]: ts_points) {
+		double secs = v.second / 1e9;
+		if (secs >= 0.2)
+			std::cout << name << ": " << secs / v.first << ", " << secs << " for overall " << v.first << "\n";
+	}
 
 	SNetDestroy();
 	return gbRunGameResult;

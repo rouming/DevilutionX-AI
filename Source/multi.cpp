@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <string_view>
 
 #include <SDL.h>
@@ -34,6 +35,30 @@
 #include "utils/str_cat.hpp"
 
 namespace devilution {
+
+
+static inline uint64_t nsecs(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+	return (((uint64_t)ts.tv_sec * 1000000000ull) + ts.tv_nsec);
+}
+
+extern std::map<std::string, std::pair<uint64_t, uint64_t>> ts_points;
+
+static inline uint64_t save(const std::string &name, uint64_t p)
+{
+	uint64_t now = nsecs();
+	if (!ts_points.contains(name)) {
+		ts_points[name] = std::pair(1, now - p);
+	} else {
+		auto &v = ts_points[name];
+		v.first += 1;
+		v.second += now - p;
+	}
+	return now;
+}
+
 
 bool gbSomebodyWonGameKludge;
 uint16_t sgwPackPlrOffsetTbl[MAX_PLRS];
@@ -770,9 +795,13 @@ void NetClose()
 
 bool NetInit(bool bSinglePlayer, bool skipMenu)
 {
+	uint64_t P;
 	while (true) {
+		P = nsecs();
 		SetRndSeed(0);
+		P = save("SG_P2.1", P);
 		InitGameInfo();
+		P = save("SG_P2.2", P);
 		memset(sgbPlayerTurnBitTbl, 0, sizeof(sgbPlayerTurnBitTbl));
 		gbGameDestroyed = false;
 		memset(sgbPlayerLeftGameTbl, 0, sizeof(sgbPlayerLeftGameTbl));
@@ -781,7 +810,9 @@ bool NetInit(bool bSinglePlayer, bool skipMenu)
 		Players.clear();
 		MyPlayer = nullptr;
 		memset(sgwPackPlrOffsetTbl, 0, sizeof(sgwPackPlrOffsetTbl));
+		P = save("SG_P2.3", P);
 		SNetSetBasePlayer(0);
+		P = save("SG_P2.4", P);
 		if (bSinglePlayer) {
 			if (!InitSingle(&sgGameInitInfo, skipMenu))
 				return false;
@@ -789,6 +820,7 @@ bool NetInit(bool bSinglePlayer, bool skipMenu)
 			if (!InitMulti(&sgGameInitInfo))
 				return false;
 		}
+		P = save("SG_P2.5", P);
 		sgbNetInited = true;
 		sgbTimeout = false;
 		delta_init();
@@ -796,9 +828,12 @@ bool NetInit(bool bSinglePlayer, bool skipMenu)
 		BufferInit(&highPriorityBuffer);
 		BufferInit(&lowPriorityBuffer);
 		shareNextHighPriorityMessage = true;
+		P = save("SG_P2.6", P);
 		sync_init();
 		nthread_start(sgbPlayerTurnBitTbl[MyPlayerId]);
+		P = save("SG_P2.7", P);
 		tmsg_start();
+		P = save("SG_P2.8", P);
 		sgdwGameLoops = 0;
 		sgbSentThisCycle = 0;
 		gbDeltaSender = MyPlayerId;
@@ -807,18 +842,30 @@ bool NetInit(bool bSinglePlayer, bool skipMenu)
 		SetupLocalPositions();
 		SendPlayerInfo(SNPLAYER_OTHERS, CMD_SEND_PLRINFO);
 
+		P = save("SG_P2.9", P);
+
 		Player &myPlayer = *MyPlayer;
 		ResetPlayerGFX(myPlayer);
 		myPlayer.plractive = true;
 		gbActivePlayers = 1;
 
-		if (!sgbPlayerTurnBitTbl[MyPlayerId] || msg_wait_resync())
+		P = save("SG_P2.10", P);
+
+		if (!sgbPlayerTurnBitTbl[MyPlayerId] || msg_wait_resync()) {
+			save("SG_P2.11", P);
 			break;
+		}
 		NetClose();
 		gbSelectProvider = false;
+
+		save("SG_P2.11", P);
 	}
+	P = nsecs();
 	xoshiro128plusplus gameGenerator(sgGameInitInfo.gameSeed);
 	gnTickDelay = 1000 / sgGameInitInfo.nTickRate;
+
+
+	P = save("SG_P2.12", P);
 
 	for (int i = 0; i < NUMLEVELS; i++) {
 		DungeonSeeds[i] = gameGenerator.next();
@@ -828,10 +875,14 @@ bool NetInit(bool bSinglePlayer, bool skipMenu)
 	DungeonSeeds[0] = GenerateSeed();
 	PublicGame = DvlNet_IsPublicGame();
 
+	P = save("SG_P2.13", P);
+
 	Player &myPlayer = *MyPlayer;
 	// separator for marking messages from a different game
 	AddMessageToChatLog(_("New Game"), nullptr, UiFlags::ColorRed);
 	AddMessageToChatLog(fmt::format(fmt::runtime(_("Player '{:s}' (level {:d}) just joined the game")), myPlayer._pName, myPlayer.getCharacterLevel()));
+
+	P = save("SG_P2.14", P);
 
 	return true;
 }
