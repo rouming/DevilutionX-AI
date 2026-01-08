@@ -35,10 +35,6 @@ def get_vocab(model_dir):
     return get_status(model_dir)["vocab"]
 
 
-def get_model_state(model_dir, best=False):
-    return get_status(model_dir, best=best)["model_state"]
-
-
 def get_txt_logger(model_dir):
     path = os.path.join(model_dir, "log.txt")
 

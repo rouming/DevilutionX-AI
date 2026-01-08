@@ -11,6 +11,11 @@ from torch.distributions.categorical import Categorical
 from rl.torch_ac.utils.sampling import deterministic_sample
 import rl.torch_ac as torch_ac
 
+def log_info(logger, text):
+    if logger:
+        logger.info(text)
+    else:
+        print(text)
 
 class CNN32(nn.Module):
     def __init__(self, in_channels=16, output_dim=512):
@@ -189,37 +194,46 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         # Return list of distributions: [worker, manager]
         return [dist_worker, dist_manager], values, new_memory
 
-    def load_pretrained_worker(self, path_to_old_model, device):
+    def load_from_status(self, status, logger=None):
+        if status.get("policy_arch", None) == "hrl":
+            self.load_state_dict(status["model_state"])
+        else:
+            self.load_flat_model(status["model_state"], logger)
+
+    def save_to_status(self, status):
+        status.update({"model_state": self.state_dict(),
+                       "policy_arch": "hrl"})
+
+    def load_flat_model(self, old_state, logger):
         """Loads weights from a flat PPO model into the encoder,
         memory and worker Performs surgery on the first linear layer
         to accommodate the new Option Embedding.
         """
-        # 1. Load the old state dictionary
-        old_state = torch.load(path_to_old_model, map_location=device)
-
-        # 2. Get current model state
+        # Get current model state
         new_state = self.state_dict()
 
-        # 3. Iterate and Copy
+        log_info(f"Trying to load a flat model into the HRL model")
+
+        # Iterate and Copy
         for name, new_param in new_state.items():
-            # --- Case A: Shared Encoder & Memory (Direct Copy) ---
-            # Keys match exactly (e.g. "image_conv...", "memory_rnn...")
+            # Direct copy for those which match exactly,
+            # e.g. "image_conv...", "memory_rnn..."
             if name in old_state and old_state[name].shape == new_param.shape:
                 new_state[name].copy_(old_state[name])
-                print(f"Loaded (Direct): {name}")
+                log_info(f"Loaded directly: {name}")
                 continue
 
-            # --- Case B: Worker Actor (Weight Surgery) ---
+            # Weight surgery for actor and critic
             # Map old "actor.0.weight" -> new "worker_actor.0.weight"
-            old_name = name.replace("worker_", "") # worker_actor -> actor
+            old_name = name.replace("worker_", "")
 
             if old_name in old_state:
                 old_param = old_state[old_name]
 
                 # Check if this is the specific layer that needs surgery
-                # (The first Linear layer connected to input)
+                # (e.g. the first linear layer connected to input)
                 if new_param.shape != old_param.shape:
-                    print(f"Splicing (Surgery): {name} | New: {new_param.shape} <- Old: {old_param.shape}")
+                    log_info(f"Splicing (surgery): {name} | new: {new_param.shape} <- old: {old_param.shape}")
 
                     # Assume dimension 1 is the input dimension (in_features)
                     # new_param shape: [Out_Features, Shared_Emb + Option_Emb]
@@ -227,18 +241,19 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
 
                     dim_shared = old_param.shape[1]
 
-                    # 1. Copy the old weights into the beginning
-                    new_state[name][:, :dim_shared].copy_(old_param)
+                    # Copy the old weights into the beginning
+                    new_param[:, :dim_shared].copy_(old_param)
 
-                    # 2. Zero-init the new weights (Option part)
-                    # This ensures the option has NO effect at start (Preserves pre-trained behavior)
-                    nn.init.constant_(new_state[name][:, dim_shared:], 0.0)
+                    # Zero-init the new weights (option part)
+                    # This ensures the option has NO effect at start
+                    # (Preserves pre-trained behavior)
+                    nn.init.constant_(new_param[:, dim_shared:], 0.0)
 
                 else:
-                    # Dimensions match (e.g. layers 2, 3, output head) -> Direct Copy
-                    new_state[name].copy_(old_param)
-                    print(f"Loaded (Mapped): {name}")
+                    # Direct copy if dimensions match (e.g. layers 2, 3, output head)
+                    new_param.copy_(old_param)
+                    log_info(f"Loaded directly: {name}")
 
-        # 4. Load the spliced state back into the model
+        # Load the spliced state back into the model
         self.load_state_dict(new_state)
-        print("Pre-trained Worker loaded successfully with zero-initialized Option inputs.")
+        log_info("Pre-trained worker loaded successfully with zero-initialized option inputs")

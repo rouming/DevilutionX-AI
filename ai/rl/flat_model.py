@@ -515,6 +515,13 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         # Initialize parameters correctly
         self.apply(init_params)
 
+    def load_from_status(self, status, logger=None):
+        self.load_state_dict(status["model_state"])
+
+    def save_to_status(self, status):
+        status.update({"model_state": self.state_dict(),
+                       "policy_arch": "flat"})
+
     @property
     def memory_size(self):
         return 2*self.semi_memory_size

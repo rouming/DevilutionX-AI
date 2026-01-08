@@ -1052,7 +1052,7 @@ def train_ai(args, gameconfig):
             args.policy_arch))
 
     if "model_state" in status:
-        acmodel.load_state_dict(status["model_state"])
+        acmodel.load_from_status(status, txt_logger)
     acmodel.to(device)
     txt_logger.info("Model loaded\n")
     txt_logger.info("{}\n".format(acmodel))
@@ -1203,8 +1203,8 @@ def train_ai(args, gameconfig):
             status = {"num_frames": num_frames,
                       "update": update,
                       "success_rate": success_rate,
-                      "model_state": acmodel.state_dict(),
                       "optimizer_state": algo.optimizer.state_dict()}
+            acmodel.save_to_status(status)
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
@@ -1485,7 +1485,7 @@ def play_ai(args, gameconfig):
         raise ValueError("Incorrect actor-critic architecture name: {}".format(
             args.policy_arch))
 
-    acmodel.load_state_dict(utils.get_model_state(model_dir, best=args.best))
+    acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
     acmodel.to(device)
     acmodel.eval()
     if hasattr(preprocess_obss, "vocab"):

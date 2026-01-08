@@ -234,7 +234,7 @@ class ImitationLearning(object):
                 param.requires_grad = True
 
         if "model_state" in status:
-            self.acmodel.load_state_dict(status["model_state"])
+            self.acmodel.load_from_status(status, txt_logger)
         self.acmodel.to(device)
 
         # In case we train both - separate parameters in order to have
@@ -289,7 +289,7 @@ class ImitationLearning(object):
         status.pop("optimizer_state", None)
 
         if "model_state" not in status:
-            status["model_state"] = self.acmodel.state_dict()
+            self.acmodel.save_to_status(status)
         if "il_optimizer_state" not in status:
             status["il_optimizer_state"] = self.optimizer.state_dict()
         if "vocab" not in status and hasattr(preprocess_obss, "vocab"):
@@ -724,8 +724,8 @@ class ImitationLearning(object):
                     self.csv_logger.writerow(train_data + validation_data)
 
                 status.update({"success_rate": mean_success_rate,
-                               "model_state": self.acmodel.state_dict(),
                                "il_optimizer_state": self.optimizer.state_dict() })
+                self.acmodel.save_to_status(status)
                 if hasattr(self.preprocess_obss, "vocab"):
                     status["vocab"] = self.preprocess_obss.vocab.vocab
 

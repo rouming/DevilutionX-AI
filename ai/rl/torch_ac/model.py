@@ -14,6 +14,14 @@ class BaseACModel:
     def forward(self, obs, **kwargs):
         pass
 
+    @abstractmethod
+    def load_from_status(self, status, logger=None):
+        pass
+
+    @abstractmethod
+    def save_to_status(self, status):
+        pass
+
 class RecurrentACModel(BaseACModel):
     recurrent = True
     num_levels = 1
