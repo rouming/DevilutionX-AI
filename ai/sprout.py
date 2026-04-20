@@ -1519,7 +1519,8 @@ def cli_tree(args, sprout: Sprout) -> int:
                 print_node(c, new_prefix, is_last)
 
         # group by group and print
-        groups = sorted({r["group"] for r in runs.values()})
+        groups = sorted({r["group"] for r in runs.values()},
+                        key=lambda g: min(r["created_at"] for r in runs.values() if r["group"] == g))
         for ig, g in enumerate(groups):
             if ig:
                 print()
