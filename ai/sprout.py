@@ -722,6 +722,131 @@ class Sprout:
         return new_run_id
 
     @locked
+    def clone(self,
+              group: Optional[str] = None,
+              head: Optional[str] = None,
+              from_run: Optional[str] = None,
+              from_head: Optional[str] = None,
+              parent_run: Optional[str] = None,
+              parent_head: Optional[str] = None,
+              params_str: Optional[str] = None,
+              description_str: Optional[str] = None,
+              alias_str: Optional[str] = None) -> str:
+        """
+        Clone a run or head into a new run without mutating the source or parent.
+
+        Placement:
+          - group (positional): new independent root run in a new group
+          - --parent-run/--parent-head: leaf-child of that run (group inherited)
+
+        Unlike create, no snapshot is inserted above the source or parent.
+
+        Returns newly created run id.
+        """
+        if from_run and from_head:
+            raise SproutError("either --from-run or --from-head, not both")
+        if not (from_run or from_head):
+            raise SproutError("--from-run or --from-head required")
+        if parent_run and parent_head:
+            raise SproutError("either --parent-run or --parent-head, not both")
+        if group and (parent_run or parent_head):
+            raise SproutError("either group or --parent-run/--parent-head, not both")
+        if not (group or parent_run or parent_head):
+            raise SproutError("group or --parent-run/--parent-head required")
+
+        meta = self._load_meta()
+        runs = meta.setdefault("runs", {})
+        heads = meta.setdefault("heads", {})
+
+        if head and head in heads:
+            raise SproutError(f"head '{head}' already exists")
+
+        # resolve source run
+        if from_head:
+            if from_head not in heads:
+                raise SproutError(f"head '{from_head}' not found")
+            src_run = heads[from_head]
+        else:
+            src_run = from_run
+        if src_run not in runs:
+            raise SproutError(f"run '{src_run}' not found")
+
+        # resolve parent
+        parent_for_new = None
+        if parent_head:
+            if parent_head not in heads:
+                raise SproutError(f"head '{parent_head}' not found")
+            parent_for_new = heads[parent_head]
+        elif parent_run:
+            if parent_run not in runs:
+                raise SproutError(f"run '{parent_run}' not found")
+            parent_for_new = parent_run
+
+        # determine group
+        if parent_for_new:
+            group = runs[parent_for_new]["group"]
+
+        # parse overrides (None means inherit from source)
+        params = parse_params_string(params_str)
+        description = decode_escapes(description_str) if description_str is not None else None
+
+        # inherit metadata from source
+        src = runs[src_run]
+        if params is None:
+            params = src["params"]
+        if alias_str is None:
+            alias_str = src.get("alias", "")
+        if description is None:
+            description = src.get("description", "")
+        custom_dict = src.get("custom", {})
+
+        # allocate new run id
+        new_run_id = self.random_run_id()
+        target_dir = self._head_dir(new_run_id)
+        mkdir_p(target_dir)
+
+        # copy data from source (active folder or borg)
+        src_dir = self._head_dir(src_run)
+        if is_dir(src_dir):
+            cp_r(src_dir, target_dir)
+        else:
+            self._borg_extract(src_run)
+            try:
+                cp_r(src_dir, target_dir)
+            finally:
+                if is_dir(src_dir):
+                    rmtree(src_dir)
+
+        # archive the new run
+        self._borg_create(new_run_id)
+
+        if not head:
+            rmtree(target_dir)
+        else:
+            symlink_path = os.path.join(self.active_path, head)
+            rel_target = self._symlink_target_rel(new_run_id)
+            if os.path.islink(symlink_path):
+                try:
+                    unlink(symlink_path)
+                except OSError:
+                    pass
+            os.symlink(rel_target, symlink_path)
+            heads[head] = new_run_id
+
+        runs[new_run_id] = {
+            "group": group,
+            "parent": parent_for_new,
+            "params": params or {},
+            "alias": alias_str or "",
+            "description": description or "",
+            "custom": custom_dict,
+            "created_at": now_iso()
+        }
+        self._save_meta(meta)
+
+        return new_run_id
+
+    @locked
     def persist(self, head: Optional[str] = None) -> List[str]:
         """
         Persist a single head or all heads.
@@ -1090,6 +1215,27 @@ def cli_create(args, sprout: Sprout) -> int:
             print(f"Created run {run_id} and head '{args.head}' -> .heads/{run_id}")
         else:
             print(f"Created run {run_id}")
+    return 0
+
+
+def cli_clone(args, sprout: Sprout) -> int:
+    try:
+        run_id = sprout.clone(group=getattr(args, 'group', None),
+                              head=args.head,
+                              from_run=args.from_run,
+                              from_head=args.from_head,
+                              parent_run=args.parent_run,
+                              parent_head=args.parent_head,
+                              params_str=args.params,
+                              description_str=args.description,
+                              alias_str=args.alias)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if args.head:
+        print(f"Cloned run {run_id} and head '{args.head}' -> .heads/{run_id}")
+    else:
+        print(f"Cloned run {run_id}")
     return 0
 
 
@@ -1516,6 +1662,20 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pc.add_argument("--description", default=None, help="Set description string (use bash $'line\\nline' for newlines)")
     pc.add_argument("--alias", default=None, help="Set alias")
 
+    # clone
+    pcl = sub.add_parser("clone", help="Clone a run or head without mutating source or parent")
+    pcl.add_argument("group", nargs="?", help="New group name (required unless --parent-run/--parent-head used)")
+    src_group = pcl.add_mutually_exclusive_group(required=True)
+    src_group.add_argument("--from-run", dest="from_run", help="Source run id")
+    src_group.add_argument("--from-head", dest="from_head", help="Source head name")
+    pcl.add_argument("--head", help="Create an active head for the cloned run")
+    parent_group = pcl.add_mutually_exclusive_group()
+    parent_group.add_argument("--parent-run", dest="parent_run", help="Attach as leaf-child of this run id")
+    parent_group.add_argument("--parent-head", dest="parent_head", help="Attach as leaf-child of this head's run")
+    pcl.add_argument("--params", default=None, help="Override params")
+    pcl.add_argument("--description", default=None, help="Override description")
+    pcl.add_argument("--alias", default=None, help="Override alias")
+
     # persist
     pp = sub.add_parser("persist", help="Persist a head or all heads")
     pp.add_argument("head", nargs="?", help="Persist a head or all heads")
@@ -1583,6 +1743,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
     with scoped_lock(sprout.lock):
         if args.cmd == "create":
             ret = cli_create(args, sprout)
+        elif args.cmd == "clone":
+            ret = cli_clone(args, sprout)
         elif args.cmd == "persist":
             ret = cli_persist(args, sprout)
         elif args.cmd == "remove":
@@ -2288,6 +2450,105 @@ class SproutCLITests(unittest.TestCase):
         runs, heads, tree = self.sprout.get_tree()
         self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': []})
         self.assertEqual(heads, {'B': '20c9a09f'})
+
+
+    def test_clone(self):
+        # build a small tree: GroupA with two active heads A and B
+        rc, out, err = self.run_sprout("create GroupA --head A --params 'lr 0.01' --alias base --description base-desc")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin > {self.tmpdir}/active/A/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        rc, md5sum_A, err = self.run_cmd(f"cat {self.tmpdir}/active/A/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_A = heads0['A']
+
+        # --- clone into a new independent root (new group) ---
+        rc, out, err = self.run_sprout("clone GroupB --from-head A --head B")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, tree = self.sprout.get_tree()
+        run_B = heads['B']
+
+        # B is a new root (no parent)
+        self.assertIsNone(runs[run_B]['parent'])
+        self.assertEqual(runs[run_B]['group'], 'GroupB')
+        # metadata inherited from A
+        self.assertEqual(runs[run_B]['params'], {'lr': 0.01})
+        self.assertEqual(runs[run_B]['alias'], 'base')
+        self.assertEqual(runs[run_B]['description'], 'base-desc')
+        # source A is untouched (no snapshot inserted above it)
+        self.assertEqual(heads['A'], run_A)
+        self.assertIsNone(runs[run_A]['parent'])
+        # data copied correctly
+        rc, md5sum_B, err = self.run_cmd(f"cat {self.tmpdir}/active/B/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_B)
+
+        # --- clone as leaf-child of run_A (graft into GroupA tree) ---
+        rc, out, err = self.run_sprout(f"clone --from-head B --parent-run {run_A} --head C")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, tree = self.sprout.get_tree()
+        run_C = heads['C']
+
+        # C is a child of run_A
+        self.assertEqual(runs[run_C]['parent'], run_A)
+        self.assertEqual(runs[run_C]['group'], 'GroupA')
+        # still no snapshot inserted above A
+        self.assertEqual(heads['A'], run_A)
+        self.assertIsNone(runs[run_A]['parent'])
+        self.assertIn(run_C, tree[run_A])
+        # data correct
+        rc, md5sum_C, err = self.run_cmd(f"cat {self.tmpdir}/active/C/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_C)
+
+        # --- clone from persisted (borg-only) run ---
+        rc, out, err = self.run_sprout("persist B")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotIn('B', self.sprout._load_meta()['heads'])
+
+        rc, out, err = self.run_sprout(f"clone GroupC --from-run {run_B} --head D")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, _ = self.sprout.get_tree()
+        run_D = heads['D']
+        self.assertIsNone(runs[run_D]['parent'])
+        self.assertEqual(runs[run_D]['group'], 'GroupC')
+        rc, md5sum_D, err = self.run_cmd(f"cat {self.tmpdir}/active/D/md5sum.txt")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(md5sum_A, md5sum_D)
+
+        # --- metadata override via --params/--alias/--description ---
+        rc, out, err = self.run_sprout(f"clone GroupD --from-head A --params 'lr 0.1' --alias override --description new-desc --head E")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs, heads, _ = self.sprout.get_tree()
+        run_E = heads['E']
+        self.assertEqual(runs[run_E]['params'], {'lr': 0.1})
+        self.assertEqual(runs[run_E]['alias'], 'override')
+        self.assertEqual(runs[run_E]['description'], 'new-desc')
+
+        # --- error cases ---
+        rc, out, err = self.run_sprout("clone --from-head A --head A")
+        self.assertEqual(rc, 2, msg=err)  # head A already exists
+
+        rc, out, err = self.run_sprout("clone --from-head NoSuch --head X")
+        self.assertEqual(rc, 2, msg=err)  # source head not found
+
+        rc, out, err = self.run_sprout(f"clone --from-head A --parent-run deadbeef --head X")
+        self.assertEqual(rc, 2, msg=err)  # parent run not found
+
+        rc, out, err = self.run_sprout(f"clone GroupX --from-head A --parent-run {run_A} --head X")
+        self.assertEqual(rc, 2, msg=err)  # group + parent-run conflict
+
+        rc, out, err = self.run_sprout(f"clone --from-head A --head X")
+        self.assertEqual(rc, 2, msg=err)  # neither group nor parent given
 
 
 # In order to test sprout run:
