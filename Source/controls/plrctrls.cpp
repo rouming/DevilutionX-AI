@@ -1855,9 +1855,6 @@ void plrctrls_after_check_curs_move()
 	pcurstrig = -1;
 	pcursquest = Q_INVALID;
 	cursPosition = { -1, -1 };
-	if (MyPlayer->_pInvincible) {
-		return;
-	}
 	if (DoomFlag) {
 		return;
 	}
