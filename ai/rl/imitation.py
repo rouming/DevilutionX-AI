@@ -209,17 +209,17 @@ class ImitationLearning(object):
         self.preprocess_obss = preprocess_obss
 
         # Load model
-        if args.policy_arch == "flat":
+        if args.hierarchy == "flat":
             self.acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
                                        embedding_dim=args.embedding_dim,
                                        use_memory=True, use_text=False)
-        elif args.policy_arch == "hrl":
+        elif args.hierarchy == "hrl":
             self.acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
                                       embedding_dim=args.embedding_dim,
                                       use_memory=True, use_text=False)
         else:
-            raise ValueError("Incorrect actor-critic architecture name: {}".format(
-                args.policy_arch))
+            raise ValueError("Unknown actor-critic hierarchy: {}".format(
+                args.hierarchy))
 
         assert self.acmodel.recurrent, "Currently, non-recurrent models are not supported."
 

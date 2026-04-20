@@ -177,7 +177,7 @@ def make_diablo_parser():
         choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn35", "cnn4"],
         help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
     common_ai_parser.add_argument(
-        "--policy-arch", default="flat",
+        "--hierarchy", default="flat",
         choices=["flat", "hrl"],
         help="Actor-critic architecture: flat | hrl")
     common_ai_parser.add_argument(
@@ -1039,17 +1039,17 @@ def train_ai(args, gameconfig):
     txt_logger.info("Observations preprocessor loaded")
 
     # Load model
-    if args.policy_arch == "flat":
+    if args.hierarchy == "flat":
         acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
                               embedding_dim=args.embedding_dim,
                               use_memory=True, use_text=False)
-    elif args.policy_arch == "hrl":
+    elif args.hierarchy == "hrl":
         acmodel = HRLACModel(obs_space, envs[0].action_space, args.cnn_arch,
                              embedding_dim=args.embedding_dim,
                              use_memory=True, use_text=False)
     else:
-        raise ValueError("Incorrect actor-critic architecture name: {}".format(
-            args.policy_arch))
+        raise ValueError("Unknown actor-critic hierarchy: {}".format(
+            args.hierarchy))
 
     if "model_state" in status:
         acmodel.load_from_status(status, txt_logger)
@@ -1473,17 +1473,17 @@ def play_ai(args, gameconfig):
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
 
-    if args.policy_arch == "flat":
+    if args.hierarchy == "flat":
         acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
                               embedding_dim=args.embedding_dim,
                               use_memory=True, use_text=False)
-    elif args.policy_arch == "hrl":
+    elif args.hierarchy == "hrl":
         acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
                              embedding_dim=args.embedding_dim,
                              use_memory=True, use_text=False)
     else:
-        raise ValueError("Incorrect actor-critic architecture name: {}".format(
-            args.policy_arch))
+        raise ValueError("Unknown actor-critic hierarchy: {}".format(
+            args.hierarchy))
 
     acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
     acmodel.to(device)

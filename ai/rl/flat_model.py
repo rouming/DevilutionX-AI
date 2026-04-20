@@ -520,7 +520,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "policy_arch": "flat"})
+                       "hierarchy": "flat"})
 
     @property
     def memory_size(self):

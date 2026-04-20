@@ -195,14 +195,14 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         return [dist_worker, dist_manager], values, new_memory
 
     def load_from_status(self, status, logger=None):
-        if status.get("policy_arch", None) == "hrl":
+        if status.get("hierarchy", None) == "hrl":
             self.load_state_dict(status["model_state"])
         else:
             self.load_flat_model(status["model_state"], logger)
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "policy_arch": "hrl"})
+                       "hierarchy": "hrl"})
 
     def load_flat_model(self, old_state, logger):
         """Loads weights from a flat PPO model into the encoder,
