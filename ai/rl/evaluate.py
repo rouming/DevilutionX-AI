@@ -55,11 +55,11 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
     while np.any(running_envs):
         if np.any(pending_resets):
             # Do a blocking call if all running environments are pending
-            nonblock = (len(running_envs) != len(pending_resets))
+            nonblock = np.any(running_envs & ~pending_resets)
             reset_indices, new_obs, info = env.poll_resets(nonblock=nonblock)
             pending_resets[reset_indices] = False
             obss[reset_indices] = new_obs
-            if not argmax:
+            if not argmax and len(info):
                 new_counters = torch.tensor([inf["env-counters"] for inf in info],
                                             dtype=int, device=device)
                 counters[reset_indices] = new_counters
