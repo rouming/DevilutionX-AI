@@ -43,11 +43,11 @@ class A2CAlgo(BaseAlgo):
 
         # Initialize update values
 
-        update_entropy = np.zeros((self.num_levels, ))
-        update_value = np.zeros((self.num_levels, ))
-        update_policy_loss = np.zeros((self.num_levels, ))
-        update_value_loss = np.zeros((self.num_levels, ))
-        update_kl = np.zeros((self.num_levels, ))
+        update_entropy = numpy.zeros((self.num_levels, ))
+        update_value = numpy.zeros((self.num_levels, ))
+        update_policy_loss = numpy.zeros((self.num_levels, ))
+        update_value_loss = numpy.zeros((self.num_levels, ))
+        update_kl = numpy.zeros((self.num_levels, ))
 
         # Will be promoted to a tensor on the correct device
         update_loss_tensor = 0
@@ -81,7 +81,7 @@ class A2CAlgo(BaseAlgo):
 
             entropy = torch.stack([d.entropy().mean() for d in dist])
 
-            new_log_prob = torch.stack([dist[j].log_prob(sb.actions[:, j])
+            new_log_prob = torch.stack([dist[j].log_prob(sb.action[:, j])
                                         for j in range(self.num_levels)],
                                        dim=1)
             policy_loss = -(new_log_prob * sb.advantage).mean(axis=0)
@@ -92,7 +92,7 @@ class A2CAlgo(BaseAlgo):
 
             # Kullback-Leibler (KL) divergence, not strictly needed
             # for A2C, but can be a good health check
-            kl = (sb.log_prob - dist.log_prob(sb.action)).mean(axis=0)
+            kl = (sb.log_prob - new_log_prob).mean(axis=0)
 
             # Update batch values
 

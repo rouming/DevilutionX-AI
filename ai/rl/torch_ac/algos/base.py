@@ -210,7 +210,7 @@ class BaseAlgo(ABC):
                 self.rewards[i] = torch.tensor([
                     self.reshape_reward(obs_, action_, reward_, opt_changed_, done_)
                     for obs_, action_, reward_, opt_changed_, done_ in
-                    zip(obs, action, reward, opt_changed, done)
+                    zip(obs, actions, reward, opt_changed, done)
                 ], device=self.device)
             else:
                 self.rewards[i] = torch.tensor(reward, device=self.device)
