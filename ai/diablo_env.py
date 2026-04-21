@@ -570,15 +570,18 @@ class DiabloEnv(gym.Env):
             # Penalty for NOP
             reward = -0.1
 
-        return reward, done, truncated
+        return [reward], done, truncated
+
+    def _opt_changed(self, action):
+        return False
 
     def step(self, action):
         self.steps_cnt += 1
 
         # HRL-awareness: (L,) shape
         assert isinstance(action, list) or isinstance(action, np.ndarray)
-        assert len(action) == 1
-        action = action[0]
+        assert len(action) == self.num_hierarchy_levels
+        worker_action = action[0]
 
         if self.paused:
             # Resume first
@@ -589,7 +592,7 @@ class DiabloEnv(gym.Env):
             # instance game ticks
             key = ring.RingEntryType.RING_ENTRY_KEY_NOOP
         else:
-            key = DiabloEnv.action_to_key(action)
+            key = DiabloEnv.action_to_key(worker_action)
 
         key |= ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
         self.game.submit_key(key)
@@ -607,17 +610,17 @@ class DiabloEnv(gym.Env):
         env = diablo_state.get_environment(d, radius=self.view_radius,
                                            goal_pos=goal_pos)
 
-        reward, done, truncated = self.evaluate_step(d, env, action)
-        self.total_reward += reward
+        rewards, done, truncated = self.evaluate_step(d, env, action)
+        self.total_reward += rewards[0]
 
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
         obss = {"env": env, "env-status": env_status}
-        info = {"hierarchy/opt-changed": False,
-                "hierarchy/reward": [reward],
+        info = {"hierarchy/opt-changed": self._opt_changed(action),
+                "hierarchy/reward": rewards,
                 "env-counters": (self.resets_cnt, self.steps_cnt)}
-        return obss, reward, done, truncated, info
+        return obss, rewards[0], done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
     @staticmethod
@@ -683,7 +686,7 @@ class DiabloEnv_FindNextLevel_v0(DiabloEnv):
             # Penalty for NOP
             reward = 0.0
 
-        return reward, done, truncated
+        return [reward], done, truncated
 
 class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
     @staticmethod
@@ -745,7 +748,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             # Penalty for NOP
             reward = 0.0
 
-        return reward, done, truncated
+        return [reward], done, truncated
 
 class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
     @staticmethod
@@ -765,6 +768,97 @@ class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
         return goal_pos
 
 
+class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
+    @staticmethod
+    def tune_config(env_config):
+        pass
+
+    def __init__(self, env_config, **kwargs):
+        super().__init__(env_config, **kwargs)
+        self.num_hierarchy_levels = 2
+        self.used_goal = "random"
+        self.prev_option = None
+
+    def reset(self, **kwargs):
+        obs, info = super().reset(**kwargs)
+        self.prev_option = None
+        return obs, info
+
+    def _opt_changed(self, action):
+        opt = int(action[1])
+        changed = (opt != self.prev_option)
+        self.prev_option = opt
+        return bool(changed)
+
+    def generate_goal_pos(self, d, env_whole):
+        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+
+    def evaluate_step(self, d, env, action):
+        manager_option = int(action[1])
+        player_pos = diablo_state.player_position(d)
+
+        truncated = False
+        done = False
+        # int(0) sentinel: reward becomes float only when something happens,
+        # used to detect whether the agent was active this step.
+        worker_reward = int(0)
+        manager_reward = int(0)
+
+        if diablo_state.is_player_dead(d):
+            worker_reward = 0.0
+            manager_reward = 0.0
+            done = True
+            print("Death", file=self.log)
+        elif d.player.plrlevel != self.start_dungeon_level:
+            worker_reward = 0.0
+            manager_reward = 0.0
+            done = True
+            print("Escape", file=self.log)
+        elif player_pos == self.goal_pos:
+            worker_reward = 20.0
+            manager_reward = 20.0
+            done = True
+            print("Goal, R %.1f" % worker_reward, file=self.log)
+        else:
+            monsters_cnt = diablo_state.count_active_monsters(d)
+            total_hp = diablo_state.count_active_monsters_total_hp(d)
+            explored_cnt = diablo_state.count_explored_tiles(d)
+
+            if manager_option == 0:
+                # Explore: reward new tiles
+                if explored_cnt > self.prev_explored_cnt:
+                    worker_reward = 1.0
+            else:
+                # Fight: reward damage dealt and kills
+                if total_hp < self.prev_total_hp:
+                    worker_reward += 10.0
+                if monsters_cnt < self.prev_monsters_cnt:
+                    worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 20.0
+                # Manager hint: penalize choosing fight with no visible targets
+                if diablo_state.count_visible_monsters(env) == 0:
+                    manager_reward = -0.5
+
+            # Always advance trackers regardless of active option
+            self.prev_explored_cnt = explored_cnt
+            self.prev_total_hp = total_hp
+            self.prev_monsters_cnt = monsters_cnt
+
+        was_active = (type(worker_reward) != int)
+
+        if self.is_agent_stuck(d, was_active):
+            truncated = True
+            worker_reward = 0.0
+            manager_reward = 0.0
+            if self.is_agent_timedout():
+                print("Timedout", file=self.log)
+            else:
+                print("Stuck", file=self.log)
+        elif not was_active:
+            worker_reward = 0.0
+
+        return [worker_reward, manager_reward], done, truncated
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -774,6 +868,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_FindNextLevel_v1 },
     { 'id': 'Diablo-FindRandomGoal-v0',
       'entry_point': DiabloEnv_FindRandomGoal_v0 },
+    { 'id': 'Diablo-ClearTheLevel-v0',
+      'entry_point': DiabloEnvHRL_ClearTheLevel_v0 },
 ]
 
 def register_diablo_envs():

@@ -255,6 +255,9 @@ def count_active_monsters(d):
 def count_active_monsters_total_hp(d):
     return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
 
+def count_visible_monsters(env):
+    return int(np.count_nonzero(env & EnvironmentFlag.Monster.value))
+
 @njit(cache=True)
 def count_explored_tiles(d):
     bits = dx.DungeonFlag.Explored.value
