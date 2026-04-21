@@ -113,7 +113,8 @@ def is_door_closed(obj):
 
 @njit(cache=True)
 def is_door_open(obj):
-    return obj._oVar4 == DoorState.DOOR_OPEN.value
+    return obj._oVar4 == DoorState.DOOR_OPEN.value or \
+           obj._oVar4 == DoorState.DOOR_BLOCKED.value
 
 @njit(cache=True)
 def is_door(obj):
