@@ -658,18 +658,23 @@ class ImitationLearning(object):
 
                 fps = log['total_frames'] / (update_end_time - update_start_time)
 
-                # Average everything across the batch
+                # Per-level average for multi-level keys, scalar for others
                 for key in log:
-                    log[key] = np.mean(log[key])
+                    log[key] = np.mean(log[key], axis=0)
 
-                train_data = [status['update'], status['num_frames'], fps, total_elapsed_time,
-                              log['entropy'], log['policy_loss'], log['value_loss'],
-                              log['policy_accuracy'], log['value_accuracy'],
-                              log['grad_norm']]
+                L = self.acmodel.num_hierarchy_levels
+                _lv = lambda s: (f"{s} {{:.3f}}" if L == 1
+                                 else " | ".join(f"{s}{i} {{:.3f}}" for i in range(L)))
+                _lvl = lambda v: list(np.atleast_1d(v))
+                train_data = ([status['update'], status['num_frames'], fps, total_elapsed_time]
+                              + _lvl(log['entropy']) + _lvl(log['policy_loss'])
+                              + _lvl(log['value_loss']) + _lvl(log['policy_accuracy'])
+                              + _lvl(log['value_accuracy']) + [log['grad_norm']])
 
                 self.txt_logger.info(
-                    "U {} | F {:06} | FPS {:04.0f} | D {:.0f} | H {:.3f} | pL {:.3f} | vL {:.3f} | pA {:.3f} | vA {:.3f} | ∇ {:.3f}".
-                    format(*train_data))
+                    (f"U {{}} | F {{:06}} | FPS {{:04.0f}} | D {{:.0f}}"
+                     f" | {_lv('H')} | {_lv('pL')} | {_lv('vL')}"
+                     f" | {_lv('pA')} | {_lv('vA')} | ∇ {{:.3f}}").format(*train_data))
 
                 # Log the gathered data only when we don't evaluate the
                 # validation metrics. It will be logged anyways afterwards
@@ -686,8 +691,9 @@ class ImitationLearning(object):
             if self.args.val_interval > 0 and (status['update'] % self.args.val_interval == 0 or
                                                status['num_frames'] >= self.args.frames_int):
                 valid_log = self.validate(self.args.val_episodes)
-                mean_return = [np.mean(log['return_per_episode']) for log in valid_log]
-                success_rate = [np.mean([1 if np.all(np.asarray(r) > 0.0) else 0
+                mean_return = [np.mean(np.array(log['return_per_episode'])[:, 0])
+                               for log in valid_log]
+                success_rate = [np.mean([1 if np.asarray(r)[0] > 0.0 else 0
                                          for r in log['return_per_episode']])
                                 for log in valid_log]
                 mean_success_rate = np.mean(success_rate)

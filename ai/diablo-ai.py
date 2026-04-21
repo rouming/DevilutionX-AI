@@ -1111,7 +1111,7 @@ def train_ai(args, gameconfig):
         update += 1
 
         success_per_episode = utils.synthesize(
-            [1 if np.all(np.asarray(r) > 0.0) else 0 for r in logs["return_per_episode"]])
+            [1 if np.asarray(r)[0] > 0.0 else 0 for r in logs["return_per_episode"]])
         success_rate = success_per_episode['mean']
         duration = int(time.time() - start_time)
 
@@ -1119,16 +1119,26 @@ def train_ai(args, gameconfig):
         if args.log_interval > 0 and (update % args.log_interval == 0 or
                                       num_frames >= args.frames_int):
             fps = logs["num_frames"] / (update_end_time - update_start_time)
-            return_per_episode = utils.synthesize(logs["return_per_episode"])
-            rreturn_per_episode = utils.synthesize(logs["reshaped_return_per_episode"])
+            returns_arr = np.array(logs["return_per_episode"])           # (N, L)
+            rreturns_arr = np.array(logs["reshaped_return_per_episode"]) # (N, L)
+            L = returns_arr.shape[1]
+            return_per_episode = [utils.synthesize(returns_arr[:, i]) for i in range(L)]
+            rreturn_per_episode = [utils.synthesize(rreturns_arr[:, i]) for i in range(L)]
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
 
-            info_header = "U {} | F {:06} | FPS {:04.0f} | D {} | rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f} | S {:.2f} | F:μσmM {:.1f} {:.1f} {} {}"
+            if L == 1:
+                rR_fmt = "rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f}"
+            else:
+                rR_fmt = " | ".join(
+                    f"rR{i}:μσmM {{:.2f}} {{:.2f}} {{:.2f}} {{:.2f}}" for i in range(L))
+            info_header = (f"U {{}} | F {{:06}} | FPS {{:04.0f}} | D {{}} | {rR_fmt}"
+                           f" | S {{:.2f}} | F:μσmM {{:.1f}} {{:.1f}} {{}} {{}}")
 
             header = ["update", "frames", "FPS", "duration"]
             data = [update, num_frames, fps, duration]
-            header += ["rreturn_" + key for key in rreturn_per_episode.keys()]
-            data += rreturn_per_episode.values()
+            for i, rr in enumerate(rreturn_per_episode):
+                header += [f"rreturn{i}_" + key for key in rr.keys()]
+                data += rr.values()
             header += ["success_rate"]
             data += [success_rate]
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
@@ -1143,12 +1153,10 @@ def train_ai(args, gameconfig):
             for m in metrics:
                 v = logs[m[0]]
 
-                if v.shape == (1,):
-                    header += [m[0]]
-                    info_header += f" | {m[1]} {{:.3f}}"
-                else:
-                    header += [f"{m[0]}_lvl{i}" for i in range(len(v))]
-                    info_header += f" | {m[1]}{i} {{:.3f}}"
+                for i in range(len(v)):
+                    lbl = m[1] if L == 1 else f"{m[1]}{i}"
+                    header += [f"{m[0]}_lvl{i}"]
+                    info_header += f" | {lbl} {{:.3f}}"
                 data += v.tolist()
 
             header += ["grad_norm"]
@@ -1157,8 +1165,9 @@ def train_ai(args, gameconfig):
 
             txt_logger.info(info_header.format(*data))
 
-            header += ["return_" + key for key in return_per_episode.keys()]
-            data += return_per_episode.values()
+            for i, rp in enumerate(return_per_episode):
+                header += [f"return{i}_" + key for key in rp.keys()]
+                data += rp.values()
 
             if status["num_frames"] == 0:
                 csv_logger.writerow(header)
@@ -1186,11 +1195,11 @@ def train_ai(args, gameconfig):
             acmodel.train()
 
             returns = vlogs['return_per_episode']
-            success_rate = np.mean([1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns])
-            returns = np.mean(returns)
+            success_rate = np.mean([1 if np.asarray(r)[0] > 0.0 else 0 for r in returns])
+            returns_arr = np.mean(np.array(returns), axis=0)  # (L,)
 
-            header = ["evaluation_success_rate", "evaluation_returns"]
-            data = [success_rate, returns]
+            header = ["evaluation_success_rate"] + [f"evaluation_return{i}" for i in range(len(returns_arr))]
+            data = [success_rate] + returns_arr.tolist()
 
             for field, value in zip(header, data):
                 tb_writer.add_scalar(field, value, num_frames)
@@ -1203,8 +1212,8 @@ def train_ai(args, gameconfig):
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
-            txt_logger.info("Evaluation: D {:.0f} | R {:.3f} | S {:.3f} | bS {:.3f}".format(
-                elapsed_time, returns, success_rate, best_success_rate))
+            R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
+            txt_logger.info(f"Evaluation: D {elapsed_time:.0f} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info("Status saved")
 
             custom_dict = {"duration": duration,
@@ -1398,8 +1407,11 @@ def train_il(args, gameconfig):
                                  train_critic=args.phase2 or args.phase3)
 
     # Define logger and Tensorboard writer
-    header = (["update", "frames", "FPS", "duration", "entropy", "policy_loss",
-               "value_loss", "policy_accuracy", "value_accuracy", "grad_norm"]
+    L = envs[0].num_hierarchy_levels
+    _lk = lambda name: [f"{name}{i}" for i in range(L)]
+    header = (["update", "frames", "FPS", "duration"]
+              + _lk("entropy") + _lk("policy_loss") + _lk("value_loss")
+              + _lk("policy_accuracy") + _lk("value_accuracy") + ["grad_norm"]
               + ["validation_policy_accuracy", "validation_value_accuracy",
                  "validation_return", "validation_success_rate"])
 
