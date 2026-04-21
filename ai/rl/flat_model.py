@@ -579,7 +579,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
             embedding = torch.cat((embedding, embed_text), dim=1)
 
         x = self.actor(embedding)
-        dist = Categorical(logits=F.log_softmax(x, dim=1))
+        dist = Categorical(logits=x)
 
         x = self.critic(embedding)
         value = x

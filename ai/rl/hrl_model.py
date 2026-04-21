@@ -3,6 +3,7 @@ Hierarchy RL model with 1 manager, 1 worker and 2 options: explorer and combat
 
 Author: Roman Penyaev <r.peniaev@gmail.com>
 """
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -87,7 +88,6 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         # Calculate image embedding size
         dummy = torch.zeros(1, *image_shape[::-1])
         self.image_embedding_size = self.image_conv(dummy).numel()
-        self.semi_memory_size = self.image_embedding_size
         self.embedding_size = self.semi_memory_size
 
         # Define memory
@@ -134,6 +134,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         # Initialize parameters
         self.apply(self._init_weights)
 
+    @staticmethod
     def _init_weights(m):
         if isinstance(m, nn.Linear):
             nn.init.orthogonal_(m.weight, gain=math.sqrt(2))
@@ -162,7 +163,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
 
         # Manager pass
         manager_logits = self.manager_actor(embedding)
-        dist_manager = Categorical(logits=F.log_softmax(manager_logits, dim=1))
+        dist_manager = Categorical(logits=manager_logits)
 
         if action is not None:
             # TRAINING MODE - we must use the option that was actually
@@ -173,7 +174,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
             # COLLECTION MODE - we use stateless and deterministic
             # categorical sampling
             assert noise is not None
-            active_option = deterministic_sample(dist_manager.prob, noise[:, MANAGER_LEVEL])
+            active_option = deterministic_sample(dist_manager.probs, noise[:, MANAGER_LEVEL])
 
         # Worker pass, embed the chosen option
         opt_emb = self.option_embedding(active_option) # (B, 64)
@@ -182,7 +183,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         worker_input = torch.cat([embedding, opt_emb], dim=1)
 
         worker_logits = self.worker_actor(worker_input)
-        dist_worker = Categorical(logits=F.log_softmax(worker_logits, dim=1))
+        dist_worker = Categorical(logits=worker_logits)
 
         # Value estimation
         val_manager = self.manager_critic(embedding)
@@ -212,7 +213,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         # Get current model state
         new_state = self.state_dict()
 
-        log_info(f"Trying to load a flat model into the HRL model")
+        log_info(logger, "Trying to load a flat model into the HRL model")
 
         # Iterate and Copy
         for name, new_param in new_state.items():
@@ -220,7 +221,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
             # e.g. "image_conv...", "memory_rnn..."
             if name in old_state and old_state[name].shape == new_param.shape:
                 new_state[name].copy_(old_state[name])
-                log_info(f"Loaded directly: {name}")
+                log_info(logger, f"Loaded directly: {name}")
                 continue
 
             # Weight surgery for actor and critic
@@ -233,7 +234,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
                 # Check if this is the specific layer that needs surgery
                 # (e.g. the first linear layer connected to input)
                 if new_param.shape != old_param.shape:
-                    log_info(f"Splicing (surgery): {name} | new: {new_param.shape} <- old: {old_param.shape}")
+                    log_info(logger, f"Splicing (surgery): {name} | new: {new_param.shape} <- old: {old_param.shape}")
 
                     # Assume dimension 1 is the input dimension (in_features)
                     # new_param shape: [Out_Features, Shared_Emb + Option_Emb]
@@ -252,8 +253,8 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
                 else:
                     # Direct copy if dimensions match (e.g. layers 2, 3, output head)
                     new_param.copy_(old_param)
-                    log_info(f"Loaded directly: {name}")
+                    log_info(logger, f"Loaded directly: {name}")
 
         # Load the spliced state back into the model
         self.load_state_dict(new_state)
-        log_info("Pre-trained worker loaded successfully with zero-initialized option inputs")
+        log_info(logger, "Pre-trained worker loaded successfully with zero-initialized option inputs")
