@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 class BaseACModel:
     recurrent = False
-    num_levels = 1
+    num_hierarchy_levels = 1
 
     @abstractmethod
     def __init__(self, obs_space, action_space):
@@ -24,7 +24,7 @@ class BaseACModel:
 
 class RecurrentACModel(BaseACModel):
     recurrent = True
-    num_levels = 1
+    num_hierarchy_levels = 1
 
     @abstractmethod
     def forward(self, obs, memory, **kwargs):

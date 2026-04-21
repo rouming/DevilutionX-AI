@@ -21,11 +21,11 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
     }
 
     num_envs = min(len(penv_pool.envs), episodes)
-    num_levels = penv_pool.envs[0].unwrapped.num_levels
+    num_hierarchy_levels = penv_pool.envs[0].unwrapped.num_hierarchy_levels
     env = ParallelEnv(penv_pool)
 
     # (P, L) shape
-    returns = np.zeros((num_envs, num_levels), dtype=float)
+    returns = np.zeros((num_envs, num_hierarchy_levels), dtype=float)
     # (P, ) shape
     num_frames = np.zeros((num_envs,), dtype=int)
     timestamps = np.zeros((num_envs,), dtype=float)
@@ -73,7 +73,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
                 active_counters = (active_counters[:, 0], active_counters[:, 1])
                 noise = calculate_deterministic_noise(global_seed, active_seeds,
                                                       *active_counters,
-                                                      dims=num_levels)
+                                                      dims=num_hierarchy_levels)
             else:
                 noise = None
             preprocessed_obss = preprocess_obss(obs, device=device)
@@ -84,7 +84,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
             else:
                 dist, _ = acmodel(preprocessed_obss, noise=noise)
 
-            assert len(dist) == num_levels
+            assert len(dist) == num_hierarchy_levels
 
         # Distributions shape (L, P) -> actions shape (P, L)
         if argmax:
@@ -99,7 +99,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
         actions = actions.cpu().numpy()
 
         assert len(active_indices) == len(actions) == len(obs)
-        assert actions.shape[1] == num_levels
+        assert actions.shape[1] == num_hierarchy_levels
 
         if return_obss_actions:
             for i, o, a in zip(active_indices, obs, actions):
@@ -110,7 +110,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
         done = np.logical_or(terminated, truncated)
         # HRL-aware rewards with the shape (P, L)
         reward = np.array([inf["hierarchy/reward"] for inf in info], dtype=float)
-        assert reward.shape == (len(actions), num_levels)
+        assert reward.shape == (len(actions), num_hierarchy_levels)
 
         returns[active_indices] += reward
         obss[active_indices] = obs

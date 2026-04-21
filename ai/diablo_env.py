@@ -160,7 +160,7 @@ class DiabloEnv(gym.Env):
         if game is None:
             raise ValueError("game must be provided!")
         # No hierarchy
-        self.num_levels = 1
+        self.num_hierarchy_levels = 1
         self.resets_cnt = 0
         self.config = env_config
         self.game = game

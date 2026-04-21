@@ -322,7 +322,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         super().__init__()
 
         # No hierarchy
-        self.num_levels = 1
+        self.num_hierarchy_levels = 1
 
         # Decide which components are enabled
         self.cnn_arch = cnn_arch
@@ -520,7 +520,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "hierarchy": "flat"})
+                       "num_hierarchy_levels": self.num_hierarchy_levels})
 
     @property
     def memory_size(self):

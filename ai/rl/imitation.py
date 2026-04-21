@@ -167,9 +167,6 @@ class ImitationLearning(object):
 
             txt_logger.info('Loaded all demos')
 
-            observation_space = self.penv_pool.envs[0].observation_space
-            action_space = self.penv_pool.envs[0].action_space
-
         else:
             demos_path = utils.get_demos_path(model_dir, args.env, valid=False)
             demos_path_valid = utils.get_demos_path(model_dir, args.env, valid=True)
@@ -181,8 +178,9 @@ class ImitationLearning(object):
                     raise ValueError("there are only {} train demos".format(len(self.train_demos)))
                 self.train_demos = self.train_demos[:args.episodes_int]
 
-            observation_space = self.penv_pool.envs[0].observation_space
-            action_space = self.penv_pool.envs[0].action_space
+        observation_space = self.penv_pool.envs[0].observation_space
+        action_space = self.penv_pool.envs[0].action_space
+        num_hierarchy_levels = self.penv_pool.envs[0].num_hierarchy_levels
 
         # Generate demos for validation if needed
         if self.args.val_interval > 0:
@@ -209,17 +207,14 @@ class ImitationLearning(object):
         self.preprocess_obss = preprocess_obss
 
         # Load model
-        if args.hierarchy == "flat":
+        if num_hierarchy_levels == 1:
             self.acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
                                        embedding_dim=args.embedding_dim,
                                        use_memory=True, use_text=False)
-        elif args.hierarchy == "hrl":
+        else:
             self.acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
                                       embedding_dim=args.embedding_dim,
                                       use_memory=True, use_text=False)
-        else:
-            raise ValueError("Unknown actor-critic hierarchy: {}".format(
-                args.hierarchy))
 
         assert self.acmodel.recurrent, "Currently, non-recurrent models are not supported."
 
@@ -396,7 +391,7 @@ class ImitationLearning(object):
                     dones[i].append(d)
                     # HRL-aware rewards with the shape (L,)
                     r = inf["hierarchy/reward"]
-                    assert len(r) == self.acmodel.num_levels
+                    assert len(r) == self.acmodel.num_hierarchy_levels
                     rewards[i].append(r)
                     opt_changed[i].append(inf["hierarchy/opt-changed"])
                     steps[i] += 1
@@ -483,11 +478,11 @@ class ImitationLearning(object):
 
 
         # Here, actual backprop upto args.recurrence happens
-        final_entropy = np.zeros((self.acmodel.num_levels, ))
-        final_value_loss = np.zeros((self.acmodel.num_levels, ))
-        final_policy_loss = np.zeros((self.acmodel.num_levels, ))
-        value_accuracy = np.zeros((self.acmodel.num_levels, ))
-        policy_accuracy = np.zeros((self.acmodel.num_levels, ))
+        final_entropy = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        final_value_loss = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        final_policy_loss = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        value_accuracy = np.zeros((self.acmodel.num_hierarchy_levels, ))
+        policy_accuracy = np.zeros((self.acmodel.num_hierarchy_levels, ))
 
         # Will be promoted to a tensor on the correct device
         final_loss_tensor = 0
@@ -512,8 +507,8 @@ class ImitationLearning(object):
 
             num_seqs = len(indexes)
 
-            assert len(dist) == self.acmodel.num_levels
-            assert value.shape == (num_seqs, self.acmodel.num_levels)
+            assert len(dist) == self.acmodel.num_hierarchy_levels
+            assert value.shape == (num_seqs, self.acmodel.num_hierarchy_levels)
 
             # Standard MSE loss for critic
             value_loss = torch.mean((value - r) ** 2, axis=0)
@@ -523,7 +518,7 @@ class ImitationLearning(object):
 
             # Actor
             log_prob = torch.stack([dist[j].log_prob(action_step[:, j])
-                                    for j in range(self.acmodel.num_levels)],
+                                    for j in range(self.acmodel.num_hierarchy_levels)],
                                    dim=1)
             policy_loss = -log_prob.mean(axis=0)
             # Entropy is needed for calculating entropy bonus, which

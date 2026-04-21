@@ -4,7 +4,7 @@ based on torch-ac by lcswillems.
 
 Changes:
 - Deterministic sampling.
-- Adapted storage and collection to support 'num_levels' dimension (P x L).
+- Adapted storage and collection to support 'num_hierarchy_levels' dimension (P x L).
 - Manager and Worker steps are aligned for joint optimization.
 - Implemented shared Encoder/Memory with multi-head outputs.
 - Added 'opt_mask' to handle Truncated BPTT at option boundaries
@@ -43,11 +43,11 @@ class A2CAlgo(BaseAlgo):
 
         # Initialize update values
 
-        update_entropy = numpy.zeros((self.num_levels, ))
-        update_value = numpy.zeros((self.num_levels, ))
-        update_policy_loss = numpy.zeros((self.num_levels, ))
-        update_value_loss = numpy.zeros((self.num_levels, ))
-        update_kl = numpy.zeros((self.num_levels, ))
+        update_entropy = numpy.zeros((self.num_hierarchy_levels, ))
+        update_value = numpy.zeros((self.num_hierarchy_levels, ))
+        update_policy_loss = numpy.zeros((self.num_hierarchy_levels, ))
+        update_value_loss = numpy.zeros((self.num_hierarchy_levels, ))
+        update_kl = numpy.zeros((self.num_hierarchy_levels, ))
 
         # Will be promoted to a tensor on the correct device
         update_loss_tensor = 0
@@ -76,13 +76,13 @@ class A2CAlgo(BaseAlgo):
 
             num_seqs = len(inds)
 
-            assert len(dist) == self.num_levels
-            assert value.shape == (num_seqs, self.num_levels)
+            assert len(dist) == self.num_hierarchy_levels
+            assert value.shape == (num_seqs, self.num_hierarchy_levels)
 
             entropy = torch.stack([d.entropy().mean() for d in dist])
 
             new_log_prob = torch.stack([dist[j].log_prob(sb.action[:, j])
-                                        for j in range(self.num_levels)],
+                                        for j in range(self.num_hierarchy_levels)],
                                        dim=1)
             policy_loss = -(new_log_prob * sb.advantage).mean(axis=0)
 

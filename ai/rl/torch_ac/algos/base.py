@@ -4,7 +4,7 @@ based on torch-ac by lcswillems.
 
 Changes:
 - Deterministic sampling.
-- Adapted storage and collection to support 'num_levels' dimension (P x L).
+- Adapted storage and collection to support 'num_hierarchy_levels' dimension (P x L).
 - Manager and Worker steps are aligned for joint optimization.
 - Implemented shared Encoder/Memory with multi-head outputs.
 - Added 'opt_mask' to handle Truncated BPTT at option boundaries
@@ -73,7 +73,7 @@ class BaseAlgo(ABC):
         self.global_seed = global_seed
         self.acmodel = acmodel
         self.device = device
-        self.num_levels = acmodel.num_levels
+        self.num_hierarchy_levels = acmodel.num_hierarchy_levels
         self.num_frames_per_proc = num_frames_per_proc
         self.discount = discount
         self.lr = lr
@@ -104,9 +104,9 @@ class BaseAlgo(ABC):
 
         # - T is self.num_frames_per_proc
         # - P is self.num_procs
-        # - L is self.num_levels
+        # - L is self.num_hierarchy_levels
         # (T, P, L)
-        shape = (self.num_frames_per_proc, self.num_procs, self.num_levels)
+        shape = (self.num_frames_per_proc, self.num_procs, self.num_hierarchy_levels)
 
         self.obs, info = self.env.reset(seeds=seeds)
         self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
@@ -133,8 +133,8 @@ class BaseAlgo(ABC):
         self.log_episode_num_frames = torch.zeros(self.num_procs, device=self.device)
 
         self.log_done_counter = 0
-        self.log_return = [[0] * self.num_levels for _ in range(self.num_procs)]
-        self.log_reshaped_return = [[0] * self.num_levels for _ in range(self.num_procs)]
+        self.log_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
+        self.log_reshaped_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
         self.log_num_frames = [0] * self.num_procs
 
     def collect_experiences(self):
@@ -165,7 +165,7 @@ class BaseAlgo(ABC):
                 env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
                 noise = calculate_deterministic_noise(self.global_seed, self.seeds,
                                                       *env_counters,
-                                                      dims=self.num_levels)
+                                                      dims=self.num_hierarchy_levels)
                 preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
                 if self.acmodel.recurrent:
                     dist, value, memory = self.acmodel(
@@ -174,8 +174,8 @@ class BaseAlgo(ABC):
                 else:
                     dist, value = self.acmodel(preprocessed_obs, noise=noise)
 
-            assert len(dist) == self.num_levels
-            assert value.shape == (self.num_procs, self.num_levels)
+            assert len(dist) == self.num_hierarchy_levels
+            assert value.shape == (self.num_procs, self.num_hierarchy_levels)
 
             # (P, L)
             actions = torch.stack([
@@ -186,7 +186,7 @@ class BaseAlgo(ABC):
             done = numpy.logical_or(terminated, truncated)
             # HRL-aware rewards with the shape (P, L)
             reward = numpy.array([inf["hierarchy/reward"] for inf in info], dtype=float)
-            assert reward.shape == (self.num_procs, self.num_levels)
+            assert reward.shape == (self.num_procs, self.num_hierarchy_levels)
             # HRL-aware opt-changed flag with the shape (P,)
             opt_changed = numpy.array([inf["hierarchy/opt-changed"] for inf in info],
                                       dtype=bool)
@@ -217,7 +217,7 @@ class BaseAlgo(ABC):
 
             # (P, L)
             self.log_probs[i] = torch.stack([dist[j].log_prob(actions[:, j])
-                                             for j in range(self.num_levels)],
+                                             for j in range(self.num_hierarchy_levels)],
                                             dim=1)
 
             # Update log values
@@ -243,7 +243,7 @@ class BaseAlgo(ABC):
             env_counters = (self.env_counters[:, 0], self.env_counters[:, 1])
             noise = calculate_deterministic_noise(self.global_seed, self.seeds,
                                                   *env_counters,
-                                                  dims=self.num_levels)
+                                                  dims=self.num_hierarchy_levels)
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
             if self.acmodel.recurrent:
                 _, next_value, _ = self.acmodel(
@@ -266,7 +266,7 @@ class BaseAlgo(ABC):
         # In comments below:
         #   - T is self.num_frames_per_proc,
         #   - P is self.num_procs,
-        #   - L is self.num_levels,
+        #   - L is self.num_hierarchy_levels,
         #   - D is the dimensionality.
 
         exps = DictList()

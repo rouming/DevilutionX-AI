@@ -73,7 +73,7 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         assert not use_text
 
         # Classic Management and Workers layers
-        self.num_levels = 2
+        self.num_hierarchy_levels = 2
 
         # Decide which components are enabled
         self.cnn_arch = cnn_arch
@@ -196,14 +196,14 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         return [dist_worker, dist_manager], values, new_memory
 
     def load_from_status(self, status, logger=None):
-        if status.get("hierarchy", None) == "hrl":
+        if status.get("num_hierarchy_levels", 1) == 2:
             self.load_state_dict(status["model_state"])
         else:
             self.load_flat_model(status["model_state"], logger)
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "hierarchy": "hrl"})
+                       "num_hierarchy_levels": self.num_hierarchy_levels})
 
     def load_flat_model(self, old_state, logger):
         """Loads weights from a flat PPO model into the encoder,

@@ -177,10 +177,6 @@ def make_diablo_parser():
         choices=["cnn1", "cnn2", "cnn3", "cnn31", "cnn32", "cnn35", "cnn4"],
         help="Architecture of the CNN to use: cnn1 | cnn2 | cnn3 | cnn31 | cnn32 | cnn35 | cnn4")
     common_ai_parser.add_argument(
-        "--hierarchy", default="flat",
-        choices=["flat", "hrl"],
-        help="Actor-critic architecture: flat | hrl")
-    common_ai_parser.add_argument(
         "--embedding-dim", type=int, default=256,
         help="dimension of embeddings (default: 256)")
     common_ai_parser.add_argument(
@@ -1038,18 +1034,17 @@ def train_ai(args, gameconfig):
         preprocess_obss.vocab.load_vocab(status["vocab"])
     txt_logger.info("Observations preprocessor loaded")
 
+    num_hierarchy_levels = envs[0].num_hierarchy_levels
+
     # Load model
-    if args.hierarchy == "flat":
+    if num_hierarchy_levels == 1:
         acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
                               embedding_dim=args.embedding_dim,
                               use_memory=True, use_text=False)
-    elif args.hierarchy == "hrl":
+    else:
         acmodel = HRLACModel(obs_space, envs[0].action_space, args.cnn_arch,
                              embedding_dim=args.embedding_dim,
                              use_memory=True, use_text=False)
-    else:
-        raise ValueError("Unknown actor-critic hierarchy: {}".format(
-            args.hierarchy))
 
     if "model_state" in status:
         acmodel.load_from_status(status, txt_logger)
@@ -1470,20 +1465,18 @@ def play_ai(args, gameconfig):
 
     obs_space = penv_pool.envs[0].observation_space
     action_space = penv_pool.envs[0].action_space
+    num_hierarchy_levels = penv_pool.envs[0].num_hierarchy_levels
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
 
-    if args.hierarchy == "flat":
+    if num_hierarchy_levels == 1:
         acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
                               embedding_dim=args.embedding_dim,
                               use_memory=True, use_text=False)
-    elif args.hierarchy == "hrl":
+    else:
         acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
                              embedding_dim=args.embedding_dim,
                              use_memory=True, use_text=False)
-    else:
-        raise ValueError("Unknown actor-critic hierarchy: {}".format(
-            args.hierarchy))
 
     acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
     acmodel.to(device)
