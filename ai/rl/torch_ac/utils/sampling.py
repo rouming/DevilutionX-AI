@@ -50,7 +50,9 @@ def deterministic_sample(probs, noise):
     # Inverse CDF sampling
     # Unsqueeze noise to (B, 1) for broadcasting
     cdf = probs.cumsum(dim=-1)
-    actions = torch.searchsorted(cdf, noise.unsqueeze(-1)).squeeze(-1)
+    # Noise is a column slice (P, L)[:, i], non-contiguous stride;
+    # searchsorted requires contiguous input
+    actions = torch.searchsorted(cdf, noise.contiguous().unsqueeze(-1)).squeeze(-1)
 
     # Safety clamp for float edge cases
     return actions.clamp(max=probs.size(-1) - 1)
