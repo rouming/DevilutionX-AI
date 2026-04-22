@@ -48,6 +48,12 @@ class ActionMask(enum.Enum):
     MASK_WALLS         = 1<<2
     MASK_OTHER_SOLIDS  = 1<<3
 
+def _fmix32(h):
+    """MurmurHash3 finalizer: bijective 32-bit mixer with full avalanche."""
+    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF
+    return (h ^ (h >> 16)) & 0xFFFFFFFF
+
 class DiabloEnv(gym.Env):
     MASK_EVERYTHING = (ActionMask.MASK_TRIGGERS.value |
                        ActionMask.MASK_CLOSED_DOORS.value |
@@ -165,6 +171,8 @@ class DiabloEnv(gym.Env):
         self.config = env_config
         self.game = game
         self.seed = self.config['seed']
+        self.initial_seed = _fmix32((self.seed + self.config['index']) & 0xFFFFFFFF)
+        self.auto_reset_counter = 0
         self.paused = False
         self.view_radius = None
         self.used_goal = None
@@ -273,10 +281,17 @@ class DiabloEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
-        seed_data = (0, 0)
         if seed is not None:
             seed_data = (1, seed)
             self.seed = seed
+        else:
+            # Auto-reset path: hash (initial_seed + counter) via fmix32.
+            # Eval resets always supply an explicit seed and never touch
+            # auto_reset_counter, so the training RNG sequence is completely
+            # isolated from eval resets.
+            auto_seed = _fmix32((self.initial_seed + self.auto_reset_counter) & 0xFFFFFFFF)
+            self.auto_reset_counter = (self.auto_reset_counter + 1) & 0xFFFFFFFF
+            seed_data = (1, auto_seed)
 
         if seed is not None or self.config.get("fixed-seed", False):
             self.resets_cnt = 0
@@ -291,7 +306,10 @@ class DiabloEnv(gym.Env):
             # Resume first
             self.pause_game(False)
 
-        print(f"RESET seed={seed}" if seed else "RESET", file=self.log)
+        if seed is not None:
+            print(f"RESET seed={seed}", file=self.log)
+        else:
+            print(f"RESET auto_seed={auto_seed:08x}", file=self.log)
 
         # Start new game
         key = ring.RingEntryType.RING_ENTRY_KEY_NEW | \
