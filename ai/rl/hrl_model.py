@@ -170,11 +170,12 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
             # taken in the history to correctly train the worker.
             assert self.training and noise is None
             active_option = action[:, MANAGER_LEVEL]
-        else:
-            # COLLECTION MODE - we use stateless and deterministic
-            # categorical sampling
-            assert noise is not None
+        elif noise is not None:
+            # COLLECTION MODE - stateless deterministic categorical sampling
             active_option = deterministic_sample(dist_manager.probs, noise[:, MANAGER_LEVEL])
+        else:
+            # ARGMAX EVAL MODE - greedy option for the worker embedding
+            active_option = dist_manager.probs.argmax(dim=1)
 
         # Worker pass, embed the chosen option
         opt_emb = self.option_embedding(active_option) # (B, 64)
