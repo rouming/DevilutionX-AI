@@ -1126,14 +1126,6 @@ def train_ai(args, gameconfig):
             rreturn_per_episode = [utils.synthesize(rreturns_arr[:, i]) for i in range(L)]
             num_frames_per_episode = utils.synthesize(logs["num_frames_per_episode"])
 
-            if L == 1:
-                rR_fmt = "rR:μσmM {:.2f} {:.2f} {:.2f} {:.2f}"
-            else:
-                rR_fmt = " | ".join(
-                    f"rR{i}:μσmM {{:.2f}} {{:.2f}} {{:.2f}} {{:.2f}}" for i in range(L))
-            info_header = (f"U {{}} | F {{:06}} | FPS {{:04.0f}} | D {{}} | {rR_fmt}"
-                           f" | S {{:.2f}} | F:μσmM {{:.1f}} {{:.1f}} {{}} {{}}")
-
             header = ["update", "frames", "FPS", "duration"]
             data = [update, num_frames, fps, duration]
             for i, rr in enumerate(rreturn_per_episode):
@@ -1144,7 +1136,6 @@ def train_ai(args, gameconfig):
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
             data += num_frames_per_episode.values()
 
-            # HRL-aware metrics
             metrics = [("entropy", "H"),
                        ("value", "V"),
                        ("policy_loss", "pL"),
@@ -1152,18 +1143,35 @@ def train_ai(args, gameconfig):
                        ("kl", "KL")]
             for m in metrics:
                 v = logs[m[0]]
-
-                for i in range(len(v)):
-                    lbl = m[1] if L == 1 else f"{m[1]}{i}"
-                    header += [f"{m[0]}_lvl{i}"]
-                    info_header += f" | {lbl} {{:.3f}}"
+                header += [f"{m[0]}_lvl{i}" for i in range(len(v))]
                 data += v.tolist()
 
             header += ["grad_norm"]
             data += [logs["grad_norm"]]
-            info_header += " | ∇ {:.3f}"
 
-            txt_logger.info(info_header.format(*data))
+            nf = num_frames_per_episode
+            grad = logs["grad_norm"]
+            if L == 1:
+                rr = list(rreturn_per_episode[0].values())
+                mv = "".join(f" | {m[1]} {logs[m[0]][0]:.3f}" for m in metrics)
+                txt_logger.info(
+                    f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
+                    f" | rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                    f" | S {success_rate:.2f}"
+                    f" | F:μσmM {nf['mean']:.1f} {nf['std']:.1f} {nf['min']} {nf['max']}"
+                    + mv + f" | ∇ {grad:.3f}")
+            else:
+                txt_logger.info(
+                    f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
+                    f" | S {success_rate:.2f}"
+                    f" | F:μσmM {nf['mean']:.1f} {nf['std']:.1f} {nf['min']} {nf['max']}"
+                    f" | ∇ {grad:.3f}")
+                for i in range(L):
+                    rr = list(rreturn_per_episode[i].values())
+                    mv = " | ".join(f"{m[1]} {logs[m[0]][i]:.3f}" for m in metrics)
+                    txt_logger.info(
+                        f"  L{i} | rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                        f" | {mv}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]

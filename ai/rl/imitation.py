@@ -663,18 +663,25 @@ class ImitationLearning(object):
                     log[key] = np.mean(log[key], axis=0)
 
                 L = self.acmodel.num_hierarchy_levels
-                _lv = lambda s: (f"{s} {{:.3f}}" if L == 1
-                                 else " | ".join(f"{s}{i} {{:.3f}}" for i in range(L)))
                 _lvl = lambda v: list(np.atleast_1d(v))
                 train_data = ([status['update'], status['num_frames'], fps, total_elapsed_time]
                               + _lvl(log['entropy']) + _lvl(log['policy_loss'])
                               + _lvl(log['value_loss']) + _lvl(log['policy_accuracy'])
                               + _lvl(log['value_accuracy']) + [log['grad_norm']])
 
-                self.txt_logger.info(
-                    (f"U {{}} | F {{:06}} | FPS {{:04.0f}} | D {{:.0f}}"
-                     f" | {_lv('H')} | {_lv('pL')} | {_lv('vL')}"
-                     f" | {_lv('pA')} | {_lv('vA')} | ∇ {{:.3f}}").format(*train_data))
+                il_metrics = [('entropy', 'H'), ('policy_loss', 'pL'),
+                               ('value_loss', 'vL'), ('policy_accuracy', 'pA'),
+                               ('value_accuracy', 'vA')]
+                hdr = (f"U {status['update']} | F {status['num_frames']:06}"
+                       f" | FPS {fps:04.0f} | D {total_elapsed_time:.0f}")
+                if L == 1:
+                    mv = "".join(f" | {lbl} {log[key]:.3f}" for key, lbl in il_metrics)
+                    self.txt_logger.info(hdr + mv + f" | ∇ {log['grad_norm']:.3f}")
+                else:
+                    self.txt_logger.info(hdr + f" | ∇ {log['grad_norm']:.3f}")
+                    for i in range(L):
+                        mv = " | ".join(f"{lbl} {log[key][i]:.3f}" for key, lbl in il_metrics)
+                        self.txt_logger.info(f"  L{i} | {mv}")
 
                 # Log the gathered data only when we don't evaluate the
                 # validation metrics. It will be logged anyways afterwards
