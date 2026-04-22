@@ -827,26 +827,14 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
             print("Goal, R %.1f" % worker_reward, file=self.log)
         else:
             monsters_cnt = diablo_state.count_active_monsters(d)
-            total_hp = diablo_state.count_active_monsters_total_hp(d)
-            explored_cnt = diablo_state.count_explored_tiles(d)
 
-            if manager_option == 0:
-                # Explore: reward new tiles
-                if explored_cnt > self.prev_explored_cnt:
-                    worker_reward = 1.0
-            else:
-                # Fight: reward damage dealt and kills
-                if total_hp < self.prev_total_hp:
-                    worker_reward += 10.0
+            if manager_option == 1:
                 if monsters_cnt < self.prev_monsters_cnt:
-                    worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 20.0
+                    worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 1.0
                 # Manager hint: penalize choosing fight with no visible targets
                 if diablo_state.count_visible_monsters(env) == 0:
                     manager_reward = -0.5
 
-            # Always advance trackers regardless of active option
-            self.prev_explored_cnt = explored_cnt
-            self.prev_total_hp = total_hp
             self.prev_monsters_cnt = monsters_cnt
 
         was_active = (type(worker_reward) != int)
