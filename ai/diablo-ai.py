@@ -1111,7 +1111,7 @@ def train_ai(args, gameconfig):
         update += 1
 
         success_per_episode = utils.synthesize(
-            [1 if np.asarray(r)[0] > 0.0 else 0 for r in logs["return_per_episode"]])
+            [1 if s else 0 for s in logs["success_per_episode"]])
         success_rate = success_per_episode['mean']
         duration = int(time.time() - start_time)
 
@@ -1203,7 +1203,7 @@ def train_ai(args, gameconfig):
             acmodel.train()
 
             returns = vlogs['return_per_episode']
-            success_rate = np.mean([1 if np.asarray(r)[0] > 0.0 else 0 for r in returns])
+            success_rate = np.mean([1 if s else 0 for s in vlogs["success_per_episode"]])
             returns_arr = np.mean(np.array(returns), axis=0)  # (L,)
 
             header = ["evaluation_success_rate"] + [f"evaluation_return{i}" for i in range(len(returns_arr))]

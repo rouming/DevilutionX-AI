@@ -700,8 +700,7 @@ class ImitationLearning(object):
                 valid_log = self.validate(self.args.val_episodes)
                 mean_return = [np.mean(np.array(log['return_per_episode'])[:, 0])
                                for log in valid_log]
-                success_rate = [np.mean([1 if np.asarray(r)[0] > 0.0 else 0
-                                         for r in log['return_per_episode']])
+                success_rate = [np.mean([1 if s else 0 for s in log['success_per_episode']])
                                 for log in valid_log]
                 mean_success_rate = np.mean(success_rate)
 

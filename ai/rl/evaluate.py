@@ -14,6 +14,7 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
     logs = {
         "num_frames_per_episode": [],
         "return_per_episode": [],
+        "success_per_episode": [],
         "duration_per_episode": [],
         "observations_per_episode": [],
         "actions_per_episode": [],
@@ -129,6 +130,8 @@ def batch_evaluate(acmodel, preprocess_obss, penv_pool, argmax, global_seed,
 
             logs["num_frames_per_episode"].extend(done_num_frames.tolist())
             logs["return_per_episode"].extend(done_returns.tolist())
+            logs["success_per_episode"].extend(
+                [inf.get("success", False) for inf, d in zip(info, done) if d])
             logs["duration_per_episode"].extend(done_durations.tolist())
             logs["seed_per_episode"].extend(done_seeds.tolist())
 

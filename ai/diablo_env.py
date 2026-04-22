@@ -335,6 +335,7 @@ class DiabloEnv(gym.Env):
         self.prev_hp = hp
         self.total_reward = 0.0
         self.exploration_reward = 0.0
+        self.episode_success = False
         self.hist_player_pos = collections.deque([pos], maxlen=3)
         self.last_player_pos = pos
         self.last_steps_cnt = 0
@@ -480,6 +481,7 @@ class DiabloEnv(gym.Env):
         elif d.player.plrlevel > self.start_dungeon_level:
             reward = 50.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
         elif d.player.plrlevel != self.start_dungeon_level:
             # Done with this episode with 0 reward if agent has
@@ -619,7 +621,8 @@ class DiabloEnv(gym.Env):
         obss = {"env": env, "env-status": env_status}
         info = {"hierarchy/opt-changed": self._opt_changed(action),
                 "hierarchy/reward": rewards,
-                "env-counters": (self.resets_cnt, self.steps_cnt)}
+                "env-counters": (self.resets_cnt, self.steps_cnt),
+                "success": self.episode_success if done else False}
         return obss, rewards[0], done, truncated, info
 
 class DiabloEnv_FindNextLevel_v0(DiabloEnv):
@@ -667,6 +670,7 @@ class DiabloEnv_FindNextLevel_v0(DiabloEnv):
         elif d.player.plrlevel > self.start_dungeon_level:
             reward = 20.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
 
         # See the definition of @reward: initially, it is set to
@@ -729,6 +733,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
              (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
             reward = 20.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
 
         # See the definition of @reward: initially, it is set to
@@ -818,6 +823,7 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
             worker_reward = 20.0
             manager_reward = 20.0
             done = True
+            self.episode_success = True
             print("Goal, R %.1f" % worker_reward, file=self.log)
         else:
             monsters_cnt = diablo_state.count_active_monsters(d)

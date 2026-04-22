@@ -136,6 +136,7 @@ class BaseAlgo(ABC):
         self.log_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
         self.log_reshaped_return = [[0] * self.num_hierarchy_levels for _ in range(self.num_procs)]
         self.log_num_frames = [0] * self.num_procs
+        self.log_success = [False] * self.num_procs
 
     def collect_experiences(self):
         """Collects rollouts and computes advantages.
@@ -232,6 +233,7 @@ class BaseAlgo(ABC):
                     self.log_return.append(self.log_episode_return[i].tolist())
                     self.log_reshaped_return.append(self.log_episode_reshaped_return[i].tolist())
                     self.log_num_frames.append(self.log_episode_num_frames[i].item())
+                    self.log_success.append(info[i].get("success", False))
 
             self.log_episode_return *= self.mask.unsqueeze(1)
             self.log_episode_reshaped_return *= self.mask.unsqueeze(1)
@@ -299,6 +301,7 @@ class BaseAlgo(ABC):
             "return_per_episode": self.log_return[-keep:],
             "reshaped_return_per_episode": self.log_reshaped_return[-keep:],
             "num_frames_per_episode": self.log_num_frames[-keep:],
+            "success_per_episode": self.log_success[-keep:],
             "num_frames": self.num_frames
         }
 
@@ -306,6 +309,7 @@ class BaseAlgo(ABC):
         self.log_return = self.log_return[-self.num_procs:]
         self.log_reshaped_return = self.log_reshaped_return[-self.num_procs:]
         self.log_num_frames = self.log_num_frames[-self.num_procs:]
+        self.log_success = self.log_success[-self.num_procs:]
 
         return exps, logs
 
