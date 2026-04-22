@@ -180,7 +180,7 @@ class ImitationLearning(object):
 
         observation_space = self.penv_pool.envs[0].observation_space
         action_space = self.penv_pool.envs[0].action_space
-        num_hierarchy_levels = self.penv_pool.envs[0].num_hierarchy_levels
+        num_hierarchy_levels = self.penv_pool.envs[0].unwrapped.num_hierarchy_levels
 
         # Generate demos for validation if needed
         if self.args.val_interval > 0:

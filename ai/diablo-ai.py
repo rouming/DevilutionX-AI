@@ -1034,7 +1034,7 @@ def train_ai(args, gameconfig):
         preprocess_obss.vocab.load_vocab(status["vocab"])
     txt_logger.info("Observations preprocessor loaded")
 
-    num_hierarchy_levels = envs[0].num_hierarchy_levels
+    num_hierarchy_levels = envs[0].unwrapped.num_hierarchy_levels
 
     # Load model
     if num_hierarchy_levels == 1:
@@ -1407,7 +1407,7 @@ def train_il(args, gameconfig):
                                  train_critic=args.phase2 or args.phase3)
 
     # Define logger and Tensorboard writer
-    L = envs[0].num_hierarchy_levels
+    L = envs[0].unwrapped.num_hierarchy_levels
     _lk = lambda name: [f"{name}{i}" for i in range(L)]
     header = (["update", "frames", "FPS", "duration"]
               + _lk("entropy") + _lk("policy_loss") + _lk("value_loss")
@@ -1477,7 +1477,7 @@ def play_ai(args, gameconfig):
 
     obs_space = penv_pool.envs[0].observation_space
     action_space = penv_pool.envs[0].action_space
-    num_hierarchy_levels = penv_pool.envs[0].num_hierarchy_levels
+    num_hierarchy_levels = penv_pool.envs[0].unwrapped.num_hierarchy_levels
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
 
