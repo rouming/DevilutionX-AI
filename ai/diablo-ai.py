@@ -951,7 +951,7 @@ def prepare_directory_for_run(args, dir_name):
             msg = "Proceed with training? [y/N]: "
             if input(msg).strip().lower() != "y":
                 print("Training aborted.")
-                return 1
+                sys.exit(1)
 
         # Change parameters for the existing model and continue
         # training without creating a snapshot
