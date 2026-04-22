@@ -24,6 +24,7 @@ from functools import wraps
 from typing import Dict, List, Tuple, Optional
 import argparse
 import ast
+import copy
 import fcntl
 import json
 import os
@@ -990,6 +991,52 @@ class Sprout:
         return [run]
 
     @locked
+    def rewind(self, head: str) -> str:
+        """
+        Reset head's active folder to its parent's archived state.
+        The run id and metadata are preserved; only the working files are replaced.
+        Raises SproutError if the head has no parent.
+        Returns the parent run id.
+        """
+        meta = self._load_meta()
+        runs = meta.get("runs", {})
+        heads = meta.get("heads", {})
+
+        if head not in heads:
+            raise SproutError(f"head '{head}' not found")
+
+        run_id = heads[head]
+        run = runs.get(run_id)
+        if run is None:
+            raise SproutError(f"run '{run_id}' not found")
+
+        parent_id = run.get("parent")
+        if not parent_id:
+            raise SproutError(f"head '{head}' has no parent to rewind to")
+        if parent_id not in runs:
+            raise SproutError(f"parent run '{parent_id}' not found in metadata")
+
+        head_dir = self._head_dir(run_id)
+        parent_dir = self._head_dir(parent_id)
+
+        if is_dir(parent_dir):
+            raise SproutError(f"parent run '{parent_id}' has an unexpected active folder")
+
+        rmtree(head_dir)
+        self._borg_extract(parent_id)
+        os.rename(parent_dir, head_dir)
+
+        # Restore all fields from parent, preserving only structural identity fields
+        parent_run = runs[parent_id]
+        restored = copy.deepcopy(parent_run)
+        restored["parent"] = parent_id
+        restored["created_at"] = run.get("created_at")
+        runs[run_id] = restored
+        self._save_meta(meta)
+
+        return parent_id
+
+    @locked
     def edit(self,
              run: Optional[str] = None,
              head: Optional[str] = None,
@@ -1271,6 +1318,16 @@ def cli_remove(args, sprout: Sprout) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     return 0
+
+def cli_rewind(args, sprout: Sprout) -> int:
+    try:
+        parent_id = sprout.rewind(head=args.head)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(f"Rewound head '{args.head}' to parent state {parent_id}")
+    return 0
+
 
 def cli_edit(args, sprout: Sprout,
              default_parser: Optional[argparse.ArgumentParser] = None) -> int:
@@ -1697,6 +1754,10 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pe.add_argument("--description", default=None, help="Set description")
     pe.add_argument("--alias", default=None, help="Set alias")
 
+    # rewind
+    prw = sub.add_parser("rewind", help="Reset head to its parent state, discarding current progress")
+    prw.add_argument("head", help="Head name to rewind")
+
     # rename
     pr = sub.add_parser("rename", help="Rename head")
     pr.add_argument("old_head", help="Head name which should be renamed")
@@ -1752,6 +1813,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
             ret = cli_remove(args, sprout)
         elif args.cmd == "edit":
             ret = cli_edit(args, sprout, default_parser=default_parser)
+        elif args.cmd == "rewind":
+            ret = cli_rewind(args, sprout)
         elif args.cmd == "rename":
             ret = cli_rename(args, sprout)
         elif args.cmd == "tree":
@@ -2550,6 +2613,73 @@ class SproutCLITests(unittest.TestCase):
 
         rc, out, err = self.run_sprout(f"clone --from-head A --head X")
         self.assertEqual(rc, 2, msg=err)  # neither group nor parent given
+
+
+    def test_rewind(self):
+        # create head A with a file
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, orig_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_A = heads0['A']
+
+        # create head B from A (snapshots A, B starts from that snapshot)
+        rc, out, err = self.run_sprout("create --head B --from-head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs1, heads1, _ = self.sprout.get_tree()
+        run_B = heads1['B']
+        parent_B = runs1[run_B]['parent']
+
+        # modify B's file to simulate training progress
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/B/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, new_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotEqual(orig_md5.split()[0], new_md5.split()[0])
+
+        # simulate training modifying meta fields on B
+        self.sprout.edit(head='B', custom_dict={'best/frames': 1000, 'success_rate': 0.9},
+                         custom_update=True)
+        self.sprout.edit(head='B', params_str='--lr 0.001', alias_str='tuned',
+                         description_str='after tuning')
+
+        runs_before, _, _ = self.sprout.get_tree()
+        self.assertIn('best/frames', runs_before[run_B].get('custom', {}))
+
+        # rewind B back to its parent state
+        rc, out, err = self.run_sprout("rewind B")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertIn(parent_B, out)
+
+        # metadata unchanged: B still points to run_B, parent is still parent_B
+        runs2, heads2, _ = self.sprout.get_tree()
+        self.assertEqual(heads2['B'], run_B)
+        self.assertEqual(runs2[run_B]['parent'], parent_B)
+
+        # all mutable fields reset to parent's state
+        for field in ('custom', 'params', 'description', 'alias'):
+            self.assertEqual(runs2[run_B].get(field), runs2[parent_B].get(field))
+
+        # file content restored to original
+        rc, rewound_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(orig_md5.split()[0], rewound_md5.split()[0])
+
+        # rewind a head with no parent fails (C is a fresh root head)
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout("rewind C")
+        self.assertEqual(rc, 2, msg=err)
+
+        # rewind a nonexistent head fails
+        rc, out, err = self.run_sprout("rewind NONEXIST")
+        self.assertEqual(rc, 2, msg=err)
 
 
 # In order to test sprout run:
