@@ -199,6 +199,8 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
         if status.get("num_hierarchy_levels", 1) == 2:
             self.load_state_dict(status["model_state"])
         else:
+            # In the case of conversion, the old optimizer state is ignored.
+            status.pop("optimizer_state", None)
             self.load_flat_model(status["model_state"], logger)
 
     def save_to_status(self, status):
