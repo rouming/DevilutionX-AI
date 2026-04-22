@@ -1212,7 +1212,10 @@ def train_ai(args, gameconfig):
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
-            R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
+            if len(returns_arr) == 1:
+                R_str = f"R {returns_arr[0]:.3f}"
+            else:
+                R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
             txt_logger.info(f"Evaluation: D {elapsed_time:.0f} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info("Status saved")
 
@@ -1408,7 +1411,7 @@ def train_il(args, gameconfig):
 
     # Define logger and Tensorboard writer
     L = envs[0].unwrapped.num_hierarchy_levels
-    _lk = lambda name: [f"{name}{i}" for i in range(L)]
+    _lk = lambda name: ([name] if L == 1 else [f"{name}{i}" for i in range(L)])
     header = (["update", "frames", "FPS", "duration"]
               + _lk("entropy") + _lk("policy_loss") + _lk("value_loss")
               + _lk("policy_accuracy") + _lk("value_accuracy") + ["grad_norm"]
