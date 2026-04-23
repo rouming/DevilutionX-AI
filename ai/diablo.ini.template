@@ -98,6 +98,7 @@ Fixed seed for game run={fixed_seed}
 Share game state via file={mshared_filename}
 Load player into the level=1
 Disable all monsters={no_monsters}
+Blind monsters={blind_monsters}
 Skip animation={skip_animation}
 Disable monsters auto-pursuing=1
 Game ticks per step={game_ticks_per_step}

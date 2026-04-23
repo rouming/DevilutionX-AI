@@ -77,6 +77,7 @@ def make_diablo_parser():
                      '--step-mode',
                      '--invincible-player',
                      '--no-monsters',
+                     '--blind-monsters',
                      '--harmless-barrels',
                      '--seed-base',
                      '--fixed-seed']
@@ -131,6 +132,10 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--no-monsters", action="store_true",
         help="Disable all monsters on the level")
+    # See also `incompatible_options`
+    common_parser.add_argument(
+        "--blind-monsters", action="store_true",
+        help="Monsters stand still and don't react to the player")
     # See also `incompatible_options`
     common_parser.add_argument(
         "--harmless-barrels", action="store_true",
@@ -1628,6 +1633,7 @@ def main():
             if hasattr(args, "fixed_seed") else False,
         "invincible-player": args.invincible_player,
         "no-monsters": args.no_monsters,
+        "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "view-radius": args.view_radius,
