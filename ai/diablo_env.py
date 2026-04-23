@@ -724,6 +724,8 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
         return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
 
     def evaluate_step(self, d, env, action):
+        monsters_cnt = diablo_state.count_active_monsters(d)
+        total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
 
         truncated = False
@@ -753,6 +755,17 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             done = True
             self.episode_success = True
             print("Goal, R %.1f" % reward, file=self.log)
+        else:
+            if total_hp < self.prev_total_hp:
+                # Monster took damage
+                reward += 1.0
+                self.prev_total_hp = total_hp
+                print("Attack monster, R %.1f" % reward, file=self.log)
+            if monsters_cnt < self.prev_monsters_cnt:
+                # Monsters killed
+                reward += (self.prev_monsters_cnt - monsters_cnt) * 3.0
+                self.prev_monsters_cnt = monsters_cnt
+                print("Kill monster, R %.1f" % reward, file=self.log)
 
         # See the definition of @reward: initially, it is set to
         # the integer zero, so we can safely check for type changes
