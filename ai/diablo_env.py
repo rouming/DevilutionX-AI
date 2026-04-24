@@ -758,12 +758,12 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
         else:
             if total_hp < self.prev_total_hp:
                 # Monster took damage
-                reward += 1.0
+                reward += 0.02
                 self.prev_total_hp = total_hp
                 print("Attack monster, R %.1f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
-                reward += (self.prev_monsters_cnt - monsters_cnt) * 3.0
+                reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
                 self.prev_monsters_cnt = monsters_cnt
                 print("Kill monster, R %.1f" % reward, file=self.log)
 
@@ -782,7 +782,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
                 print("Stuck, R %.1f" % reward, file=self.log)
         elif not was_exploring:
             # Penalty for NOP
-            reward = 0.0
+            reward -= 0.01
 
         return [reward], done, truncated
 
