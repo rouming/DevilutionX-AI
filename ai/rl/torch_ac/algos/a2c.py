@@ -131,6 +131,7 @@ class A2CAlgo(BaseAlgo):
             "policy_loss": update_policy_loss,
             "value_loss": update_value_loss,
             "kl": update_kl,
+            "clip_frac": numpy.zeros((self.num_hierarchy_levels, )), # A2C has no clipping
             "grad_norm": update_grad_norm,
         }
 

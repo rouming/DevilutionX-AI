@@ -27,6 +27,7 @@ import numpy as np
 import procutils
 import sprout
 from rl import utils
+from rl.constants import KL_GOOD_HI, CLIP_FRAC_GOOD_HI, GRAD_NORM_GOOD_HI
 
 VERSION='Diablo AI Tool v1.6'
 
@@ -965,6 +966,20 @@ def prepare_directory_for_run(args, dir_name):
     return spr, run_dir
 
 
+def _scale_bar(value, good_hi, good_lo=0.0, width=4):
+    """Bar over the good zone [good_lo, good_hi].
+    [^---] in range (near low), [---^] in range (near high),
+    [<---] below, [--->] above."""
+    if value < good_lo:
+        return '[<' + '-' * (width - 1) + ']'
+    if value > good_hi:
+        return '[' + '-' * (width - 1) + '>]'
+    pos = round((value - good_lo) / (good_hi - good_lo) * (width - 1))
+    bar = ['-'] * width
+    bar[pos] = '^'
+    return '[' + ''.join(bar) + ']'
+
+
 def train_ai(args, gameconfig):
     from rl import torch_ac
     from rl.evaluate import batch_evaluate
@@ -1145,7 +1160,8 @@ def train_ai(args, gameconfig):
                        ("value", "V"),
                        ("policy_loss", "pL"),
                        ("value_loss", "vL"),
-                       ("kl", "KL")]
+                       ("kl", "KL"),
+                       ("clip_frac", "cF")]
             for m in metrics:
                 v = logs[m[0]]
                 header += [f"{m[0]}_lvl{i}" for i in range(len(v))]
@@ -1154,29 +1170,23 @@ def train_ai(args, gameconfig):
             header += ["grad_norm"]
             data += [logs["grad_norm"]]
 
-            nf = num_frames_per_episode
             grad = logs["grad_norm"]
-            if L == 1:
-                rr = list(rreturn_per_episode[0].values())
-                mv = "".join(f" | {m[1]} {logs[m[0]][0]:.3f}" for m in metrics)
+            grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
+            bar_metrics = {"kl", "clip_frac"}
+            txt_logger.info(
+                f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
+                f" | S {success_rate:.2f} | ∇ {grad:.3f}{grad_bar}")
+            for i in range(L):
+                rr = list(rreturn_per_episode[i].values())
+                mv = " | ".join(f"{m[1]} {logs[m[0]][i]:.3f}"
+                               for m in metrics if m[0] not in bar_metrics)
+                kl = logs["kl"][i]; kl_bar = _scale_bar(kl, KL_GOOD_HI)
+                cf = logs["clip_frac"][i]; cf_bar = _scale_bar(cf, CLIP_FRAC_GOOD_HI)
+                prefix = f"  L{i} | " if L > 1 else "  "
                 txt_logger.info(
-                    f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
-                    f" | rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
-                    f" | S {success_rate:.2f}"
-                    f" | F:μσmM {nf['mean']:.1f} {nf['std']:.1f} {nf['min']} {nf['max']}"
-                    + mv + f" | ∇ {grad:.3f}")
-            else:
-                txt_logger.info(
-                    f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
-                    f" | S {success_rate:.2f}"
-                    f" | F:μσmM {nf['mean']:.1f} {nf['std']:.1f} {nf['min']} {nf['max']}"
-                    f" | ∇ {grad:.3f}")
-                for i in range(L):
-                    rr = list(rreturn_per_episode[i].values())
-                    mv = " | ".join(f"{m[1]} {logs[m[0]][i]:.3f}" for m in metrics)
-                    txt_logger.info(
-                        f"  L{i} | rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
-                        f" | {mv}")
+                    f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                    f" | {mv}"
+                    f" | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]

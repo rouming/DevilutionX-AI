@@ -56,6 +56,7 @@ class PPOAlgo(BaseAlgo):
             log_value_losses = []
             log_grad_norms = []
             log_kls = []
+            log_clip_fracs = []
 
             for inds in self._get_batches_starting_indexes():
                 # Initialize batch values
@@ -65,6 +66,7 @@ class PPOAlgo(BaseAlgo):
                 batch_policy_loss = numpy.zeros((self.num_hierarchy_levels, ))
                 batch_value_loss = numpy.zeros((self.num_hierarchy_levels, ))
                 batch_kl = numpy.zeros((self.num_hierarchy_levels, ))
+                batch_clip_frac = numpy.zeros((self.num_hierarchy_levels, ))
 
                 # Will be promoted to a tensor on the correct device
                 batch_loss_tensor = 0
@@ -129,6 +131,9 @@ class PPOAlgo(BaseAlgo):
                     # Kullback-Leibler (KL) divergence
                     kl = (sb.log_prob - new_log_prob).mean(axis=0)
 
+                    # Fraction of samples where ratio was clipped
+                    clip_frac = (torch.abs(ratio - 1.0) > self.clip_eps).float().mean(axis=0)
+
                     # Update batch values
 
                     batch_entropy += entropy.detach().cpu().numpy()
@@ -136,6 +141,7 @@ class PPOAlgo(BaseAlgo):
                     batch_policy_loss += policy_loss.detach().cpu().numpy()
                     batch_value_loss += value_loss.detach().cpu().numpy()
                     batch_kl += kl.detach().cpu().numpy()
+                    batch_clip_frac += clip_frac.detach().cpu().numpy()
                     batch_loss_tensor += loss
 
                     # Save detached memory for the future recurrence
@@ -160,6 +166,7 @@ class PPOAlgo(BaseAlgo):
                 batch_policy_loss /= self.recurrence
                 batch_value_loss /= self.recurrence
                 batch_kl /= self.recurrence
+                batch_clip_frac /= self.recurrence
                 batch_loss_tensor /= self.recurrence
 
                 # Update actor-critic
@@ -180,6 +187,7 @@ class PPOAlgo(BaseAlgo):
                 log_policy_losses.append(batch_policy_loss)
                 log_value_losses.append(batch_value_loss)
                 log_kls.append(batch_kl)
+                log_clip_fracs.append(batch_clip_frac)
                 log_grad_norms.append(grad_norm)
 
         # Log some values
@@ -189,7 +197,8 @@ class PPOAlgo(BaseAlgo):
             "value": numpy.mean(log_values, axis=0), # (L, )
             "policy_loss": numpy.mean(log_policy_losses, axis=0), # (L, )
             "value_loss": numpy.mean(log_value_losses, axis=0), # (L, )
-            "kl": numpy.mean(log_kls, axis=0), # (L, )
+            "kl": numpy.mean(log_kls, axis=0),               # (L, )
+            "clip_frac": numpy.mean(log_clip_fracs, axis=0), # (L, )
             "grad_norm": numpy.mean(log_grad_norms),
         }
 
