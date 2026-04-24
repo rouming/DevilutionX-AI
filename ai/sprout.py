@@ -991,10 +991,15 @@ class Sprout:
         return [run]
 
     @locked
-    def rewind(self, head: str) -> str:
+    def rewind(self, head: str, persist: bool = False) -> str:
         """
         Reset head's active folder to its parent's archived state.
-        The run id and metadata are preserved; only the working files are replaced.
+
+        persist=False (default): discard current state, restore parent in-place
+          (run id and metadata preserved, only working files replaced).
+        persist=True: archive current run as a permanent branch first, then
+          create a new run from parent content and reassign the head to it.
+
         Raises SproutError if the head has no parent.
         Returns the parent run id.
         """
@@ -1022,18 +1027,46 @@ class Sprout:
         if is_dir(parent_dir):
             raise SproutError(f"parent run '{parent_id}' has an unexpected active folder")
 
-        rmtree(head_dir)
-        self._borg_extract(parent_id)
-        os.rename(parent_dir, head_dir)
+        if persist:
+            # Archive current run as a permanent branch, then create a new
+            # run from parent content and reassign the head to it.
+            self._borg_create(run_id)
+            rmtree(head_dir)
 
-        # Restore all fields from parent, preserving only structural identity fields
-        parent_run = runs[parent_id]
-        restored = copy.deepcopy(parent_run)
-        restored["parent"] = parent_id
-        restored["created_at"] = run.get("created_at")
-        runs[run_id] = restored
+            new_run_id = self.random_run_id()
+            self._borg_extract(parent_id)
+            os.rename(parent_dir, self._head_dir(new_run_id))
+            self._borg_create(new_run_id)
+
+            parent_run = runs[parent_id]
+            runs[new_run_id] = {
+                "group": parent_run["group"],
+                "parent": parent_id,
+                "params": parent_run.get("params", {}),
+                "alias": parent_run.get("alias", ""),
+                "description": parent_run.get("description", ""),
+                "custom": parent_run.get("custom", {}),
+                "created_at": now_iso()
+            }
+
+            heads[head] = new_run_id
+            symlink_path = os.path.join(self.active_path, head)
+            if os.path.islink(symlink_path):
+                unlink(symlink_path)
+            os.symlink(self._symlink_target_rel(new_run_id), symlink_path)
+        else:
+            rmtree(head_dir)
+            self._borg_extract(parent_id)
+            os.rename(parent_dir, head_dir)
+
+            # Restore all fields from parent, preserving only structural identity fields
+            parent_run = runs[parent_id]
+            restored = copy.deepcopy(parent_run)
+            restored["parent"] = parent_id
+            restored["created_at"] = run.get("created_at")
+            runs[run_id] = restored
+
         self._save_meta(meta)
-
         return parent_id
 
     @locked
@@ -1321,7 +1354,7 @@ def cli_remove(args, sprout: Sprout) -> int:
 
 def cli_rewind(args, sprout: Sprout) -> int:
     try:
-        parent_id = sprout.rewind(head=args.head)
+        parent_id = sprout.rewind(head=args.head, persist=args.persist)
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
@@ -1755,8 +1788,10 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pe.add_argument("--alias", default=None, help="Set alias")
 
     # rewind
-    prw = sub.add_parser("rewind", help="Reset head to its parent state, discarding current progress")
+    prw = sub.add_parser("rewind", help="Reset head to its parent state")
     prw.add_argument("head", help="Head name to rewind")
+    prw.add_argument("--persist", action="store_true",
+                     help="Persist current state as a permanent branch before rewinding")
 
     # rename
     pr = sub.add_parser("rename", help="Rename head")
@@ -2679,6 +2714,63 @@ class SproutCLITests(unittest.TestCase):
 
         # rewind a nonexistent head fails
         rc, out, err = self.run_sprout("rewind NONEXIST")
+        self.assertEqual(rc, 2, msg=err)
+
+    def test_rewind_persist(self):
+        # create root head A with a file
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/A/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, orig_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/A/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+
+        # create head B from A (snapshots A, B starts from that snapshot)
+        rc, out, err = self.run_sprout("create --head B --from-head A")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs0, heads0, _ = self.sprout.get_tree()
+        run_B = heads0['B']
+        parent_B = runs0[run_B]['parent']
+
+        # modify B to simulate training progress
+        rc, out, err = self.run_cmd(f"dd if=/dev/random of={self.tmpdir}/active/B/model.bin bs=1K count=64 2>/dev/null")
+        self.assertEqual(rc, 0, msg=err)
+        rc, trained_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertNotEqual(orig_md5.split()[0], trained_md5.split()[0])
+
+        # rewind B with --persist: current run_B must be archived, B gets a new run
+        rc, out, err = self.run_sprout("rewind B --persist")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs1, heads1, _ = self.sprout.get_tree()
+        new_run_B = heads1['B']
+
+        # head B now points to a different run
+        self.assertNotEqual(new_run_B, run_B)
+
+        # old run_B is still in the tree (archived as a permanent branch)
+        self.assertIn(run_B, runs1)
+
+        # both old run_B and new run_B share the same parent
+        self.assertEqual(runs1[run_B]['parent'], parent_B)
+        self.assertEqual(runs1[new_run_B]['parent'], parent_B)
+
+        # new run inherits parent's metadata
+        for field in ('params', 'description', 'alias', 'custom'):
+            self.assertEqual(runs1[new_run_B].get(field), runs1[parent_B].get(field))
+
+        # file content restored to parent's state (original A content)
+        rc, rewound_md5, err = self.run_cmd(f"md5sum {self.tmpdir}/active/B/model.bin")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(orig_md5.split()[0], rewound_md5.split()[0])
+
+        # rewind --persist on a head with no parent fails
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout("rewind C --persist")
         self.assertEqual(rc, 2, msg=err)
 
 
