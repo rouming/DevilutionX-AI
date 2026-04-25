@@ -340,6 +340,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--eval-episodes", type=int, default=10,
         help="Number of episodes used to evaluate the agent (default: 10)")
+    train_ai_parser.add_argument(
+        "--eval-env-runners", type=int, default=64,
+        help="Number of environment runners dedicated to evaluation (default: 64)")
 
     #
     # demos-il
@@ -1028,6 +1031,21 @@ def train_ai(args, gameconfig):
 
     penv_pool = ParallelEnvPool(envs)
 
+    eval_envs = []
+    ts = 0
+    for i in range(args.eval_env_runners):
+        env_config = copy.deepcopy(gameconfig)
+        env_config['index'] = args.env_runners + i
+        EnvClass = utils.get_env_class(args.env)
+        EnvClass.tune_config(env_config)
+        game = diablo_state.DiabloGame.run_or_attach(env_config)
+        eval_envs.append(utils.make_env(args.env, env_config, game))
+
+        if time.time() - ts >= 3.0 or i == args.eval_env_runners - 1:
+            ts = time.time()
+            print(f"{i+1}/{args.eval_env_runners} eval environment instances are created")
+    eval_penv_pool = ParallelEnvPool(eval_envs)
+
     txt_logger.info("Environments loaded\n")
 
     # Load training status
@@ -1213,14 +1231,13 @@ def train_ai(args, gameconfig):
         # Save status
         if args.save_interval > 0 and (update % args.save_interval == 0 or
                                        num_frames >= args.frames_int):
-            num_envs = min(len(penv_pool.envs), args.eval_episodes)
+            num_eval_envs = min(len(eval_penv_pool.envs), args.eval_episodes)
             txt_logger.info("Evaluating the model's {} episodes with {} environments".format(
-                args.eval_episodes, num_envs))
+                args.eval_episodes, num_eval_envs))
 
-            # Evaluate on the current model
             acmodel.eval()
             start_time = time.time()
-            vlogs = batch_evaluate(acmodel, preprocess_obss, penv_pool,
+            vlogs = batch_evaluate(acmodel, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
