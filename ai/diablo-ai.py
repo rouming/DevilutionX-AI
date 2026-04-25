@@ -1182,11 +1182,21 @@ def train_ai(args, gameconfig):
                                for m in metrics if m[0] not in bar_metrics)
                 kl = logs["kl"][i]; kl_bar = _scale_bar(kl, KL_GOOD_HI)
                 cf = logs["clip_frac"][i]; cf_bar = _scale_bar(cf, CLIP_FRAC_GOOD_HI)
+                e_term = args.entropy_coef       * logs["entropy"][i]
+                v_term = args.value_loss_coef    * logs["value_loss"][i]
+                p_term = abs(logs["policy_loss"][i])
+                total  = e_term + v_term + p_term
+                if total > 0:
+                    lp = (f"e:{e_term/total*100:.0f}%"
+                          f" v:{v_term/total*100:.0f}%"
+                          f" p:{p_term/total*100:.0f}%")
+                else:
+                    lp = "e:0% v:0% p:0%"
                 prefix = f"  L{i} | " if L > 1 else "  "
                 txt_logger.info(
                     f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
                     f" | {mv}"
-                    f" | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
+                    f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
