@@ -741,31 +741,31 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             # We are dead, game over
             reward = 0.0
             done = True
-            print("Death, R %.1f" % reward, file=self.log)
+            print("Death, R %.2f" % reward, file=self.log)
         elif d.player.plrlevel < self.start_dungeon_level or \
              (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
             # Done with this episode with 0 reward if agent has
             # stepped into a trigger to escape
             reward = 0.0
             done = True
-            print("Escape, R %.1f" % reward, file=self.log)
+            print("Escape, R %.2f" % reward, file=self.log)
         elif player_pos == self.goal_pos or \
              (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
             reward = 20.0
             done = True
             self.episode_success = True
-            print("Goal, R %.1f" % reward, file=self.log)
+            print("Goal, R %.2f" % reward, file=self.log)
         else:
             if total_hp < self.prev_total_hp:
                 # Monster took damage
                 reward += 0.02
                 self.prev_total_hp = total_hp
-                print("Attack monster, R %.1f" % reward, file=self.log)
+                print("Attack monster, R %.2f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
                 reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
                 self.prev_monsters_cnt = monsters_cnt
-                print("Kill monster, R %.1f" % reward, file=self.log)
+                print("Kill monster, R %.2f" % reward, file=self.log)
 
         # See the definition of @reward: initially, it is set to
         # the integer zero, so we can safely check for type changes
@@ -777,12 +777,16 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             truncated = True
             reward = 0.0
             if self.is_agent_timedout():
-                print("Timedout, R %.1f" % reward, file=self.log)
+                print("Timedout, R %.2f" % reward, file=self.log)
             else:
-                print("Stuck, R %.1f" % reward, file=self.log)
+                print("Stuck, R %.2f" % reward, file=self.log)
         elif not was_exploring:
-            # Penalty for NOP
-            reward -= 0.01
+            # Penalize only movement that didn't accomplish anything.
+            # Stand/PrimaryAction/SecondaryAction get no penalty: the agent
+            # should be free to attempt attacks or interact without being
+            # punished for a miss or a failed interaction.
+            if action < ActionEnum.Stand.value:
+                reward -= 0.01
 
         return [reward], done, truncated
 
