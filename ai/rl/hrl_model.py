@@ -206,7 +206,8 @@ class HRLACModel(nn.Module, torch_ac.RecurrentACModel):
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "num_hierarchy_levels": self.num_hierarchy_levels})
+                       "num_hierarchy_levels": self.num_hierarchy_levels,
+                       "model_class": type(self).__name__})
 
     def load_flat_model(self, old_state, logger):
         """Loads weights from a flat PPO model into the encoder,

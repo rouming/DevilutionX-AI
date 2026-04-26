@@ -120,6 +120,186 @@ class CNN3(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+class SelfAttention(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.query = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.key   = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.value = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))  # zero-init: identity at load time
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        q = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # (B, N, C/8)
+        k = self.key(x).view(B, -1, H * W)                      # (B, C/8, N)
+        attn = F.softmax(q @ k, dim=-1)                          # (B, N, N)
+        v = self.value(x).view(B, -1, H * W)                    # (B, C, N)
+        out = (v @ attn.permute(0, 2, 1)).view(B, C, H, W)
+        return x + self.gamma * out
+
+
+class MemoryCrossAttention(nn.Module):
+    """Each spatial position scores its relevance against memory, then
+    reweights the value features at that position accordingly.
+    Answers: WHERE in the local view matters given what I remember."""
+    def __init__(self, mem_dim, spatial_channels, embed_dim=64):
+        super().__init__()
+        self.q_space = nn.Conv2d(spatial_channels, embed_dim, 1)  # spatial queries
+        self.k_mem   = nn.Linear(mem_dim, embed_dim)               # memory key
+        self.v       = nn.Conv2d(spatial_channels, spatial_channels, 1)
+        self.scale   = embed_dim ** -0.5
+        self.gamma   = nn.Parameter(torch.zeros(1))  # zero-init: identity at load time
+
+    def forward(self, h, x):
+        B, C, H, W = x.shape
+        N = H * W
+        q = self.q_space(x).view(B, -1, N).permute(0, 2, 1)  # (B, N, E)
+        k = self.k_mem(h).unsqueeze(2)                          # (B, E, 1)
+        v = self.v(x).view(B, C, N)                            # (B, C, N)
+        attn = F.softmax(q @ k * self.scale, dim=1)            # (B, N, 1)
+        out = (v * attn.permute(0, 2, 1)).view(B, C, H, W)    # (B, C, H, W)
+        return x + self.gamma * out
+
+
+class FiLM(nn.Module):
+    """Residual FiLM conditioned on memory. gamma=0 start — identity at init."""
+    def __init__(self, mem_dim, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1   = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2   = nn.BatchNorm2d(channels)
+        self.scale = nn.Linear(mem_dim, channels)
+        self.shift = nn.Linear(mem_dim, channels)
+        self.gamma = nn.Parameter(torch.zeros(1))  # zero-init: identity at load time
+
+    def forward(self, x, h):
+        # FiLM+ResNet pattern: transform features before modulation so memory
+        # scales/shifts a richer intermediate representation rather than the raw
+        # input directly. Bare FiLM (no convs) modulates only what is already
+        # there; the conv pair gives memory something more expressive to work with.
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.conv2(out)
+        g = self.scale(h).unsqueeze(2).unsqueeze(3)
+        b = self.shift(h).unsqueeze(2).unsqueeze(3)
+        out = F.relu(self.bn2(out * g + b))
+        return x + self.gamma * out
+
+
+class CNN32Expert(nn.Module):
+    """CNN32 extended with SelfAttention, MemoryCrossAttention and FiLM.
+
+    The base CNN32 processes every frame independently: spatial positions
+    never communicate with each other or with episodic memory.  This works
+    for local obstacle avoidance but fails when the agent must integrate
+    what it has already seen into where it should look next.
+
+    Three complementary blocks are inserted at the 11x11 mid-resolution
+    feature map (N=121 positions), after the first stride-2 downsample of
+    the 21x21 input view.  At 21x21 the self-attention map is 441x441
+    (expensive); after all downsamples it collapses to 3x3 (too few
+    positions to be meaningful).  11x11 is the sweet spot.
+
+    SelfAttention
+        Each of the 121 positions attends to all others via a full N x N
+        map.  Relates spatially distant features: a corridor entrance on
+        one edge can influence how a door on the opposite edge is
+        processed.  Solves navigation context -- room shapes, passage
+        widths, geometric relationships between obstacles.
+
+    MemoryCrossAttention
+        Spatial positions are queries; the LSTM hidden state (episodic
+        memory) is a single key.  Each position scores its relevance to
+        what the agent currently remembers and reweights its own value
+        features accordingly.  Answers WHERE in the local view matters
+        given what was seen before: explored corridors get suppressed,
+        unvisited areas and tracked entities get amplified.
+
+    FiLM (Feature-wise Linear Modulation)
+        A residual two-conv block conditioned on LSTM memory via learned
+        per-channel scale and shift.  While CrossAttention selects where
+        to look, FiLM modulates WHAT features to look for: in combat the
+        memory can amplify monster-related channels; during exploration it
+        can amplify barrel and door channels.
+
+    All three blocks initialize their residual gate (gamma) to zero,
+    making them exact mathematical identities at load time.  A pretrained
+    CNN32 checkpoint produces bit-identical outputs on the first forward
+    pass; the new blocks grow their contribution gradually as training
+    continues, so no restart from random weights is needed."""
+
+    def __init__(self, in_channels=16, output_dim=512, mem_dim=512):
+        super().__init__()
+
+        # Layers 0-8 of CNN32: 21x21 -> 11x11 at 128ch
+        self.trunk_a = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, 3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+
+        # Attention blocks operate at 128ch / 11x11 (N=121)
+        self.self_attn  = SelfAttention(128)
+        self.cross_attn = MemoryCrossAttention(mem_dim, 128)
+        self.film       = FiLM(mem_dim, 128)
+
+        # Layers 9-23 of CNN32: 11x11 -> 512-dim embedding
+        self.trunk_b = nn.Sequential(
+            nn.Conv2d(128, 256, 3, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, 3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 512, 3, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, 3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(512, output_dim),
+        )
+
+    def forward(self, x, h_prev=None):
+        x = self.trunk_a(x)
+        x = self.self_attn(x)
+        if h_prev is not None:
+            x = self.cross_attn(h_prev, x)
+            x = self.film(x, h_prev)
+        x = self.trunk_b(x)
+        return x
+
+    def load_from_cnn32(self, cnn32_conv_state):
+        """Copy CNN32 image_conv weights into trunk_a and trunk_b.
+        Pass the sub-dict scoped to image_conv (keys like 'network.0.weight')."""
+        own = self.state_dict()
+        suffixes = ['weight', 'bias', 'running_mean', 'running_var', 'num_batches_tracked']
+
+        for new_i in range(9):          # trunk_a covers CNN32 network.0..8
+            for s in suffixes:
+                src = f'network.{new_i}.{s}'
+                dst = f'trunk_a.{new_i}.{s}'
+                if src in cnn32_conv_state and dst in own:
+                    own[dst] = cnn32_conv_state[src]
+
+        for offset in range(15):        # trunk_b covers CNN32 network.9..23
+            for s in suffixes:
+                src = f'network.{9 + offset}.{s}'
+                dst = f'trunk_b.{offset}.{s}'
+                if src in cnn32_conv_state and dst in own:
+                    own[dst] = cnn32_conv_state[src]
+
+        self.load_state_dict(own)
+
+
 class CNN32(nn.Module):
     def __init__(self, in_channels=16, output_dim=512):
         super(CNN32, self).__init__()
@@ -351,6 +531,11 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         elif self.cnn_arch == "cnn32":
             self.image_conv = CNN32(in_channels=in_channels, output_dim=embedding_dim)
 
+        elif self.cnn_arch == "cnn32expert":
+            self.image_conv = CNN32Expert(in_channels=in_channels,
+                                          output_dim=embedding_dim,
+                                          mem_dim=embedding_dim)
+
         elif self.cnn_arch == "cnn35":
             self.image_conv = CNN35(in_channels=in_channels, output_dim=embedding_dim)
 
@@ -458,7 +643,7 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
                 nn.ReLU(),
                 nn.Linear(256, 1)
             )
-        elif self.cnn_arch in ("cnn32", "cnn35"):
+        elif self.cnn_arch in ("cnn32", "cnn32expert", "cnn35"):
             # Define actor's model, which gradually reduces the feature
             # size for large embeddings, like:
             # 512 -> 256 -> action_space
@@ -516,11 +701,37 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         self.apply(init_params)
 
     def load_from_status(self, status, logger=None):
-        self.load_state_dict(status["model_state"])
+        if (self.cnn_arch == "cnn32expert" and
+                "image_conv.network.0.weight" in status["model_state"]):
+            if logger:
+                logger.info("Converted cnn32 -> cnn32expert weights\n")
+            status.pop("optimizer_state", None)
+            self.load_from_cnn32_status(status)
+        else:
+            self.load_state_dict(status["model_state"])
+
+    def load_from_cnn32_status(self, status):
+        """Bootstrap a cnn32expert model from a pretrained cnn32 status.
+        Trunk weights are remapped; all new blocks stay at gamma=0 (identity)."""
+        assert self.cnn_arch == "cnn32expert", "Only valid for cnn32expert"
+        src = status["model_state"]
+
+        # Remap image_conv.network.* -> trunk_a/trunk_b
+        conv_state = {k[len("image_conv."):]: v
+                      for k, v in src.items() if k.startswith("image_conv.")}
+        self.image_conv.load_from_cnn32(conv_state)
+
+        # Copy everything else (actor, critic, memory_rnn) directly
+        own = self.state_dict()
+        for k, v in src.items():
+            if not k.startswith("image_conv.") and k in own:
+                own[k] = v
+        self.load_state_dict(own)
 
     def save_to_status(self, status):
         status.update({"model_state": self.state_dict(),
-                       "num_hierarchy_levels": self.num_hierarchy_levels})
+                       "num_hierarchy_levels": self.num_hierarchy_levels,
+                       "model_class": type(self).__name__})
 
     @property
     def memory_size(self):
@@ -561,6 +772,9 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
             for controler in self.controllers:
                 x = controler(x, embed_text)
             x = F.relu(self.film_pool(x))
+        elif self.cnn_arch == "cnn32expert":
+            h_prev = memory[:, :self.semi_memory_size]
+            x = self.image_conv(x, h_prev)
         else:
             x = self.image_conv(x)
 
