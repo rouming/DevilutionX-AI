@@ -1071,6 +1071,65 @@ class Sprout:
         return parent_id
 
     @locked
+    def switch(self, head: str, to_run: str, persist: bool = False) -> str:
+        """
+        Reattach head to a different existing run.
+
+        If head currently has an active run:
+          - persist=True: archive its current state to borg before deactivating.
+          - persist=False: discard the active folder without updating the archive.
+
+        The target run 'to_run' must exist and must not already be assigned
+        to any head (i.e. it must be persistent). A new active run is created
+        as a child of 'to_run' to preserve immutability of the 'to_run' state.
+
+        Returns the new active run_id.
+        """
+        meta = self._load_meta()
+        runs = meta.get("runs", {})
+        heads = meta.get("heads", {})
+
+        if to_run not in runs:
+            raise SproutError(f"run '{to_run}' not found")
+
+        existing_heads = [h for h, rid in heads.items() if rid == to_run]
+        if existing_heads:
+            raise SproutError(f"run '{to_run}' already has head '{existing_heads[0]}'")
+
+        # If head is already active, handle its deactivation
+        current_run_id = heads.get(head)
+        if current_run_id:
+            other_heads = [k for k, v in heads.items() if v == current_run_id and k != head]
+            if persist:
+                self._borg_create(current_run_id)
+                if not other_heads:
+                    head_dir = self._head_dir(current_run_id)
+                    if is_dir(head_dir):
+                        rmtree(head_dir)
+
+                symlink_path = os.path.join(self.active_path, head)
+                if os.path.islink(symlink_path):
+                    unlink(symlink_path)
+                heads.pop(head, None)
+            else:
+                # persist=False: remove the run entirely if it's not used by other heads
+                if not other_heads:
+                    self.remove_run_recursive(current_run_id, runs[current_run_id], meta)
+                else:
+                    symlink_path = os.path.join(self.active_path, head)
+                    if os.path.islink(symlink_path):
+                        unlink(symlink_path)
+                    heads.pop(head, None)
+
+            self._save_meta(meta)
+
+        # Since to_run is persistent, we must create a NEW run as its child to
+        # keep it immutable.
+        new_run_id = self.create(head=head, from_run=to_run)
+
+        return new_run_id
+
+    @locked
     def edit(self,
              run: Optional[str] = None,
              head: Optional[str] = None,
@@ -1227,7 +1286,7 @@ class Sprout:
         runs = meta.get("runs", {})
         heads = meta.get("heads", {})
 
-        # 1. Check borg archives
+        # Check borg archives
         out = self._borg_list()
         borg_ids = {line.split()[0] for line in out.strip().splitlines()}
         meta_ids = set(runs.keys())
@@ -1238,7 +1297,7 @@ class Sprout:
                 f"meta-only: {meta_ids - borg_ids}"
             )
 
-        # 2. Check .heads folders
+        # Check .heads folders
         head_dirs = {d for d in os.listdir(self.heads_path) if is_dir(os.path.join(self.heads_path, d))}
         meta_heads = set(heads.values())
         if not head_dirs.issubset(meta_ids):
@@ -1250,7 +1309,7 @@ class Sprout:
                 f"meta-only: {meta_heads - head_dirs}"
             )
 
-        # 3. Check symlinks in working_path
+        # Check symlinks in working_path
         symlinks = {
             name: os.readlink(os.path.join(self.active_path, name))
             for name in os.listdir(self.active_path)
@@ -1360,6 +1419,16 @@ def cli_rewind(args, sprout: Sprout) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     print(f"Rewound head '{args.head}' to parent state {parent_id}")
+    return 0
+
+
+def cli_switch(args, sprout: Sprout) -> int:
+    try:
+        run_id = sprout.switch(head=args.head, to_run=args.to_run, persist=args.persist)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(f"Switched head '{args.head}' to {args.to_run} (created new active run {run_id})")
     return 0
 
 
@@ -1884,6 +1953,13 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     prw.add_argument("--persist", action="store_true",
                      help="Persist current state as a permanent branch before rewinding")
 
+    # switch
+    psw = sub.add_parser("switch", help="Reattach a head to a different existing run")
+    psw.add_argument("--head", required=True, help="Head name to reattach")
+    psw.add_argument("--to-run", required=True, dest="to_run", help="Target run id")
+    psw.add_argument("--persist", action="store_true",
+                     help="Archive current active state to borg before switching")
+
     # rename
     pr = sub.add_parser("rename", help="Rename head")
     pr.add_argument("old_head", help="Head name which should be renamed")
@@ -1948,6 +2024,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
             ret = cli_edit(args, sprout, default_parser=default_parser)
         elif args.cmd == "rewind":
             ret = cli_rewind(args, sprout)
+        elif args.cmd == "switch":
+            ret = cli_switch(args, sprout)
         elif args.cmd == "rename":
             ret = cli_rename(args, sprout)
         elif args.cmd == "tree":
@@ -2872,6 +2950,95 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
         rc, out, err = self.run_sprout("rewind C --persist")
         self.assertEqual(rc, 2, msg=err)
+
+    def test_switch(self):
+        # create one persisted run and one active head in the same group
+        rc, out, err = self.run_sprout("create GroupA")
+        self.assertEqual(rc, 0, msg=err)
+        runs0, _, _ = self.sprout.get_tree()
+        run_persisted = list(runs0.keys())[0]
+
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+        runs1, heads1, _ = self.sprout.get_tree()
+        run_a = heads1['A']
+
+        # error: target run does not exist
+        rc, _, err = self.run_sprout("switch --head A --to-run deadbeef")
+        self.assertEqual(rc, 2)
+        self.assertIn("not found", err)
+
+        # create another head B so we can test switching to an active run
+        rc, out, err = self.run_sprout("create GroupA --head B")
+        self.assertEqual(rc, 0, msg=err)
+        runs2, heads2, _ = self.sprout.get_tree()
+        run_b = heads2['B']
+
+        # error: target run already has a head
+        rc, _, err = self.run_sprout(f"switch --head A --to-run {run_b}")
+        self.assertEqual(rc, 2)
+        self.assertIn("already has head", err)
+
+        # basic switch to a persistent run: head A now points to a NEW run, child of run_persisted
+        rc, out, err = self.run_sprout(f"switch --head A --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs4, heads4, _ = self.sprout.get_tree()
+        run_a_new = heads4['A']
+        self.assertNotEqual(run_a_new, run_persisted)
+        self.assertEqual(runs4[run_a_new]['parent'], run_persisted)
+        self.assertIn(run_a, runs4) # run_a is still in the tree
+        self.assertTrue(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_a_new)))
+
+        # switch --persist: write a sentinel, switch away, verify it was saved
+        rc, out, err = self.run_sprout("create GroupA --head C")
+        self.assertEqual(rc, 0, msg=err)
+        runs5, heads5, _ = self.sprout.get_tree()
+        run_c = heads5['C']
+
+        sentinel = os.path.join(self.tmpdir, 'active', 'C', 'sentinel.txt')
+        with open(sentinel, 'w') as f:
+            f.write('persist_me')
+
+        # Switch C to run_persisted (persistent) while persisting current run_c
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted} --persist")
+        self.assertEqual(rc, 0, msg=err)
+        runs6, heads6, _ = self.sprout.get_tree()
+        run_c_new = heads6['C']
+        self.assertEqual(runs6[run_c_new]['parent'], run_persisted)
+        self.assertFalse(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_c)))
+
+        # switch C back to run_c (persistent): this extracts run_c and creates a NEW run_c_child
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_c}")
+        self.assertEqual(rc, 0, msg=err)
+        runs7, heads7, _ = self.sprout.get_tree()
+        run_c_newest = heads7['C']
+        self.assertNotEqual(run_c_newest, run_c)
+        self.assertEqual(runs7[run_c_newest]['parent'], run_c)
+
+        restored = os.path.join(self.tmpdir, 'active', 'C', 'sentinel.txt')
+        self.assertTrue(os.path.exists(restored))
+        with open(restored) as f:
+            self.assertEqual(f.read(), 'persist_me')
+
+        # repeat switch without persist should not grow the tree
+        runs_before, _, _ = self.sprout.get_tree()
+        num_runs_before = len(runs_before)
+
+        # Switch C to run_persisted twice more
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        self.assertEqual(rc, 0, msg=err)
+
+        runs_after, _, _ = self.sprout.get_tree()
+        # The number of runs should only increase by 1 compared to runs_before,
+        # because the first switch created a new run and deleted the previous C leaf,
+        # and the second switch created a new run and deleted the previous one.
+        # Actually it shouldn't grow at all across the two switches?
+        # Wait, from runs_before to the first switch: +1 new run, -1 deleted run = 0 net change
+        # Second switch: +1 new run, -1 deleted run = 0 net change.
+        self.assertEqual(len(runs_after), num_runs_before)
 
 
 # In order to test sprout run:
