@@ -29,7 +29,7 @@ __sprout_complete() {
     local meta_file="$1"
     local start="$2"
 
-    local -a subcmds=(create clone persist remove edit rewind rename tree log fetch)
+    local -a subcmds=(create clone persist remove edit rewind rename tree log show fetch)
     local -a value_flags=(
         --working --head --from-run --from-head --parent-run --parent-head
         --run --group --params --description --alias
@@ -110,6 +110,7 @@ __sprout_complete() {
             rewind)  flags+=" --persist" ;;
             tree)    flags+=" --group --verbose" ;;
             log)     flags+=" --run --head" ;;
+            show)    flags+=" --run --head --all" ;;
         esac
         COMPREPLY=( $(compgen -W "$flags" -- "$cur") )
         return

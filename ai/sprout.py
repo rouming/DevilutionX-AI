@@ -209,9 +209,10 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
         }
     return arg_defs
 
-def make_cli_opts(parser, params):
+def make_cli_opts(parser, params, all_params=False):
     """Compare new parameters with argparse defaults and required
-    values, and return a list of CLI options"""
+    values, and return a list of CLI options.
+    If all_params=True, include params even when they match their default."""
     opts = []
     missing = []
 
@@ -237,8 +238,8 @@ def make_cli_opts(parser, params):
             else:
                 missing.append(f"{opt_string} ${name.upper()}")
 
-        # Include if new param overrides default
-        elif new_val is not None and str(new_val) != str(default_val):
+        # Include if new param overrides default (or all_params requested)
+        elif new_val is not None and (all_params or str(new_val) != str(default_val)):
             opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
                 if new_val:
@@ -1713,6 +1714,96 @@ def cli_log(args,
         return 2
 
 
+def cli_show(args,
+             sprout: Sprout,
+             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+    try:
+        _, heads, _ = sprout.get_tree()
+        run_id = None
+        if args.run:
+            run_id = args.run
+        elif args.head:
+            if args.head not in heads:
+                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
+                return 2
+            run_id = heads[args.head]
+        else:
+            print("ERROR: show requires --run or --head", file=sys.stderr)
+            return 2
+
+        chain = sprout.history_chain(run_id)
+        rid, r = chain[-1]
+        run_params = r["params"]
+
+        prev_params = chain[-2][1]["params"] if len(chain) > 1 else {}
+        diffs = {}
+        for k, v in run_params.items():
+            if k not in prev_params:
+                diffs[k] = repr(v)
+            else:
+                old = prev_params[k]
+                if old != v:
+                    diffs[k] = f"{old} -> {v}"
+
+        alias = f" ({r['alias']})" if r.get("alias") else ""
+        ts = to_iso(r["created_at"])
+        active_heads = [h for h, run in heads.items() if run == rid]
+        rid_or_head = active_heads[0] if active_heads else rid
+        title = f"> {rid_or_head}{alias} at {ts}"
+        print(color(title, bold=True))
+
+        if default_parser:
+            cli_opts = make_cli_opts(default_parser, run_params, all_params=args.all_params)
+            opts = format_cli_opts(cli_opts, fit_terminal_width=False)
+            print(f"{opts}")
+            print()
+
+        if args.all_params:
+            if run_params:
+                print("  All params:")
+            else:
+                print("  No params")
+            max_len = max((len(k) for k in run_params), default=0)
+            fmt = "    %s%s%s"
+            for k, v in run_params.items():
+                print(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
+        else:
+            if len(chain) == 1:
+                if diffs:
+                    print("  Initial params:")
+                else:
+                    print("  No params")
+            else:
+                if diffs:
+                    print("  Params changed:")
+                else:
+                    print("  No params changes")
+            max_len = max((len(k) for k in diffs), default=0)
+            fmt = "    %s%s%s"
+            for k, v in diffs.items():
+                print(fmt % (k, " " * (max_len - len(k)), " = " + v))
+
+        description = r.get("description", "")
+        if description:
+            description = textwrap.indent(description, " " * 4)
+            print()
+            print("  Description:")
+            print(description)
+
+        custom_dict = r.get("custom", {}) or {}
+        if custom_dict:
+            custom_yaml = yaml.dump(custom_dict, indent=4)
+            custom_yaml = textwrap.indent(custom_yaml, " " * 4)
+            print()
+            print("  Custom fields:")
+            print(custom_yaml)
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+
 def cli_fetch(args, sprout: Sprout):
 
     src_host = args.src_host
@@ -1808,6 +1899,13 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pl.add_argument("--run", help="Run id")
     pl.add_argument("--head", help="Head name")
 
+    # show (leaf details)
+    ps = sub.add_parser("show", help="Show details for the last leaf of a run or head")
+    ps.add_argument("--run", help="Run id")
+    ps.add_argument("--head", help="Head name")
+    ps.add_argument("--all", dest="all_params", action="store_true",
+                    help="Show all params and CLI opts, not just those differing from parent/defaults")
+
     # fetch
     prs = sub.add_parser("fetch", help="Fetches run states and heads from the remote repo")
     prs.add_argument("src_host", help="The remote source host for copying, can be specified in the user@host:/path format")
@@ -1856,6 +1954,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
             ret = cli_tree(args, sprout)
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
+        elif args.cmd == "show":
+            ret = cli_show(args, sprout, default_parser=default_parser)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
         else:
