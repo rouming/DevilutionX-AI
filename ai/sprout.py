@@ -292,7 +292,25 @@ def color(text, rgb=(255, 255, 255), bold=False):
     prefix = f"\033[{';'.join(codes)}m" if codes else ""
     return f"{prefix}{text}\033[0m"
 
-def fmt_compact_floats(v):
+def _fmt_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
+
+def _fmt_frames(n):
+    return f"{int(n):,}".replace(",", "'")
+
+def fmt_custom_value(path, v):
+    key = path.rsplit("/", 1)[-1]
+    if key == "duration" and isinstance(v, (int, float)):
+        return _fmt_duration(v)
+    if key == "frames" and isinstance(v, (int, float)):
+        return _fmt_frames(v)
     if isinstance(v, float):
         return f"{v:.3f}"
     return str(v)
@@ -304,7 +322,7 @@ def flatten(d, format_value, prefix=""):
         if isinstance(v, dict):
             yield from flatten(v, format_value, path)
         else:
-            yield f"{path}: {format_value(v)}"
+            yield f"{path}: {format_value(path, v)}"
 
 # -------------------------
 # File lock uses flock()
@@ -1639,7 +1657,7 @@ def cli_tree(args, sprout: Sprout) -> int:
 
             custom_dict = r.get("custom", {}) or {}
             if custom_dict:
-                custom_list = list(flatten(custom_dict, fmt_compact_floats))
+                custom_list = list(flatten(custom_dict, fmt_custom_value))
                 custom_prefix = prefix + tree_prefix("≡")
                 custom_str = custom_prefix + custom_prefix.join(custom_list)
                 out_str += custom_str
