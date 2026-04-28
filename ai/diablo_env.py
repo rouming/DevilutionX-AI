@@ -727,6 +727,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
         monsters_cnt = diablo_state.count_active_monsters(d)
         total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
+        hp = d.player._pHitPoints
 
         truncated = False
         done = False
@@ -739,7 +740,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
 
         if diablo_state.is_player_dead(d):
             # We are dead, game over
-            reward = 0.0
+            reward = -10.0
             done = True
             print("Death, R %.2f" % reward, file=self.log)
         elif d.player.plrlevel < self.start_dungeon_level or \
@@ -756,6 +757,11 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
             self.episode_success = True
             print("Goal, R %.2f" % reward, file=self.log)
         else:
+            if hp < self.prev_hp:
+                # Player took damage
+                reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                self.prev_hp = hp
+                print("Damage taken, R %.2f" % reward, file=self.log)
             if total_hp < self.prev_total_hp:
                 # Monster took damage
                 reward += 0.02
