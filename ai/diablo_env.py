@@ -724,6 +724,85 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
         return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
 
     def evaluate_step(self, d, env, action):
+        player_pos = diablo_state.player_position(d)
+
+        truncated = False
+        done = False
+        # The initial value must be a zero integer. I need a simple
+        # marker to indicate that @reward was changed in many if-blocks below.
+        # It seems the easiest way is to set it to an integer initially and
+        # propagate it to a float on any update. This will be an ideal
+        # marker that @reward was updated and that the agent was exploring.
+        reward = int(0)
+
+        if diablo_state.is_player_dead(d):
+            # We are dead, game over
+            reward = 0.0
+            done = True
+            print("Death, R %.1f" % reward, file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            # Done with this episode with 0 reward if agent has
+            # stepped into a trigger to escape
+            reward = 0.0
+            done = True
+            print("Escape, R %.1f" % reward, file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
+            reward = 20.0
+            done = True
+            print("Goal, R %.1f" % reward, file=self.log)
+
+        # See the definition of @reward: initially, it is set to
+        # the integer zero, so we can safely check for type changes
+        # if the agent was exploring and @reward has changed to float.
+        was_exploring = (type(reward) != int)
+
+        if self.is_agent_stuck(d, was_exploring):
+            # Cut this episode, agent is stuck
+            truncated = True
+            reward = 0.0
+            if self.is_agent_timedout():
+                print("Timedout, R %.1f" % reward, file=self.log)
+            else:
+                print("Stuck, R %.1f" % reward, file=self.log)
+        elif not was_exploring:
+            # Penalty for NOP
+            reward = 0.0
+
+        return [reward], done, truncated
+
+class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
+    @staticmethod
+    def tune_config(env_config):
+        """Tune configuration before instantiation"""
+        pass
+
+    def __init__(self, env_config, **kwargs):
+        super().__init__(env_config, **kwargs)
+        self.used_goal = "next-level"
+
+    def generate_goal_pos(self, d, env_whole):
+        # Our goal is to reach the stairs (trigger) to the next level
+        nxtlvl_trig = diablo_state.find_trigger(d, dx.interface_mode.WM_DIABNEXTLVL)
+        assert nxtlvl_trig is not None
+        goal_pos = (nxtlvl_trig.position.x, nxtlvl_trig.position.y)
+        return goal_pos
+
+class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
+    @staticmethod
+    def tune_config(env_config):
+        """Tune configuration before instantiation"""
+        pass
+
+    def __init__(self, env_config, **kwargs):
+        super().__init__(env_config, **kwargs)
+        self.used_goal = "random"
+
+    def generate_goal_pos(self, d, env_whole):
+        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+
+    def evaluate_step(self, d, env, action):
         monsters_cnt = diablo_state.count_active_monsters(d)
         total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
@@ -796,23 +875,7 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
 
         return [reward], done, truncated
 
-class DiabloEnv_FindNextLevel_v1(DiabloEnv_FindRandomGoal_v0):
-    @staticmethod
-    def tune_config(env_config):
-        """Tune configuration before instantiation"""
-        pass
-
-    def __init__(self, env_config, **kwargs):
-        super().__init__(env_config, **kwargs)
-        self.used_goal = "next-level"
-
-    def generate_goal_pos(self, d, env_whole):
-        # Our goal is to reach the stairs (trigger) to the next level
-        nxtlvl_trig = diablo_state.find_trigger(d, dx.interface_mode.WM_DIABNEXTLVL)
-        assert nxtlvl_trig is not None
-        goal_pos = (nxtlvl_trig.position.x, nxtlvl_trig.position.y)
-        return goal_pos
-
+### HRL Environment Classes
 
 class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
     @staticmethod
@@ -840,8 +903,12 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
         return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
 
     def evaluate_step(self, d, env, action):
+        worker_action = int(action[0])
         manager_option = int(action[1])
+        monsters_cnt = diablo_state.count_active_monsters(d)
+        total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
+        hp = d.player._pHitPoints
 
         truncated = False
         done = False
@@ -851,45 +918,77 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
         manager_reward = int(0)
 
         if diablo_state.is_player_dead(d):
+            # We are dead, game over
+            worker_reward = -10.0
+            manager_reward = -10.0
+            done = True
+            print("Death, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            # Done with this episode with 0 reward if agent has
+            # stepped into a trigger to escape
             worker_reward = 0.0
             manager_reward = 0.0
             done = True
-            print("Death", file=self.log)
-        elif d.player.plrlevel != self.start_dungeon_level:
-            worker_reward = 0.0
-            manager_reward = 0.0
-            done = True
-            print("Escape", file=self.log)
-        elif player_pos == self.goal_pos:
+            print("Escape, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
             worker_reward = 20.0
             manager_reward = 20.0
             done = True
             self.episode_success = True
-            print("Goal, R %.1f" % worker_reward, file=self.log)
-        else:
-            monsters_cnt = diablo_state.count_active_monsters(d)
-
-            if manager_option == 1:
-                if monsters_cnt < self.prev_monsters_cnt:
-                    worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 1.0
-                # Manager hint: penalize choosing fight with no visible targets
-                if diablo_state.count_visible_monsters(env) == 0:
-                    manager_reward = -0.5
-
+            print("Goal, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif manager_option == 0:
+            # Explorer selected: keep state in sync so no stale delta
+            # fires when manager later switches to combat.
+            self.prev_hp = hp
+            self.prev_total_hp = total_hp
             self.prev_monsters_cnt = monsters_cnt
+        elif manager_option == 1:
+            # Combat selected
 
-        was_active = (type(worker_reward) != int)
+            # Manager hint: penalize choosing fight with no visible targets
+            if diablo_state.count_visible_monsters(env) == 0:
+                manager_reward = -0.5
 
-        if self.is_agent_stuck(d, was_active):
+            if hp < self.prev_hp:
+                # Player took damage
+                worker_reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                self.prev_hp = hp
+                print("Damage taken, R %.2f" % worker_reward, file=self.log)
+            if total_hp < self.prev_total_hp:
+                # Monster took damage
+                worker_reward += 0.02
+                self.prev_total_hp = total_hp
+                print("Attack monster, R %.2f" % worker_reward, file=self.log)
+            if monsters_cnt < self.prev_monsters_cnt:
+                # Monsters killed
+                worker_reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
+                self.prev_monsters_cnt = monsters_cnt
+                print("Kill monster, R %.2f" % worker_reward, file=self.log)
+
+        # See the definition of @worker_reward: initially, it is set
+        # to the integer zero, so we can safely check for type changes
+        # if the agent was exploring and @worker_reward has changed to
+        # float.
+        was_exploring = (type(worker_reward) != int)
+
+        if self.is_agent_stuck(d, was_exploring):
+            # Cut this episode, agent is stuck
             truncated = True
             worker_reward = 0.0
             manager_reward = 0.0
             if self.is_agent_timedout():
-                print("Timedout", file=self.log)
+                print("Timedout, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
             else:
-                print("Stuck", file=self.log)
-        elif not was_active:
-            worker_reward = 0.0
+                print("Stuck, R [%.2f, %.2f]" % (worker_reward, manager_reward), file=self.log)
+        elif not was_exploring:
+            # Penalize only movement that didn't accomplish anything.
+            # Stand/PrimaryAction/SecondaryAction get no penalty: the agent
+            # should be free to attempt attacks or interact without being
+            # punished for a miss or a failed interaction.
+            if worker_action < ActionEnum.Stand.value:
+                worker_reward -= 0.01
 
         return [worker_reward, manager_reward], done, truncated
 
@@ -904,6 +1003,11 @@ DIABLO_ENVS = [
     { 'id': 'Diablo-FindRandomGoal-v0',
       'entry_point': DiabloEnv_FindRandomGoal_v0 },
     { 'id': 'Diablo-ClearTheLevel-v0',
+      'entry_point': DiabloEnv_ClearTheLevel_v0 },
+
+    # HRL Environment Classes
+
+    { 'id': 'Diablo-HRL-ClearTheLevel-v0',
       'entry_point': DiabloEnvHRL_ClearTheLevel_v0 },
 ]
 
