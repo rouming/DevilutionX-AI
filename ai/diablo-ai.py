@@ -982,6 +982,14 @@ def _fmt_duration(seconds):
         return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
     return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
 
+def _sprout_duration(spr, model_dir):
+    # spr may be None if sprout is not configured
+    try:
+        run, _ = spr.get_run(head=os.path.basename(model_dir))
+        return run.get("custom", {}).get("last", {}).get("duration", 0)
+    except Exception:
+        return 0
+
 def _scale_bar(value, good_hi, good_lo=0.0, width=4):
     """Bar over the good zone [good_lo, good_hi].
     [^---] in range (near low), [---^] in range (near high),
@@ -1143,7 +1151,10 @@ def train_ai(args, gameconfig):
     # Train model
     num_frames = status["num_frames"]
     update = status["update"]
+    duration_offset = status.get("duration", 0) or \
+        _sprout_duration(spr, model_dir)
     start_time = time.time()
+    start_time -= min(duration_offset, start_time)
 
     txt_logger.info(f"Start training from {num_frames} frames\n")
 
@@ -1269,6 +1280,7 @@ def train_ai(args, gameconfig):
 
             status = {"num_frames": num_frames,
                       "update": update,
+                      "duration": duration,
                       "success_rate": success_rate,
                       "optimizer_state": algo.optimizer.state_dict()}
             acmodel.save_to_status(status)
