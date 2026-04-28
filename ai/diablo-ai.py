@@ -969,6 +969,19 @@ def prepare_directory_for_run(args, dir_name):
     return spr, run_dir
 
 
+def _fmt_frames(n):
+    return f"{int(n):,}".replace(",", "'")
+
+def _fmt_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
+
 def _scale_bar(value, good_hi, good_lo=0.0, width=4):
     """Bar over the good zone [good_lo, good_hi].
     [^---] in range (near low), [---^] in range (near high),
@@ -1192,7 +1205,7 @@ def train_ai(args, gameconfig):
             grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
             bar_metrics = {"kl", "clip_frac"}
             txt_logger.info(
-                f"U {update} | F {num_frames:06} | FPS {fps:04.0f} | D {duration}"
+                f"U {update} | F {_fmt_frames(num_frames)} | FPS {fps:04.0f} | D {_fmt_duration(duration)}"
                 f" | S {success_rate:.2f} | ∇ {grad:.3f}{grad_bar}")
             for i in range(L):
                 rr = list(rreturn_per_episode[i].values())
@@ -1236,12 +1249,12 @@ def train_ai(args, gameconfig):
                 args.eval_episodes, num_eval_envs))
 
             acmodel.eval()
-            start_time = time.time()
+            eval_start_time = time.time()
             vlogs = batch_evaluate(acmodel, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
-            elapsed_time = time.time() - start_time
+            elapsed_time = time.time() - eval_start_time
             acmodel.train()
 
             returns = vlogs['return_per_episode']
@@ -1266,7 +1279,7 @@ def train_ai(args, gameconfig):
                 R_str = f"R {returns_arr[0]:.3f}"
             else:
                 R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
-            txt_logger.info(f"Evaluation: D {elapsed_time:.0f} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
+            txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time)} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info("Status saved")
 
             custom_dict = {"duration": duration,
