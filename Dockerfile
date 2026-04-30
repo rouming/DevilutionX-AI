@@ -10,6 +10,9 @@ TERM=linux
 PROMPT_COMMAND='history -a; history -n'
 shopt -s histappend
 
+# Sprout bash completion
+source /root/devel/DevilutionX-AI/ai/sprout-completion.bash
+
 # Jump into the venv on each run
 source /root/venv/bin/activate
 cd /root/devel/DevilutionX-AI/ai
@@ -36,10 +39,10 @@ RUN /root/venv/bin/pip install -r /tmp/requirements.txt && \
 ##
 ## Copy DevilutionX-AI and build it
 ##
-COPY . /root/devel/DevilutionX-AI-copy
+COPY ai/models /root/devel/ai-models/
+COPY .git /root/devel/DevilutionX-AI-copy/.git
 RUN git clone /root/devel/DevilutionX-AI-copy /root/devel/DevilutionX-AI && \
-    [ -d /root/devel/DevilutionX-AI-copy/ai/models ] && \
-        cp -r /root/devel/DevilutionX-AI-copy/ai/models /root/devel/DevilutionX-AI/ai/ || true && \
+    mv /root/devel/ai-models /root/devel/DevilutionX-AI/ai/models && \
     rm -rf /root/devel/DevilutionX-AI-copy
 
 RUN cmake -S /root/devel/DevilutionX-AI -B /root/devel/DevilutionX-AI/build \
@@ -64,7 +67,7 @@ RUN cmake -S /root/devel/DevilutionX-AI -B /root/devel/DevilutionX-AI/build \
           -DKBCTRL_BUTTON_START=SDLK_RETURN \
           -DKBCTRL_BUTTON_BACK=SDLK_LSHIFT
 
-RUN make -C /root/devel/DevilutionX-AI/build -j$(nproc --all)
+RUN make -C /root/devel/DevilutionX-AI/build -j$(nproc)
 
 ##
 ## Download Diablo asset
