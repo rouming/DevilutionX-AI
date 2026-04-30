@@ -33,7 +33,7 @@ Hardware Cursor Maximum Size=128
 Frame Rate Control=1
 
 [Audio]
-Sound Volume=-1350
+Sound Volume=1350
 Music Volume=-1400
 Walking Sound=1
 Auto Equip Sound=0

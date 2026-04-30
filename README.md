@@ -16,22 +16,21 @@ usable for RL.
 
 The framework includes a Gymnasium environment,
 [patches](#devilutionx-patches) for DevilutionX, a runner, and a
-training pipeline. The RL part is based on the [BabyAI
-project](https://github.com/mila-iqia/babyai), with its PPO
-implementation and CNN architecture modified for this setup.
+training pipeline. The PPO training pipeline is built on
+[torch_ac](https://github.com/lcswillems/torch-ac), with imitation
+learning components adapted from the [BabyAI
+project](https://github.com/mila-iqia/babyai).
 
-The goal is to train an agent (the Warrior) to explore the first
-dungeon level. That means exploring the dungeon, fighting monsters,
-picking up items, opening chests, activating other objects, or finding
-the stairs to the next level - basically what a human would do when
-just starting the game.
+The goal is to train an agent (the Warrior) to clear the first dungeon
+level. That means exploring the dungeon, fighting monsters, picking up
+items, opening chests, activating other objects, and finding the stairs
+to the next level - basically what a human would do when just starting
+the game.
 
 The short video at the top of this README demonstrates the agent
-successfully locating a randomly placed portal in an environment where
-monsters are disabled. The agent explores 10 randomly generated levels
-using the default seed 0 (more on replicating the results below) with
-the pre-trained model, which achieved a success rate of 0.967 during
-training.
+fighting monsters and clearing a randomly generated dungeon level
+(more on replicating the results below) with the pre-trained model,
+which achieved a success rate of 0.98 during evaluation.
 
 This project is not about training an agent to beat the entire
 game. At first, I just wanted to see "signs of life": an RL agent that
@@ -87,7 +86,7 @@ the `tmux` session, please execute:
 docker exec -it devilutionx-ai tmux -u attach
 ```
 
-## Training Pecularitites
+## Training Peculiarities
 
 The chosen training method is the least resource-intensive: training
 on the internal state of the game rather than on screenshots and
@@ -154,50 +153,30 @@ defined using `gym.spaces.Discrete` type.
 
 ## Reward Function
 
-At the current stage, the reward function is sparse: the agent
-receives a positive reward when it reaches the goal (the stairs to the
-next level) and `0` otherwise.
+The reward function guides the agent toward clearing the dungeon level
+while surviving combat:
 
-As the project progresses, the reward function will be extended to
-account for additional events such as the agent's death, monster
-defeats, opening chests, and item collection. A more detailed design
-may look as follows:
+**Terminal rewards**:
 
-**Major rewards**:
+- **Death** - penalty (-10), episode ends.
 
-- **Death** - large penalty (-100) and episode ends.
+- **Escaping back to town** - neutral (0), episode ends.
 
-- **Escaping back to town** - moderate penalty (-10), episode ends.
-
-- **Descending to the next level** - strong reward (+50), episode ends.
+- **Reaching the goal** - strong reward (+20), episode ends.
 
 **Shaping rewards**:
 
-These are smaller rewards that guide the agent toward productive
-behavior:
+- **Damage taken** - penalty proportional to health lost (scaled by max HP).
 
-- **Damage taken** - penalty proportional to health lost.
+- **Attacking a monster** - small reward (+0.02) for dealing damage.
 
-- **Exploration** - reward for visiting previously unseen tiles.
+- **Killing a monster** - reward (+0.1) per kill.
 
-- **Interactions** - small rewards for opening doors, activating
-  objects (e.g., chests, barrels), or collecting items.
+- **Unproductive movement** - small penalty (-0.01) for moving without
+  any combat or progress, to discourage aimless wandering.
 
-- **Combat**
-
-   - small reward for damaging enemies.
-   - larger reward for killing them (+20 per kill).
-
-- **Inactivity** - small penalty (-0.1) for unproductive actions.
-
-- **Getting stuck** (e.g., by repeating useless actions) - early
-  truncation of an episode with a minor penalty (-5).
-
-Internally, the reward function may track metrics such as monster
-health, number of opened doors, explored tiles, and collected
-items. This allows the agent's behavior to be guided not only by
-long-term goals but also by immediate, meaningful interactions with
-the environment.
+- **Getting stuck** - early truncation with no penalty if the agent
+  repeats useless actions or times out.
 
 ## Headless Mode
 
@@ -218,72 +197,70 @@ error. For example, I use the following command line:
 
 ```shell
 ./diablo-ai.py train-ai \
-   --env Diablo-FindNextLevel-v0 \
-   --model Diablo-FindNextLevel-v0--cnn32-best \
-   --cnn-arch cnn32 \
-   --no-monsters \
-   --frames 50M \
-   --frames-per-env 320 \
-   --env-runners 32 \
-   --batch-size 10240 \
-   --recurrence 20 \
+   --harmless-barrels \
+   --cnn-arch cnn32expert \
    --embedding-dim 512 \
-   --gae-lambda 0.99 \
-   --lr 5e-05 \
-   --optim-eps 1e-8 \
-   --entropy-coef 0.01 \
-   --epochs 5
+   --env Diablo-ClearTheLevel-v0 \
+   --env-runners 256 \
+   --frames 100M \
+   --batch-size 40960 \
+   --frames-per-env-runner 320 \
+   --lr 0.0001 \
+   --entropy-coef 0.001 \
+   --recurrence 160 \
+   --eval-episodes 250 \
+   --model Diablo-ClearTheLevel-v0
 ```
 
 Where:
 
-- `--env Diablo-FindNextLevel-v0` - The environment the agent
-  interacts with. Here, the task is to navigate the dungeon and find
-  the next level.
+- `--env Diablo-ClearTheLevel-v0` - The environment the agent
+  interacts with. The task is to explore the dungeon, fight monsters,
+  and find the goal.
 
-- `--model Diablo-FindNextLevel-v0--cnn32-best` - Name of the model
-  used for training. Essentially, it's a folder where the model files
-  are located.
+- `--model Diablo-ClearTheLevel-v0` - Name of the model used for
+  training. Essentially, it's a folder where the model files are
+  located.
 
-- `--cnn-arch cnn32` - The convolutional neural network architecture
-  used to process observations. `cnn32` is just a name, meaning the
-  3rd model, 2nd version.
+- `--cnn-arch cnn32expert` - The convolutional neural network
+  architecture used to process observations. The `cnn32expert` variant
+  extends the base CNN with self-attention (for deeper spatial
+  understanding of the dungeon layout) and FiLM conditioning (for
+  modulating spatial features based on the agent's memory,
+  helping to differentiate between objects depending on current
+  context such as combat or exploration). The name reflects iterative
+  experimentation with several architectures.
 
-- `--no-monsters` - Disables monsters in the environment, simplifying
-  training by focusing on navigation.
+- `--harmless-barrels` - Makes exploding barrels harmless. Since the
+  agent cannot use potions to restore health, an accidental barrel
+  explosion would end the episode early and obscure the training
+  signal.
 
-- `--frames 50M` - Total number of environment frames (steps) the
+- `--frames 900M` - Total number of environment frames (steps) the
   agent will be trained on.
 
-- `--frames-per-env 320` - Number of steps each environment instance
-  runs before sending data to the optimizer.
+- `--frames-per-env-runner 320` - Number of steps each environment
+  instance runs before sending data to the optimizer.
 
-- `--env-runners 32` - Number of parallel environment instances used
+- `--env-runners 256` - Number of parallel environment instances used
   for training, allowing faster experience collection.
 
-- `--batch-size 10240` - Number of frames (steps) collected before
+- `--batch-size 40960` - Number of frames (steps) collected before
   performing a gradient update.
 
-- `--recurrence 20` - Length of temporal sequences used for recurrent
+- `--recurrence 160` - Length of temporal sequences used for recurrent
   policy updates (for RNN/LSTM agents, representing a memory).
 
 - `--embedding-dim 512` - Size of the latent embedding vector produced
   by the CNN.
 
-- `--gae-lambda 0.99` - Lambda parameter for Generalized Advantage
-  Estimation, controlling bias-variance tradeoff in advantage
-  calculation.
+- `--lr 0.0001` - Learning rate for the optimizer.
 
-- `--lr 5e-05` - Learning rate for the optimizer.
-
-- `--optim-eps 1e-8` - Small epsilon added to the optimizer for
-  numerical stability.
-
-- `--entropy-coef 0.01` - Weight of the entropy regularization term,
+- `--entropy-coef 0.001` - Weight of the entropy regularization term,
   encouraging exploration.
 
-- `--epochs 5` - Number of optimization passes over each collected
-  batch of experience.
+- `--eval-episodes 250` - Number of episodes used for periodic
+  evaluation during training.
 
 Hyperparameters are the subject of many experiments. For example, a
 low entropy coefficient can result in a Diablo RL agent getting stuck
@@ -302,28 +279,23 @@ the following command:
 
 ```shell
 ./diablo-ai.py play-ai \
-   --env Diablo-FindRandomGoal-v0 \
-   --cnn-arch cnn32 \
-   --embedding-dim 512 \
-   --model Diablo-FindRandomGoal-v0--cnn32-best \
-   --episodes 10 \
    --harmless-barrels \
-   --no-monsters \
-   --seed 0 \
+   --cnn-arch cnn32expert \
+   --embedding-dim 512 \
+   --env Diablo-ClearTheLevel-v0 \
+   --env-runners 1 \
+   --model Diablo-ClearTheLevel-v0 \
+   --seed-base 5 \
    --game-ticks-per-step 12 \
-   --gui \
-   --best
+   --gui
 ```
 
 As soon as the Diablo GUI window appears, select "Single Game" and
 proceed with the "Warrior" character, using the default name and
-normal difficulty (monsters will be disabled anyway). Once the first
-level is loaded, the agent resets the environment a few times and
-starts looking for a randomly placed portal. The episode ends if the
-task is completed, meaning the agent finds a goal, or if the agent is
-stuck, resulting in task failure. The agent will be traversing ten
-randomly generated dungeons (controlled by the `--episodes 10`
-option).
+normal difficulty. Once the first level is loaded, the agent resets
+the environment a few times and starts exploring the dungeon, fighting
+monsters, and searching for the goal. The episode ends when the agent
+reaches the goal or gets stuck.
 
 To attach a terminal ASCII representation to the running game
 instance, use the following command:
