@@ -44,6 +44,59 @@ useful to others with more RL experience. Maybe together we will see
 an agent one day that plays *Diablo* in a way that looks a lot like a
 human.
 
+## Results
+
+Training progressed through three stages, each building on the previous one.
+
+**Stage 1: Finding the stairs (monsters disabled)**
+
+The first goal was simple: train the agent to find the stairs to the
+next dungeon level with all monsters disabled. Despite the apparent
+simplicity, the agent had to explore a large partially-observable
+dungeon without any map.
+
+The agent reached a **0.967 success rate** and showed some unexpected
+behavior: it learned to exploit structural regularities in the dungeon
+generator, since stairs are not placed entirely at random -- they tend
+to appear in larger halls. It also learned to backtrack when a path
+leads nowhere, which gives the impression of episodic memory, even
+though the agent only has a local view and a recurrent state.
+
+**Stage 2: Finding a random goal (monsters still disabled)**
+
+The next task was harder: find a truly random goal placed anywhere in
+the dungeon. Unlike stairs, random goals have no spatial bias, so the
+agent had to develop systematic exploration rather than exploiting
+structural patterns.
+
+Pure reinforcement learning from scratch failed to make progress. The
+solution was a multi-phase training pipeline: first bootstrap the
+agent with imitation learning from a scripted bot, then carefully
+warm up the critic before switching to PPO. Starting PPO directly
+after imitation learning with an uninitialized critic causes
+catastrophic forgetting in just a few updates -- the agent quickly
+forgets everything it learned. The warm-up step provides a stable
+bridge.
+
+The agent reached a **0.97 success rate** on finding a randomly placed
+goal.
+
+**Stage 3: Clearing the level (monsters enabled)**
+
+Enabling monsters revealed a new problem: the agent completely ignored
+them. Switching to a more expressive CNN architecture (CNN32Expert),
+which adds self-attention and FiLM conditioning on the agent's memory,
+unblocked learning and the agent quickly started engaging with
+monsters.
+
+Ablation experiments on 3000 episodes confirmed that FiLM is the
+load-bearing component -- zeroing it drops success rate from 0.98 to
+0.91 -- while self-attention and cross-attention contribute
+marginally. All three blocks are kept in the architecture.
+
+The current model achieves a **0.98 success rate** on 3000 randomly
+generated dungeon levels.
+
 ## Docker Container
 
 A prebuilt docker image is available on [Docker Hub](https://hub.docker.com/r/romanpen/devilutionx-ai-ubuntu24.04).
@@ -190,6 +243,56 @@ possible to attach to the game with a graphics session and have the
 player navigate the dungeon according to the trained strategy.
 
 ## Agent Training
+
+### Training Pipeline
+
+Training the agent to clear the level required several stages rather
+than a single reinforcement learning run.
+
+**Stage 1: Imitation learning bootstrap (no monsters)**
+
+An algorithmic bot that knows how to explore the dungeon was used to
+collect 50k demonstration episodes. The agent was then trained to
+imitate the bot's behavior for 150M frames, reaching 0.95 action
+accuracy. This gives the agent a solid navigation foundation before
+any RL starts.
+
+After imitation learning, the policy is well-formed but the critic
+(value function) is essentially uninitialized. Starting PPO at this
+point immediately destabilizes learning: the critic's poor estimates
+produce bad gradient updates that overwrite the policy in just a few
+steps. To avoid this, the critic is trained in isolation for 50M
+frames, then jointly with the policy for another 100M frames.
+
+PPO fine-tuning in the same no-monsters environment then brought the
+agent to a **0.97 success rate** on finding a randomly placed goal.
+
+**Stage 2: Standing still monsters, new architecture**
+
+Introducing standing non-attacking monsters had no effect: the agent
+simply ignored them and performance stayed flat. Switching to the
+CNN32Expert architecture -- adding self-attention and FiLM
+conditioning on the agent's memory -- unblocked progress. The agent
+started navigating around standing monsters and occasionally engaging
+them when they blocked the path.
+
+**Stage 3: Moving and attacking monsters (invincible player)**
+
+With the player made invincible, monsters were enabled with full
+movement and attacks. The agent reached **>0.9 success rate** in
+roughly 50M frames, learning to navigate a dungeon full of actively
+pursuing monsters.
+
+**Stage 4: Full combat with damage**
+
+Enabling monster damage and shaping the reward function around
+combat produced a brief drop from 0.9 to 0.6, but the agent
+recovered quickly -- faster than expected. It developed strategies
+for killing monsters and avoiding damage on its own, eventually
+reaching the current **0.98 success rate** on 3000 randomly generated
+dungeon levels.
+
+### Training Command
 
 Choosing the right parameters and their combinations for effective RL
 training is an art and essentially a path of endless trial and
