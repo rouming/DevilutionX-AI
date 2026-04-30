@@ -1,6 +1,6 @@
 <div style="width:100%;">
-  <a href="https://www.youtube.com/watch?v=JKrBJXbmbjQ" target="_blank">
-    <img src="https://github.com/user-attachments/assets/400cbd5c-9b56-4208-8680-1d68f56fd29d" style="width:100%; height:auto;" />
+  <a href="https://youtu.be/6KuSlT9EOec" target="_blank">
+    <img src="https://github.com/user-attachments/assets/85967261-4fe9-43db-86dd-1c20c8a641d4" style="width:100%; height:auto;" />
   </a>
 </div>
 
@@ -406,6 +406,80 @@ instance, use the following command:
 ```shell
 ./diablo-ai.py play --attach 0
 ```
+
+## Sprout: Model Version Control
+
+Managing dozens of training runs with different hyperparameters,
+architectures, and results quickly becomes chaotic. Sprout is a
+lightweight tool included in the repository that treats model
+checkpoints like a version control system.
+
+Each time training starts, Sprout takes a snapshot of the current
+model state. The full training history is stored as a tree where each
+node records only the parameters that changed from its parent, along
+with training metrics such as success rate and total frames. Returning
+to any previous state -- including before a risky surgery or a bad
+hyperparameter choice -- is a single command:
+
+```shell
+# Show the full training history tree
+./diablo-ai.py sprout tree
+
+# Show details for the current head
+./diablo-ai.py sprout show --head Diablo-ClearTheLevel-v0
+
+# Jump the active head back to any specific run
+./diablo-ai.py sprout switch --head Diablo-ClearTheLevel-v0 --to-run d9ca5ecd
+
+# Undo the last training run and return to the parent state
+./diablo-ai.py sprout rewind Diablo-ClearTheLevel-v0
+
+# Branch off a new experiment from the current head
+./diablo-ai.py sprout clone --from-head Diablo-ClearTheLevel-v0 Diablo-ClearTheLevel-experiment
+```
+
+This made it practical to try experiments such as architecture changes
+or direct weight surgery without fear of losing a good checkpoint, and
+to compare different training strategies side by side by branching
+from the same base run.
+
+The training history for the ClearTheLevel model shows the full
+evolution from the cloned FindRandomGoal baseline through monster
+introduction and gradual recovery:
+
+```
+▶ Diablo-ClearTheLevel-v0
+└─ dd6fe9af (CLONED--Diablo-FindRandomGoal-v0--cnn32-best)
+   │ ≡ best/success_rate: 0.968
+   │ ≡ last/duration: 1d14h
+   └─ d9ca5ecd
+      │ ⇾ no_monsters: True -> False
+      │ ⇾ cnn_arch: cnn32 -> cnn32expert
+      │ ⇾ env: Diablo-FindRandomGoal-v0 -> Diablo-ClearTheLevel-v0
+      │ ⇾ entropy_coef: 0.01 -> 0.001
+      │ ≡ last/success_rate: 0.244
+      └─ ...
+         └─ c7a414fb
+            │ ⇾ invincible_player: False -> True
+            │ ⇾ blind_monsters: True -> False
+            │ ≡ last/success_rate: 0.780
+            └─ 7edc9fad
+               │ ⇾ invincible_player: True -> False
+               │ ≡ last/success_rate: 0.816
+               └─ ...
+                  └─ ● Diablo-ClearTheLevel-v0
+                       ≡ best/success_rate: 0.968
+                       ≡ last/duration: 3d00h
+                       ≡ last/success_rate: 0.916
+```
+
+Each node shows only the parameters that changed from its parent. The
+`●` marker indicates the current active head. The `⇾` prefix marks
+parameter changes, `≡` marks recorded metrics.
+
+Sprout is available as `./diablo-ai.py sprout` (which automatically
+sets the working directory) or directly as a [single Python
+file](ai/sprout.py) with `--working models`.
 
 ## Building and Running
 
