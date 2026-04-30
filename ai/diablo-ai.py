@@ -1635,7 +1635,7 @@ def play_bot(args, gameconfig):
         s, actions = demo
         f = len(actions)
         print(f"seed {s:2d} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
-    print(f"overall generation time {duration:.2f}s")
+    print(f"{len(demos)} demos | steps {_fmt_frames(sum(num_frames))} | time {duration:.2f}s")
 
     return 0
 
