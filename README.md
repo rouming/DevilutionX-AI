@@ -28,9 +28,11 @@ to the next level - basically what a human would do when just starting
 the game.
 
 The short video at the top of this README demonstrates the agent
-fighting monsters and clearing a randomly generated dungeon level
-(more on replicating the results below) with the pre-trained model,
-which achieved a success rate of 0.98 during evaluation.
+exploring a randomly generated dungeon level. The agent searches for a
+randomly placed town portal while also fighting monsters during this
+exploration. More details on replicating the results are provided
+below. This is done using the pre-trained model, which achieved a
+success rate of 0.98 during evaluation.
 
 This project is not about training an agent to beat the entire
 game. At first, I just wanted to see "signs of life": an RL agent that
@@ -46,7 +48,7 @@ human.
 
 ## Results
 
-Training progressed through three stages, each building on the previous one.
+Training progressed through four stages, each building on the previous one.
 
 **Stage 1: Finding the stairs (monsters disabled)**
 
@@ -55,7 +57,7 @@ next dungeon level with all monsters disabled. Despite the apparent
 simplicity, the agent had to explore a large partially-observable
 dungeon without any map.
 
-The agent reached a **0.967 success rate** and showed some unexpected
+The agent reached a **0.96 success rate** and showed some unexpected
 behavior: it learned to exploit structural regularities in the dungeon
 generator, since stairs are not placed entirely at random -- they tend
 to appear in larger halls. It also learned to backtrack when a path
@@ -81,21 +83,21 @@ bridge.
 The agent reached a **0.97 success rate** on finding a randomly placed
 goal.
 
-**Stage 3: Clearing the level (monsters enabled)**
+**Stage 3: Standing still monsters, new architecture**
 
 Enabling monsters revealed a new problem: the agent completely ignored
-them. Switching to a more expressive CNN architecture (CNN32Expert),
-which adds self-attention and FiLM conditioning on the agent's memory,
+them. Switching to a more expressive CNN architecture, which adds
+attention blocks and FiLM conditioning on the agent's memory,
 unblocked learning and the agent quickly started engaging with
 monsters.
 
-Ablation experiments on 3000 episodes confirmed that FiLM is the
-load-bearing component -- zeroing it drops success rate from 0.98 to
-0.91 -- while self-attention and cross-attention contribute
-marginally. All three blocks are kept in the architecture.
+**Stage 4: Full combat**
 
-The current model achieves a **0.98 success rate** on 3000 randomly
-generated dungeon levels.
+With moving, attacking monsters and a shaped reward function, the
+agent developed combat strategies and reached a **0.98 success rate**
+over 3000 randomly generated dungeon levels (sampling mode). Success
+rates reported by Sprout during training are lower as they use argmax
+evaluation, which is more conservative.
 
 ## Docker Container
 
@@ -475,7 +477,10 @@ introduction and gradual recovery:
 
 Each node shows only the parameters that changed from its parent. The
 `●` marker indicates the current active head. The `⇾` prefix marks
-parameter changes, `≡` marks recorded metrics.
+parameter changes, `≡` marks recorded metrics. The `best/*` values
+are inherited from the original FindRandomGoal model that was cloned
+as the starting point -- they reflect the best argmax checkpoint from
+that earlier training phase, not the ClearTheLevel training.
 
 Sprout is available as `./diablo-ai.py sprout` (which automatically
 sets the working directory) or directly as a [single Python
