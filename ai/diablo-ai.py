@@ -1589,9 +1589,10 @@ def play_ai(args, gameconfig):
         success = np.all(np.asarray(r) > 0.0)
         print(f"seed {s:2d} | {'success' if success else 'failure'} | steps {f:4d} | {f / d:3.0f} FPS | took {d:.2f}s")
 
-    success_rate = np.mean([1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns])
-    print(f"average success rate {success_rate:.2f} for {args.episodes_int} episodes")
-    print(f"overall evaluation time {duration:.2f}s")
+    successes = sum(1 if np.all(np.asarray(r) > 0.0) else 0 for r in returns)
+    success_rate = successes / len(returns)
+    print(f"S {success_rate:.2f} | {successes} ok / {len(returns) - successes} fail of {len(returns)} | "
+          f"steps {_fmt_frames(np.sum(frames))} | time {duration:.2f}s")
 
     return 0
 
