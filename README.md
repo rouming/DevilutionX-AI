@@ -1,6 +1,6 @@
 <div style="width:100%;">
-  <a href="https://www.youtube.com/watch?v=JKrBJXbmbjQ" target="_blank">
-    <img src="https://github.com/user-attachments/assets/400cbd5c-9b56-4208-8680-1d68f56fd29d" style="width:100%; height:auto;" />
+  <a href="https://youtu.be/6KuSlT9EOec" target="_blank">
+    <img src="https://github.com/user-attachments/assets/85967261-4fe9-43db-86dd-1c20c8a641d4" style="width:100%; height:auto;" />
   </a>
 </div>
 
@@ -16,22 +16,23 @@ usable for RL.
 
 The framework includes a Gymnasium environment,
 [patches](#devilutionx-patches) for DevilutionX, a runner, and a
-training pipeline. The RL part is based on the [BabyAI
-project](https://github.com/mila-iqia/babyai), with its PPO
-implementation and CNN architecture modified for this setup.
+training pipeline. The PPO training pipeline is built on
+[torch_ac](https://github.com/lcswillems/torch-ac), with imitation
+learning components adapted from the [BabyAI
+project](https://github.com/mila-iqia/babyai).
 
-The goal is to train an agent (the Warrior) to explore the first
-dungeon level. That means exploring the dungeon, fighting monsters,
-picking up items, opening chests, activating other objects, or finding
-the stairs to the next level - basically what a human would do when
-just starting the game.
+The goal is to train an agent (the Warrior) to clear the first dungeon
+level. That means exploring the dungeon, fighting monsters, picking up
+items, opening chests, activating other objects, and finding the stairs
+to the next level - basically what a human would do when just starting
+the game.
 
 The short video at the top of this README demonstrates the agent
-successfully locating a randomly placed portal in an environment where
-monsters are disabled. The agent explores 10 randomly generated levels
-using the default seed 0 (more on replicating the results below) with
-the pre-trained model, which achieved a success rate of 0.967 during
-training.
+exploring a randomly generated dungeon level. The agent searches for a
+randomly placed town portal while also fighting monsters during this
+exploration. More details on replicating the results are provided
+below. This is done using the pre-trained model, which achieved a
+success rate of 0.98 during evaluation.
 
 This project is not about training an agent to beat the entire
 game. At first, I just wanted to see "signs of life": an RL agent that
@@ -44,6 +45,59 @@ started with a small and simple goal. Hopefully the framework can be
 useful to others with more RL experience. Maybe together we will see
 an agent one day that plays *Diablo* in a way that looks a lot like a
 human.
+
+## Results
+
+Training progressed through four stages, each building on the previous one.
+
+**Stage 1: Finding the stairs (monsters disabled)**
+
+The first goal was simple: train the agent to find the stairs to the
+next dungeon level with all monsters disabled. Despite the apparent
+simplicity, the agent had to explore a large partially-observable
+dungeon without any map.
+
+The agent reached a **0.96 success rate** and showed some unexpected
+behavior: it learned to exploit structural regularities in the dungeon
+generator, since stairs are not placed entirely at random -- they tend
+to appear in larger halls. It also learned to backtrack when a path
+leads nowhere, which gives the impression of episodic memory, even
+though the agent only has a local view and a recurrent state.
+
+**Stage 2: Finding a random goal (monsters still disabled)**
+
+The next task was harder: find a truly random goal placed anywhere in
+the dungeon. Unlike stairs, random goals have no spatial bias, so the
+agent had to develop systematic exploration rather than exploiting
+structural patterns.
+
+Pure reinforcement learning from scratch failed to make progress. The
+solution was a multi-phase training pipeline: first bootstrap the
+agent with imitation learning from a scripted bot, then carefully
+warm up the critic before switching to PPO. Starting PPO directly
+after imitation learning with an uninitialized critic causes
+catastrophic forgetting in just a few updates -- the agent quickly
+forgets everything it learned. The warm-up step provides a stable
+bridge.
+
+The agent reached a **0.97 success rate** on finding a randomly placed
+goal.
+
+**Stage 3: Standing still monsters, new architecture**
+
+Enabling monsters revealed a new problem: the agent completely ignored
+them. Switching to a more expressive CNN architecture, which adds
+attention blocks and FiLM conditioning on the agent's memory,
+unblocked learning and the agent quickly started engaging with
+monsters.
+
+**Stage 4: Full combat**
+
+With moving, attacking monsters and a shaped reward function, the
+agent developed combat strategies and reached a **0.98 success rate**
+over 3000 randomly generated dungeon levels (sampling mode). Success
+rates reported by Sprout during training are lower as they use argmax
+evaluation, which is more conservative.
 
 ## Docker Container
 
@@ -87,7 +141,7 @@ the `tmux` session, please execute:
 docker exec -it devilutionx-ai tmux -u attach
 ```
 
-## Training Pecularitites
+## Training Peculiarities
 
 The chosen training method is the least resource-intensive: training
 on the internal state of the game rather than on screenshots and
@@ -154,50 +208,30 @@ defined using `gym.spaces.Discrete` type.
 
 ## Reward Function
 
-At the current stage, the reward function is sparse: the agent
-receives a positive reward when it reaches the goal (the stairs to the
-next level) and `0` otherwise.
+The reward function guides the agent toward clearing the dungeon level
+while surviving combat:
 
-As the project progresses, the reward function will be extended to
-account for additional events such as the agent's death, monster
-defeats, opening chests, and item collection. A more detailed design
-may look as follows:
+**Terminal rewards**:
 
-**Major rewards**:
+- **Death** - penalty (-10), episode ends.
 
-- **Death** - large penalty (-100) and episode ends.
+- **Escaping back to town** - neutral (0), episode ends.
 
-- **Escaping back to town** - moderate penalty (-10), episode ends.
-
-- **Descending to the next level** - strong reward (+50), episode ends.
+- **Reaching the goal** - strong reward (+20), episode ends.
 
 **Shaping rewards**:
 
-These are smaller rewards that guide the agent toward productive
-behavior:
+- **Damage taken** - penalty proportional to health lost (scaled by max HP).
 
-- **Damage taken** - penalty proportional to health lost.
+- **Attacking a monster** - small reward (+0.02) for dealing damage.
 
-- **Exploration** - reward for visiting previously unseen tiles.
+- **Killing a monster** - reward (+0.1) per kill.
 
-- **Interactions** - small rewards for opening doors, activating
-  objects (e.g., chests, barrels), or collecting items.
+- **Unproductive movement** - small penalty (-0.01) for moving without
+  any combat or progress, to discourage aimless wandering.
 
-- **Combat**
-
-   - small reward for damaging enemies.
-   - larger reward for killing them (+20 per kill).
-
-- **Inactivity** - small penalty (-0.1) for unproductive actions.
-
-- **Getting stuck** (e.g., by repeating useless actions) - early
-  truncation of an episode with a minor penalty (-5).
-
-Internally, the reward function may track metrics such as monster
-health, number of opened doors, explored tiles, and collected
-items. This allows the agent's behavior to be guided not only by
-long-term goals but also by immediate, meaningful interactions with
-the environment.
+- **Getting stuck** - early truncation with no penalty if the agent
+  repeats useless actions or times out.
 
 ## Headless Mode
 
@@ -212,78 +246,126 @@ player navigate the dungeon according to the trained strategy.
 
 ## Agent Training
 
+### Training Pipeline
+
+Training the agent to clear the level required several stages rather
+than a single reinforcement learning run.
+
+**Stage 1: Imitation learning bootstrap (no monsters)**
+
+An algorithmic bot that knows how to explore the dungeon was used to
+collect 50k demonstration episodes. The agent was then trained to
+imitate the bot's behavior for 150M frames, reaching 0.95 action
+accuracy. This gives the agent a solid navigation foundation before
+any RL starts.
+
+After imitation learning, the policy is well-formed but the critic
+(value function) is essentially uninitialized. Starting PPO at this
+point immediately destabilizes learning: the critic's poor estimates
+produce bad gradient updates that overwrite the policy in just a few
+steps. To avoid this, the critic is trained in isolation for 50M
+frames, then jointly with the policy for another 100M frames.
+
+PPO fine-tuning in the same no-monsters environment then brought the
+agent to a **0.97 success rate** on finding a randomly placed goal.
+
+**Stage 2: Standing still monsters, new architecture**
+
+Introducing standing non-attacking monsters had no effect: the agent
+simply ignored them and performance stayed flat. Switching to the
+CNN32Expert architecture -- adding self-attention and FiLM
+conditioning on the agent's memory -- unblocked progress. The agent
+started navigating around standing monsters and occasionally engaging
+them when they blocked the path.
+
+**Stage 3: Moving and attacking monsters (invincible player)**
+
+With the player made invincible, monsters were enabled with full
+movement and attacks. The agent reached **>0.9 success rate** in
+roughly 50M frames, learning to navigate a dungeon full of actively
+pursuing monsters.
+
+**Stage 4: Full combat with damage**
+
+Enabling monster damage and shaping the reward function around
+combat produced a brief drop from 0.9 to 0.6, but the agent
+recovered quickly -- faster than expected. It developed strategies
+for killing monsters and avoiding damage on its own, eventually
+reaching the current **0.98 success rate** on 3000 randomly generated
+dungeon levels.
+
+### Training Command
+
 Choosing the right parameters and their combinations for effective RL
 training is an art and essentially a path of endless trial and
 error. For example, I use the following command line:
 
 ```shell
 ./diablo-ai.py train-ai \
-   --env Diablo-FindNextLevel-v0 \
-   --model Diablo-FindNextLevel-v0--cnn32-best \
-   --cnn-arch cnn32 \
-   --no-monsters \
-   --frames 50M \
-   --frames-per-env 320 \
-   --env-runners 32 \
-   --batch-size 10240 \
-   --recurrence 20 \
+   --harmless-barrels \
+   --cnn-arch cnn32expert \
    --embedding-dim 512 \
-   --gae-lambda 0.99 \
-   --lr 5e-05 \
-   --optim-eps 1e-8 \
-   --entropy-coef 0.01 \
-   --epochs 5
+   --env Diablo-ClearTheLevel-v0 \
+   --env-runners 256 \
+   --frames 100M \
+   --batch-size 40960 \
+   --frames-per-env-runner 320 \
+   --lr 0.0001 \
+   --entropy-coef 0.001 \
+   --recurrence 160 \
+   --eval-episodes 250 \
+   --model Diablo-ClearTheLevel-v0
 ```
 
 Where:
 
-- `--env Diablo-FindNextLevel-v0` - The environment the agent
-  interacts with. Here, the task is to navigate the dungeon and find
-  the next level.
+- `--env Diablo-ClearTheLevel-v0` - The environment the agent
+  interacts with. The task is to explore the dungeon, fight monsters,
+  and find the goal.
 
-- `--model Diablo-FindNextLevel-v0--cnn32-best` - Name of the model
-  used for training. Essentially, it's a folder where the model files
-  are located.
+- `--model Diablo-ClearTheLevel-v0` - Name of the model used for
+  training. Essentially, it's a folder where the model files are
+  located.
 
-- `--cnn-arch cnn32` - The convolutional neural network architecture
-  used to process observations. `cnn32` is just a name, meaning the
-  3rd model, 2nd version.
+- `--cnn-arch cnn32expert` - The convolutional neural network
+  architecture used to process observations. The `cnn32expert` variant
+  extends the base CNN with self-attention (for deeper spatial
+  understanding of the dungeon layout) and FiLM conditioning (for
+  modulating spatial features based on the agent's memory,
+  helping to differentiate between objects depending on current
+  context such as combat or exploration). The name reflects iterative
+  experimentation with several architectures.
 
-- `--no-monsters` - Disables monsters in the environment, simplifying
-  training by focusing on navigation.
+- `--harmless-barrels` - Makes exploding barrels harmless. Since the
+  agent cannot use potions to restore health, an accidental barrel
+  explosion would end the episode early and obscure the training
+  signal.
 
-- `--frames 50M` - Total number of environment frames (steps) the
+- `--frames 900M` - Total number of environment frames (steps) the
   agent will be trained on.
 
-- `--frames-per-env 320` - Number of steps each environment instance
-  runs before sending data to the optimizer.
+- `--frames-per-env-runner 320` - Number of steps each environment
+  instance runs before sending data to the optimizer.
 
-- `--env-runners 32` - Number of parallel environment instances used
+- `--env-runners 256` - Number of parallel environment instances used
   for training, allowing faster experience collection.
 
-- `--batch-size 10240` - Number of frames (steps) collected before
+- `--batch-size 40960` - Number of frames (steps) collected before
   performing a gradient update.
 
-- `--recurrence 20` - Length of temporal sequences used for recurrent
+- `--recurrence 160` - Length of temporal sequences used for recurrent
   policy updates (for RNN/LSTM agents, representing a memory).
 
 - `--embedding-dim 512` - Size of the latent embedding vector produced
   by the CNN.
 
-- `--gae-lambda 0.99` - Lambda parameter for Generalized Advantage
-  Estimation, controlling bias-variance tradeoff in advantage
-  calculation.
+- `--lr 0.0001` - Learning rate for the optimizer.
 
-- `--lr 5e-05` - Learning rate for the optimizer.
-
-- `--optim-eps 1e-8` - Small epsilon added to the optimizer for
-  numerical stability.
-
-- `--entropy-coef 0.01` - Weight of the entropy regularization term,
+- `--entropy-coef 0.001` - Weight of the entropy regularization term,
   encouraging exploration.
 
-- `--epochs 5` - Number of optimization passes over each collected
-  batch of experience.
+- `--eval-episodes 250` - Number of episodes used for periodic
+  evaluation during training.
 
 Hyperparameters are the subject of many experiments. For example, a
 low entropy coefficient can result in a Diablo RL agent getting stuck
@@ -302,28 +384,23 @@ the following command:
 
 ```shell
 ./diablo-ai.py play-ai \
-   --env Diablo-FindRandomGoal-v0 \
-   --cnn-arch cnn32 \
-   --embedding-dim 512 \
-   --model Diablo-FindRandomGoal-v0--cnn32-best \
-   --episodes 10 \
    --harmless-barrels \
-   --no-monsters \
-   --seed 0 \
+   --cnn-arch cnn32expert \
+   --embedding-dim 512 \
+   --env Diablo-ClearTheLevel-v0 \
+   --env-runners 1 \
+   --model Diablo-ClearTheLevel-v0 \
+   --seed-base 5 \
    --game-ticks-per-step 12 \
-   --gui \
-   --best
+   --gui
 ```
 
 As soon as the Diablo GUI window appears, select "Single Game" and
 proceed with the "Warrior" character, using the default name and
-normal difficulty (monsters will be disabled anyway). Once the first
-level is loaded, the agent resets the environment a few times and
-starts looking for a randomly placed portal. The episode ends if the
-task is completed, meaning the agent finds a goal, or if the agent is
-stuck, resulting in task failure. The agent will be traversing ten
-randomly generated dungeons (controlled by the `--episodes 10`
-option).
+normal difficulty. Once the first level is loaded, the agent resets
+the environment a few times and starts exploring the dungeon, fighting
+monsters, and searching for the goal. The episode ends when the agent
+reaches the goal or gets stuck.
 
 To attach a terminal ASCII representation to the running game
 instance, use the following command:
@@ -331,6 +408,83 @@ instance, use the following command:
 ```shell
 ./diablo-ai.py play --attach 0
 ```
+
+## Sprout: Model Version Control
+
+Managing dozens of training runs with different hyperparameters,
+architectures, and results quickly becomes chaotic. Sprout is a
+lightweight tool included in the repository that treats model
+checkpoints like a version control system.
+
+Each time training starts, Sprout takes a snapshot of the current
+model state. The full training history is stored as a tree where each
+node records only the parameters that changed from its parent, along
+with training metrics such as success rate and total frames. Returning
+to any previous state -- including before a risky surgery or a bad
+hyperparameter choice -- is a single command:
+
+```shell
+# Show the full training history tree
+./diablo-ai.py sprout tree
+
+# Show details for the current head
+./diablo-ai.py sprout show --head Diablo-ClearTheLevel-v0
+
+# Jump the active head back to any specific run
+./diablo-ai.py sprout switch --head Diablo-ClearTheLevel-v0 --to-run d9ca5ecd
+
+# Undo the last training run and return to the parent state
+./diablo-ai.py sprout rewind Diablo-ClearTheLevel-v0
+
+# Branch off a new experiment from the current head
+./diablo-ai.py sprout clone --from-head Diablo-ClearTheLevel-v0 Diablo-ClearTheLevel-experiment
+```
+
+This made it practical to try experiments such as architecture changes
+or direct weight surgery without fear of losing a good checkpoint, and
+to compare different training strategies side by side by branching
+from the same base run.
+
+The training history for the ClearTheLevel model shows the full
+evolution from the cloned FindRandomGoal baseline through monster
+introduction and gradual recovery:
+
+```
+▶ Diablo-ClearTheLevel-v0
+└─ dd6fe9af (CLONED--Diablo-FindRandomGoal-v0--cnn32-best)
+   │ ≡ best/success_rate: 0.968
+   │ ≡ last/duration: 1d14h
+   └─ d9ca5ecd
+      │ ⇾ no_monsters: True -> False
+      │ ⇾ cnn_arch: cnn32 -> cnn32expert
+      │ ⇾ env: Diablo-FindRandomGoal-v0 -> Diablo-ClearTheLevel-v0
+      │ ⇾ entropy_coef: 0.01 -> 0.001
+      │ ≡ last/success_rate: 0.244
+      └─ ...
+         └─ c7a414fb
+            │ ⇾ invincible_player: False -> True
+            │ ⇾ blind_monsters: True -> False
+            │ ≡ last/success_rate: 0.780
+            └─ 7edc9fad
+               │ ⇾ invincible_player: True -> False
+               │ ≡ last/success_rate: 0.816
+               └─ ...
+                  └─ ● Diablo-ClearTheLevel-v0
+                       ≡ best/success_rate: 0.968
+                       ≡ last/duration: 3d00h
+                       ≡ last/success_rate: 0.916
+```
+
+Each node shows only the parameters that changed from its parent. The
+`●` marker indicates the current active head. The `⇾` prefix marks
+parameter changes, `≡` marks recorded metrics. The `best/*` values
+are inherited from the original FindRandomGoal model that was cloned
+as the starting point -- they reflect the best argmax checkpoint from
+that earlier training phase, not the ClearTheLevel training.
+
+Sprout is available as `./diablo-ai.py sprout` (which automatically
+sets the working directory) or directly as a [single Python
+file](ai/sprout.py) with `--working models`.
 
 ## Building and Running
 
