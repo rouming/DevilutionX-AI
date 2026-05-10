@@ -2164,13 +2164,13 @@ void InitMissileAnimationFromMonster(Missile &mis, Direction midir, const Monste
 	const AnimStruct &anim = mon.type().getAnimData(graphic);
 	mis._mimfnum = static_cast<int32_t>(midir);
 	mis._miAnimFlags = MissileGraphicsFlags::None;
-	ClxSpriteList sprites = *anim.spritesForDirection(midir);
-	const uint16_t width = sprites[0].width();
-	mis._miAnimData.emplace(sprites);
+	const OptionalClxSpriteList sprites = anim.spritesForDirection(midir);
+	if (sprites)
+		mis._miAnimData.emplace(*sprites);
 	mis._miAnimDelay = anim.rate;
 	mis._miAnimLen = anim.frames;
-	mis._miAnimWidth = width;
-	mis._miAnimWidth2 = CalculateSpriteTileCenterX(width);
+	mis._miAnimWidth = anim.width;
+	mis._miAnimWidth2 = CalculateSpriteTileCenterX(anim.width);
 	mis._miAnimAdd = 1;
 	mis.var1 = 0;
 	mis.var2 = 0;
