@@ -438,6 +438,11 @@ void InitCursor()
 	ClearCursor();
 }
 
+bool CursorIsLoaded()
+{
+	return !!pCursCels;
+}
+
 void FreeCursor()
 {
 	if (HeadlessMode)

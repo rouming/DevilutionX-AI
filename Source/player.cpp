@@ -45,6 +45,7 @@
 #include "stores.h"
 #include "towners.h"
 #include "utils/is_of.hpp"
+#include "utils/shared.h"
 #include "utils/language.h"
 #include "utils/log.hpp"
 #include "utils/str_cat.hpp"
@@ -2261,6 +2262,7 @@ void CreatePlayer(Player &player, HeroClass c)
 	player._pClass = c;
 
 	const ClassAttributes &attr = player.getClassAttributes();
+	shared::player_class_attrs = attr;
 
 	player._pBaseStr = attr.baseStr;
 	player._pStrength = player._pBaseStr;
@@ -2429,6 +2431,468 @@ void AddPlrMonstExper(int lvl, unsigned exp, char pmask)
 	}
 }
 
+bool    gApplyHeroConfig    = false;
+uint8_t gEpisodeDungeonLevel = 0;
+
+namespace {
+
+// Category indices for the starting-potion bag. Order is informational only;
+// the bag is shuffled before drawing.
+enum PotionCategory : uint8_t {
+	PC_SMALL_HP    = 0, // IDI_HEAL
+	PC_SCROLL_HEAL = 1, // IMISC_SCROLL with SpellID::Healing
+	PC_FULL_HP     = 2, // IDI_FULLHEAL
+	PC_SMALL_MANA  = 3, // IDI_MANA
+	PC_FULL_MANA   = 4, // IDI_FULLMANA
+	PC_REJUV       = 5, // IMISC_REJUV
+	PC_FULL_REJUV  = 6, // IMISC_FULLREJUV
+	PC_COUNT       = 7,
+};
+
+constexpr int kPotionBagPerCategory = 10;
+constexpr int kPotionBagSize        = PC_COUNT * kPotionBagPerCategory; // 70
+constexpr int kPotionDrawMin        = 2;
+constexpr int kPotionDrawMax        = 20;
+
+// Bonus spells injected per episode. Uniform draw in
+// [kMinBonusSpells, kMaxBonusSpells] from the kSpells[] pool, picked
+// without replacement so the agent never sees the same spell twice in
+// one episode. Single-spell episodes train each spell in isolation;
+// two-spell episodes give PPO direct co-occurrence training for spell-
+// vs-spell priority decisions.
+constexpr int kMinBonusSpells = 1;
+constexpr int kMaxBonusSpells = 2;
+
+struct EpisodeHeroConfig {
+	uint8_t  speed_flags;
+	int      level, strength, magic, dexterity, vitality;
+	int      max_hp, max_mana, armor_class;
+	int      min_damage, max_damage, to_hit_bonus;
+	int      resistances;
+	// [kMinBonusSpells, kMaxBonusSpells] distinct learned spells per
+	// episode. spell_count tells how many entries in spell_ids[] /
+	// spell_levels[] are valid.
+	uint8_t  spell_count;
+	SpellID  spell_ids[kMaxBonusSpells];
+	int      spell_levels[kMaxBonusSpells];
+	// Starting potion / scroll mix: a multivariate-hypergeometric draw from a
+	// 70-item bag (10 of each of 7 categories). Total `potion_count` is
+	// uniform in [kPotionDrawMin, kPotionDrawMax], so the model trains across
+	// the full resource-scarcity spectrum. Per-category counts emerge from
+	// the bag sampling -- each draw gives every category equal probability
+	// 1/7, so no category is systematically rare or common. The bag shuffle
+	// also doubles as the placement order, removing the per-category bias
+	// that a fixed iteration order would introduce.
+	uint8_t  potion_count;
+	uint8_t  potion_bag[kPotionDrawMax]; // each entry is a PotionCategory
+};
+
+EpisodeHeroConfig gEpisodeHeroConfig;
+
+// fmix32 seed mixer (matches Python's _fmix32).
+uint32_t FMix32(uint32_t h)
+{
+	h ^= h >> 16;
+	h *= 0x85ebca6bu;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35u;
+	h ^= h >> 16;
+	return h;
+}
+
+// Find the AllItemsList index for an item matching the given iMiscId, and
+// (when miscId == IMISC_SCROLL) the given iSpell. Returns IDI_NONE if no
+// match exists. AllItemsList is built once by LoadItemData() from
+// assets/txtdata/items/itemdat.tsv, so this scan is O(N) one-time and small.
+_item_indexes FindItemIdxByMisc(item_misc_id miscId, SpellID spell = SpellID::Null)
+{
+	for (size_t i = 0; i < AllItemsList.size(); i++) {
+		const ItemData &d = AllItemsList[i];
+		if (d.iMiscId != miscId)
+			continue;
+		if (miscId == IMISC_SCROLL && d.iSpell != spell)
+			continue;
+		return static_cast<_item_indexes>(i);
+	}
+	return IDI_NONE;
+}
+
+// True when this item is one of the seven categories we re-seed per episode.
+bool IsManagedStartingPotion(const Item &item)
+{
+	if (item.isEmpty())
+		return false;
+	switch (item._iMiscId) {
+	case IMISC_HEAL:
+	case IMISC_FULLHEAL:
+	case IMISC_MANA:
+	case IMISC_FULLMANA:
+	case IMISC_REJUV:
+	case IMISC_FULLREJUV:
+		return true;
+	case IMISC_SCROLL:
+		return item._iSpell == SpellID::Healing;
+	default:
+		return false;
+	}
+}
+
+void PlaceStartingItemByIdx(Player &player, _item_indexes idx, int count)
+{
+	if (idx == IDI_NONE || count <= 0)
+		return;
+	for (int i = 0; i < count; i++) {
+		Item item;
+		InitializeItem(item, idx);
+		GenerateNewSeed(item);
+		item.updateRequiredStatsCacheForPlayer(player);
+		if (!AutoPlaceItemInBelt(player, item, true)
+		    && !AutoPlaceItemInInventory(player, item, true)) {
+			// Inventory full -- stop early; the rolled count becomes an upper bound.
+			return;
+		}
+	}
+}
+
+void ApplyEpisodeStartingPotions(Player &player)
+{
+	const EpisodeHeroConfig &cfg = gEpisodeHeroConfig;
+	const bool hadCursor = CursorIsLoaded();
+	if (!hadCursor) InitCursor();
+
+	// Step 1: clear the default loadout's potions so the injected counts are
+	// exact. Belt is a flat array, so just clear() in place. Inventory is
+	// compacted, so iterate by index and call RemoveInvItem which shifts the
+	// tail down and updates _pNumInv + InvGrid for us.
+	for (auto &slot : player.SpdList) {
+		if (IsManagedStartingPotion(slot))
+			slot.clear();
+	}
+	for (int i = 0; i < player._pNumInv; ) {
+		if (IsManagedStartingPotion(player.InvList[i])) {
+			player.RemoveInvItem(i, /*calcScrolls=*/false);
+		} else {
+			i++;
+		}
+	}
+
+	// Step 2: walk the shuffled bag and place each drawn item individually.
+	// The bag's shuffle already randomises both *which* categories appear and
+	// the order they get placed, so no separate placement-order shuffle is
+	// needed. Each category resolves its _item_indexes once; the three
+	// without a pinned IDI are looked up by scanning AllItemsList.
+	const _item_indexes idx_for_category[PC_COUNT] = {
+		[PC_SMALL_HP]    = IDI_HEAL,
+		[PC_SCROLL_HEAL] = FindItemIdxByMisc(IMISC_SCROLL, SpellID::Healing),
+		[PC_FULL_HP]     = IDI_FULLHEAL,
+		[PC_SMALL_MANA]  = IDI_MANA,
+		[PC_FULL_MANA]   = IDI_FULLMANA,
+		[PC_REJUV]       = FindItemIdxByMisc(IMISC_REJUV),
+		[PC_FULL_REJUV]  = FindItemIdxByMisc(IMISC_FULLREJUV),
+	};
+	for (int i = 0; i < cfg.potion_count; i++) {
+		PotionCategory cat = static_cast<PotionCategory>(cfg.potion_bag[i]);
+		PlaceStartingItemByIdx(player, idx_for_category[cat], 1);
+	}
+
+	if (!hadCursor) FreeCursor();
+
+	// CalcScrolls was suppressed during RemoveInvItem above; refresh once now.
+	player.CalcScrolls();
+}
+
+} // namespace
+
+// Per-class linear scaling parameters for hero stat generation.
+// Each stat follows: ri(base + slope*d - noise, base + slope*d + noise), clamped [10,250].
+// Hero level follows: max(1, round(1.0 + lvl_slope*(d-1))) +- lvl_noise.
+// Tune slopes and noises here to adjust the generated hero distribution.
+struct ClassScaling {
+	double lvl_slope; int lvl_noise;
+	int str_base, str_slope, str_noise;
+	int mag_base, mag_slope, mag_noise;
+	int dex_base, dex_slope, dex_noise;
+	int vit_base, vit_slope, vit_noise;
+};
+static constexpr ClassScaling kWarrior = {
+    .lvl_slope = 1.87, .lvl_noise = 2,
+    .str_base = 30, .str_slope = 14, .str_noise = 15,
+    .mag_base = 10, .mag_slope =  1, .mag_noise = 15,
+    .dex_base = 20, .dex_slope =  4, .dex_noise = 15,
+    .vit_base = 20, .vit_slope =  4, .vit_noise = 15,
+};
+static constexpr ClassScaling kRogue = {
+    .lvl_slope = 1.87, .lvl_noise = 2,
+    .str_base = 20, .str_slope =  6, .str_noise = 15,
+    .mag_base = 10, .mag_slope =  1, .mag_noise = 15,
+    .dex_base = 25, .dex_slope = 14, .dex_noise = 15,
+    .vit_base = 19, .vit_slope =  2, .vit_noise = 15,
+};
+static constexpr ClassScaling kSorcerer = {
+    .lvl_slope = 1.87, .lvl_noise = 2,
+    .str_base = 10, .str_slope =  2, .str_noise = 15,
+    .mag_base = 35, .mag_slope = 14, .mag_noise = 15,
+    .dex_base = 15, .dex_slope =  4, .dex_noise = 15,
+    .vit_base = 21, .vit_slope =  1, .vit_noise = 15,
+};
+
+void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
+{
+	const int d = dungeon_level;
+
+	// Independent RNG seeded from the episode seed via the FMix32 mixer.
+	// Kept separate from the game RNG so dungeon layout is not affected by
+	// how many stat rolls we draw here.
+	uint32_t rng = FMix32(seed);
+	if (rng == 0) rng = 1; // xorshift32 period is 2^32-1, zero is the dead state
+	auto ri = [&rng](int lo, int hi) -> int {
+		// xorshift32 with Marsaglia's (13,17,5) triple -- full period, no state check needed.
+		rng ^= rng << 13;
+		rng ^= rng >> 17;
+		rng ^= rng << 5;
+		if (lo >= hi) return lo;
+		return lo + static_cast<int>(rng % static_cast<uint32_t>(hi - lo + 1));
+	};
+
+	// Pick a random class for this episode so the model trains across all
+	// three playstyles: Warrior (melee-heavy), Rogue (balanced), Sorcerer (spell-heavy).
+	const HeroClass hero_class = static_cast<HeroClass>(ri(0, 2)); // 0=Warrior, 1=Rogue, 2=Sorcerer
+
+	const ClassScaling &cs = hero_class == HeroClass::Warrior ? kWarrior
+	                       : hero_class == HeroClass::Rogue   ? kRogue
+	                                                           : kSorcerer;
+
+	// Hero level: 1 at d=1, scales linearly with depth, +-lvl_noise variation.
+	int base_level = std::max(1, static_cast<int>(std::round(1.0 + cs.lvl_slope * (d - 1))));
+	int level      = std::max(1, ri(base_level - cs.lvl_noise, base_level + cs.lvl_noise));
+
+	// Stats: base + slope*d gives the depth-scaled midpoint; noise widens the range.
+	// Clamped to [10, 250]: 10 ensures the stat is always non-trivial,
+	// 250 is the safe ceiling (uint8_t field sizes in some engine paths).
+	auto stat = [&](int base, int slope, int noise) {
+		return ri(std::max(10, base + slope * d - noise),
+		          std::min(250, base + slope * d + noise));
+	};
+	int strength  = stat(cs.str_base, cs.str_slope, cs.str_noise);
+	int magic     = stat(cs.mag_base, cs.mag_slope, cs.mag_noise);
+	int dexterity = stat(cs.dex_base, cs.dex_slope, cs.dex_noise);
+	int vitality  = stat(cs.vit_base, cs.vit_slope, cs.vit_noise);
+
+	// HP mirrors Diablo's CalcPlrLifeMana formula per class.
+	// No artificial depth bonus: high vitality at deep levels naturally yields
+	// more HP, so the model learns a real vitality->survivability relationship.
+	int hp_base;
+	if (hero_class == HeroClass::Warrior) {
+		hp_base = 70 + (vitality - 25) * 4 + level * 2;
+	} else if (hero_class == HeroClass::Rogue) {
+		hp_base = 45 + (vitality - 20) * 3 + level * 2;
+	} else {
+		// Sorcerer's thin HP is intentional -- ManaShield effectively doubles it at d>=6.
+		hp_base = 25 + (vitality - 20) * 2 + level * 2;
+	}
+	int max_hp = std::max(10, ri(int(0.85 * hp_base), int(1.15 * hp_base)));
+
+	// Mana: always Sorcerer-equivalent regardless of class.
+	// Warrior/Rogue class mana is too small to train spell skills: Warrior has
+	// ~1 mana per magic point above 10, so at low depths it cannot cast even
+	// cheap spells (e.g. ManaShield needs 33 mana, Warrior has ~9 at d=4).
+	// At inference the mana fraction scalar shows when mana is low; the model
+	// learns from reward feedback when not to cast, without needing training
+	// episodes where mana is artificially depleted.
+	// Formula: Sorcerer primary stat at depth d gives a depth-scaled pool:
+	//   d=1 -> ~133,  d=8 -> ~499,  d=16 -> ~993
+	int sorc_magic = std::min(250, kSorcerer.mag_base + kSorcerer.mag_slope * d);
+	int mana_base  = kSorcerer.mag_base + (sorc_magic - 25) * 4 + level * 2;
+	int max_mana   = std::max(0, ri(int(0.85 * mana_base), int(1.15 * mana_base)));
+
+	// Armor class: linear with depth, reflecting accumulated gear quality.
+	// +-5 noise keeps individual episodes varied.
+	int base_ac = 5 + static_cast<int>(6.5 * d);
+	int ac      = std::max(0, ri(base_ac - 5, base_ac + 5));
+
+	// Damage: quadratic with depth because item damage rolls grow with item quality.
+	// Coefficients reduced ~30% vs previous to make melee weaker relative to spells,
+	// encouraging the agent to rely on the now-guaranteed spell kit.
+	int min_dam = std::max(1, ri(int(1 + 0.10 * d*d), int(2 + 0.18 * d*d)));
+	int max_dam = std::max(min_dam + 1, ri(int(2 + 0.28 * d*d), int(4 + 0.42 * d*d)));
+
+	// To-hit bonus stacks on top of the engine's base (level/2 + dex/2).
+	// Kept in a +-5 band around 10+3d so the hero hits reliably but misses sometimes.
+	int to_hit = std::max(0, ri(10 + 3*d - 5, 10 + 3*d + 5));
+
+	// Resistances: zero until d=5 (shallow floors have no elemental threat),
+	// then grow toward the 75% hard cap around d=14.
+	int base_res = std::max(0, (d - 4) * 8);
+	int resist   = std::min(75, std::max(0, ri(base_res - 5, base_res + 10)));
+
+	// Spell: uniformly random across all trainable spells.
+	// No depth gate -- each spell gets equal exposure across all dungeon levels,
+	// ensuring equal training signal for every spell regardless of episode depth.
+	// TownPortal excluded: reserved for the ALGO retreat layer, not the model.
+	// Spell level: ri(d-1, d+3) capped [1,15] -- ~+2 average vs old ri(d-3, d),
+	// giving stronger spell damage earlier to complement the reduced melee scaling.
+	static constexpr SpellID kSpells[] = {
+		SpellID::Firebolt, SpellID::ChargedBolt, SpellID::FireWall,
+		SpellID::ManaShield, SpellID::StoneCurse, SpellID::Phasing,
+		SpellID::Fireball,
+	};
+	constexpr int kNumSpells = static_cast<int>(std::size(kSpells));
+	// Draw [kMinBonusSpells, kMaxBonusSpells] distinct spells per episode.
+	const int n_spells = ri(kMinBonusSpells, kMaxBonusSpells);
+	SpellID spell_ids[kMaxBonusSpells]    = {};
+	int     spell_levels[kMaxBonusSpells] = {};
+	for (int i = 0; i < n_spells; i++) {
+		SpellID picked;
+		bool dup;
+		do {
+			picked = kSpells[ri(0, kNumSpells - 1)];
+			dup = false;
+			for (int j = 0; j < i; j++)
+				if (picked == spell_ids[j]) { dup = true; break; }
+		} while (dup);
+		spell_ids[i]    = picked;
+		spell_levels[i] = std::min(15, std::max(1, ri(d - 1, d + 3)));
+	}
+
+	// Animation speed tiers injected via item flags.
+	// Attack speed: 0=none, 1=Quick, 2=Fast, 3=Faster. Available from d>=5;
+	// higher tiers become reachable at greater depth (one new tier per 2 floors).
+	// Recovery speed: 0=none, 1=Fast, 2=Faster, 3=Fastest. Available from d>=3;
+	// prevents stunlock on a character with no real armor (one new tier per 3 floors).
+	// Stored packed in a byte: bits 1:0 = attack tier, bits 3:2 = recovery tier.
+	int atk_max = (d >= 5) ? std::min(3, (d - 5) / 2 + 1) : 0;
+	int rec_max = (d >= 3) ? std::min(3, (d - 3) / 3 + 1) : 0;
+	int atk_tier = ri(0, atk_max);
+	int rec_tier = ri(0, rec_max);
+
+	// Starting potion mix. Build a 70-item bag (10 of each of 7 categories),
+	// shuffle it, roll the total count uniformly in [kPotionDrawMin,
+	// kPotionDrawMax], and keep the first `potion_count` entries of the bag.
+	// The shuffle is the single source of randomness for both *which*
+	// categories appear and *in what order* they get placed in inventory.
+	uint8_t bag[kPotionBagSize];
+	for (int c = 0; c < PC_COUNT; c++) {
+		for (int i = 0; i < kPotionBagPerCategory; i++) {
+			bag[c * kPotionBagPerCategory + i] = static_cast<uint8_t>(c);
+		}
+	}
+	for (int i = kPotionBagSize - 1; i > 0; i--) {
+		int j = ri(0, i);
+		std::swap(bag[i], bag[j]);
+	}
+	int potion_count = ri(kPotionDrawMin, kPotionDrawMax);
+
+	gEpisodeHeroConfig = {
+		.speed_flags    = static_cast<uint8_t>(atk_tier | (rec_tier << 2)),
+		.level          = level,
+		.strength       = strength,
+		.magic          = magic,
+		.dexterity      = dexterity,
+		.vitality       = vitality,
+		.max_hp         = max_hp,
+		.max_mana       = max_mana,
+		.armor_class    = ac,
+		.min_damage     = min_dam,
+		.max_damage     = max_dam,
+		.to_hit_bonus   = to_hit,
+		.resistances    = resist,
+		.spell_count    = static_cast<uint8_t>(n_spells),
+		.spell_ids      = {}, // filled by std::copy_n below
+		.spell_levels   = {}, // filled by std::copy_n below
+		.potion_count   = static_cast<uint8_t>(potion_count),
+		.potion_bag     = {}, // filled by the std::copy_n below
+	};
+	std::copy_n(spell_ids,    kMaxBonusSpells, gEpisodeHeroConfig.spell_ids);
+	std::copy_n(spell_levels, kMaxBonusSpells, gEpisodeHeroConfig.spell_levels);
+	std::copy_n(bag,          kPotionDrawMax,  gEpisodeHeroConfig.potion_bag);
+}
+
+// Re-applies the item-derived combat overrides after CalcPlrItemVals resets them.
+// Does NOT touch HP/Mana values; CalcPlrLifeMana handles those correctly because
+// ApplyHeroConfig sets _pHPBase/_pManaBase to the full episode values on init.
+void ApplyHeroConfigCombatStats(Player &player)
+{
+	const EpisodeHeroConfig &cfg = gEpisodeHeroConfig;
+
+	player._pIAC      = std::max(0, cfg.armor_class - cfg.dexterity / 5);
+	player._pIBonusAC = 0;
+
+	player._pIMinDam      = cfg.min_damage;
+	player._pIMaxDam      = cfg.max_damage;
+	player._pIBonusDam    = 0;
+	player._pIBonusDamMod = 0;
+	player._pDamageMod    = 0;
+
+	player._pIBonusToHit = cfg.to_hit_bonus;
+
+	player._pFireResist = static_cast<int8_t>(cfg.resistances);
+	player._pLghtResist = static_cast<int8_t>(cfg.resistances);
+	player._pMagResist  = static_cast<int8_t>(cfg.resistances);
+
+	static constexpr ItemSpecialEffect kAttackTier[] = {
+		ItemSpecialEffect::None,
+		ItemSpecialEffect::QuickAttack,
+		ItemSpecialEffect::FastAttack,
+		ItemSpecialEffect::FasterAttack,
+	};
+	static constexpr ItemSpecialEffect kRecoveryTier[] = {
+		ItemSpecialEffect::None,
+		ItemSpecialEffect::FastHitRecovery,
+		ItemSpecialEffect::FasterHitRecovery,
+		ItemSpecialEffect::FastestHitRecovery,
+	};
+	player._pIFlags |= kAttackTier[cfg.speed_flags & 0x3];
+	player._pIFlags |= kRecoveryTier[(cfg.speed_flags >> 2) & 0x3];
+}
+
+static void ApplyHeroConfig(Player &player)
+{
+	const EpisodeHeroConfig &cfg = gEpisodeHeroConfig;
+
+	// Level; _pStatPts=0 clears any fake pre-existing points from the injected level.
+	// _pExperience=0 resets the XP counter; level-ups can still occur naturally mid-episode.
+	player.setCharacterLevel(static_cast<uint8_t>(cfg.level));
+	player._pStatPts    = 0;
+	player._pExperience = 0;
+
+	// Base and effective stats.
+	player._pBaseStr  = cfg.strength;   player._pStrength  = cfg.strength;
+	player._pBaseMag  = cfg.magic;      player._pMagic     = cfg.magic;
+	player._pBaseDex  = cfg.dexterity;  player._pDexterity = cfg.dexterity;
+	player._pBaseVit  = cfg.vitality;   player._pVitality  = cfg.vitality;
+
+	// HP and Mana (fixed-point: display value << 6).
+	// _pHPBase/_pManaBase must match so CalcPlrLifeMana preserves current HP
+	// instead of snapping it back to the level-1 CreatePlayer value.
+	const int32_t hp   = cfg.max_hp   << 6;
+	const int32_t mana = cfg.max_mana << 6;
+	player._pMaxHPBase   = hp;   player._pMaxHP   = hp;
+	player._pHPBase      = hp;   player._pHitPoints = hp;
+	player._pMaxManaBase = mana; player._pMaxMana = mana;
+	player._pManaBase    = mana; player._pMana    = mana;
+
+	ApplyHeroConfigCombatStats(player);
+
+	// Inject the [kMinBonusSpells, kMaxBonusSpells] episode bonus spells
+	// into _pMemSpells and the per-spell level table. First spell becomes
+	// the pre-selected ready spell so the spell bar starts on something
+	// useful.
+	for (uint8_t i = 0; i < cfg.spell_count; i++) {
+		if (cfg.spell_ids[i] == SpellID::Null)
+			continue;
+		player._pMemSpells |= GetSpellBitmask(cfg.spell_ids[i]);
+		player._pSplLvl[static_cast<size_t>(cfg.spell_ids[i])] =
+		    static_cast<int8_t>(cfg.spell_levels[i]);
+	}
+	if (cfg.spell_count > 0 && cfg.spell_ids[0] != SpellID::Null) {
+		player._pRSpell   = cfg.spell_ids[0];
+		player._pRSplType = SpellType::Spell;
+	}
+
+	// Replace default starting potions with the episode-randomized mix.
+	ApplyEpisodeStartingPotions(player);
+}
+
 void InitPlayer(Player &player, bool firstTime)
 {
 	if (firstTime) {
@@ -2486,6 +2950,10 @@ void InitPlayer(Player &player, bool firstTime)
 
 	if (&player == MyPlayer) {
 		MyPlayerIsDead = false;
+	}
+
+	if (&player == MyPlayer && gApplyHeroConfig) {
+		ApplyHeroConfig(player);
 	}
 }
 

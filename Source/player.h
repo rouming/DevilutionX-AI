@@ -942,6 +942,10 @@ void NextPlrLevel(Player &player);
 #endif
 void AddPlrMonstExper(int lvl, unsigned int exp, char pmask);
 void ApplyPlrDamage(DamageType damageType, Player &player, int dam, int minHP = 0, int frac = 0, DeathReason deathReason = DeathReason::MonsterOrTrap);
+void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed);
+void ApplyHeroConfigCombatStats(Player &player);
+extern bool gApplyHeroConfig;
+extern uint8_t gEpisodeDungeonLevel;
 void InitPlayer(Player &player, bool FirstTime);
 void InitMultiView();
 void PlrClrTrans(Point position);

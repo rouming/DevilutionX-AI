@@ -53,6 +53,7 @@ extern const Player *PlayerUnderCursor;
 extern Point cursPosition;
 extern DVL_API_FOR_TEST int pcurs;
 
+bool CursorIsLoaded();
 void InitCursor();
 void FreeCursor();
 void ResetCursor();

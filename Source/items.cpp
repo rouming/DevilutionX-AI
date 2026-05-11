@@ -2886,6 +2886,12 @@ void CalcPlrItemVals(Player &player, bool loadgfx)
 	CalcPlrAuricBonus(player);
 	RedrawComponent(PanelDrawComponent::Mana);
 	RedrawComponent(PanelDrawComponent::Health);
+
+	// Re-apply injected combat stats overwritten above; HP/Mana are preserved
+	// via _pHPBase/_pManaBase set in ApplyHeroConfig so CalcPlrLifeMana above
+	// already computed the correct current hit points.
+	if (&player == MyPlayer && gApplyHeroConfig)
+		ApplyHeroConfigCombatStats(player);
 }
 
 void CalcPlrInv(Player &player, bool loadgfx)

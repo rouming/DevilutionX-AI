@@ -6,11 +6,13 @@
 #include "monstdat.h"
 
 #include <cstdint>
+#include <algorithm>
 
 #include <ankerl/unordered_dense.h>
 #include <expected.hpp>
 
 #include "cursor.h"
+#include "utils/shared.h"
 #include "data/file.hpp"
 #include "data/record_reader.hpp"
 #include "items.h"
@@ -592,6 +594,12 @@ void LoadMonsterData()
 {
 	LoadMonstDat();
 	LoadUniqueMonstDat();
+
+	for (const MonsterData &m : MonstersData) {
+		shared::max_monster_level  = std::max(shared::max_monster_level,  static_cast<uint8_t>(m.level));
+		shared::max_walk_frames    = std::max(shared::max_walk_frames,    static_cast<uint8_t>(m.frames[static_cast<size_t>(MonsterGraphic::Walk)]));
+		shared::max_attack_frames  = std::max(shared::max_attack_frames,  static_cast<uint8_t>(m.frames[static_cast<size_t>(MonsterGraphic::Attack)]));
+	}
 }
 
 size_t GetNumMonsterSprites()

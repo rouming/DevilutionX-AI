@@ -6,6 +6,7 @@
 
 #include "itemdat.h"
 
+#include <algorithm>
 #include <string_view>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "data/iterators.hpp"
 #include "data/record_reader.hpp"
 #include "spelldat.h"
+#include "utils/shared.h"
 #include "utils/str_cat.hpp"
 
 namespace devilution {
@@ -619,6 +621,9 @@ void LoadItemData()
 	LoadUniqueItemDat();
 	LoadItemAffixesDat("txtdata\\items\\item_prefixes.tsv", ItemPrefixes);
 	LoadItemAffixesDat("txtdata\\items\\item_suffixes.tsv", ItemSuffixes);
+
+	for (const ItemData &item : AllItemsList)
+		shared::max_weapon_dam = std::max(shared::max_weapon_dam, item.iMaxDam);
 }
 
 std::string_view ItemTypeToString(ItemType itemType)

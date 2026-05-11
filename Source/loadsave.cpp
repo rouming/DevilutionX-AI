@@ -37,6 +37,7 @@
 #include "qol/stash.h"
 #include "stores.h"
 #include "utils/algorithm/container.hpp"
+#include "utils/shared.h"
 #include "utils/endian_read.hpp"
 #include "utils/is_of.hpp"
 #include "utils/language.h"
@@ -436,6 +437,7 @@ void LoadPlayer(LoadHelper &file, Player &player)
 
 	file.NextBytes(player._pName, PlayerNameLength);
 	player._pClass = static_cast<HeroClass>(file.NextLE<int8_t>());
+	shared::player_class_attrs = GetClassAttributes(player._pClass);
 	file.Skip(3); // Alignment
 	player._pStrength = file.NextLE<int32_t>();
 	player._pBaseStr = file.NextLE<int32_t>();

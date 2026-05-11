@@ -16,15 +16,24 @@ extern char _end;
 namespace devilution {
 
 /*
- * Here we define all variables which should be shared
+ * Here we define all variables which should be shared.
+ * __attribute__((used)) prevents the linker from stripping write-only
+ * variables that are never read by the engine but are read by the
+ * external AI agent via the shared memory mapping.
  */
 namespace shared {
-	struct ring_queue input_queue;
-	struct ring_queue events_queue;
-	struct Player     player;
-	uint64_t game_ticks;
-	uint64_t game_saves;
-	uint64_t game_loads;
+	__attribute__((used)) struct ring_queue input_queue;
+	__attribute__((used)) struct ring_queue events_queue;
+	__attribute__((used)) struct Player     player;
+	__attribute__((used)) uint64_t game_ticks;
+	__attribute__((used)) uint64_t game_saves;
+	__attribute__((used)) uint64_t game_loads;
+	__attribute__((used)) MonsterTypeInfo monster_type_info[MaxLvlMTypes];
+	__attribute__((used)) uint8_t max_monster_level;
+	__attribute__((used)) uint8_t max_walk_frames;
+	__attribute__((used)) uint8_t max_attack_frames;
+	__attribute__((used)) uint8_t max_weapon_dam;
+	__attribute__((used)) ClassAttributes player_class_attrs;
 }
 
 /**

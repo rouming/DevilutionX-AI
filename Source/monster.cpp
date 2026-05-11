@@ -47,6 +47,7 @@
 #include "storm/storm_net.hpp"
 #include "towners.h"
 #include "utils/attributes.h"
+#include "utils/shared.h"
 #include "utils/cl2_to_clx.hpp"
 #include "utils/file_name_generator.hpp"
 #include "utils/is_of.hpp"
@@ -3165,6 +3166,16 @@ tl::expected<size_t, std::string> AddMonsterType(_monster_id type, placeflag pla
 				anim.width = monsterData.width;
 			}
 		}
+
+		// Share per-type static stats with the AI agent so it can
+		// build monster CNN observation layers (threat level, move
+		// speed, attack speed) without accessing MonstersData
+		// (std::vector, not mapped into shared memory).
+		shared::monster_type_info[typeIndex] = {
+			static_cast<uint8_t>(monsterData.level),
+			static_cast<uint8_t>(monsterData.frames[static_cast<size_t>(MonsterGraphic::Walk)]),
+			static_cast<uint8_t>(monsterData.frames[static_cast<size_t>(MonsterGraphic::Attack)]),
+		};
 
 		RETURN_IF_ERROR(InitMonsterSND(monsterType));
 	}

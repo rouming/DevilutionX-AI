@@ -896,14 +896,15 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 				// Exit current game loop if new game is requested
 				gbRunGame = false;
 				gbSkipMenu = true;
-				if (data1) {
+				if (data1 & 1) {
 					gbSeed = data2;
 					gbSeedNeedSet = true;
 				}
+				gEpisodeDungeonLevel = static_cast<uint8_t>((data1 >> 1) & 0x1f);
 			}
 			if (sdl_type == SDL_KEYDOWN) {
-				if (data1)
-					printf(">> %s: received NEW with seed '%u'\n", __func__, data2);
+				if (data1 & 1)
+					printf(">> %s: received NEW with seed '%u', dungeon_level=%u\n", __func__, data2, gEpisodeDungeonLevel);
 				else
 					printf(">> %s: received NEW\n", __func__);
 			}
@@ -1068,10 +1069,9 @@ void RunGameLoop(interface_mode uMsg)
 	unsigned run_game_iteration = 0;
 #endif
 
-	/* Start a new level on new game start if specified */
-	if (uMsg == WM_DIABNEWGAME && *GetOptions().Gameplay.gameLevel)
-		StartNewLvl(*MyPlayer, interface_mode::WM_DIABNEXTLVL,
-					*GetOptions().Gameplay.gameLevel);
+	/* Start at the resolved dungeon level (set in StartGame before RunGameLoop). */
+	if (uMsg == WM_DIABNEWGAME && gEpisodeDungeonLevel > 0)
+		StartNewLvl(*MyPlayer, interface_mode::WM_DIABNEXTLVL, static_cast<int>(gEpisodeDungeonLevel));
 
 	while (gbRunGame) {
 
@@ -2803,6 +2803,16 @@ bool StartGame(bool bNewGame, bool bSinglePlayer)
 
 			printf(">> %s: set seed=%d, fixedSeed=%d\n", __func__, gbSeed, fixedSeed);
 		}
+
+		// Resolve dungeon level: KEY_NEW takes priority, else ini option.
+		if (gEpisodeDungeonLevel == 0) {
+			int iniLevel = *GetOptions().Gameplay.gameLevel;
+			if (iniLevel > 0)
+				gEpisodeDungeonLevel = static_cast<uint8_t>(iniLevel);
+		}
+		gApplyHeroConfig = (gEpisodeDungeonLevel >= 2);
+		if (gApplyHeroConfig)
+			GenerateEpisodeHeroConfig(gEpisodeDungeonLevel, gbSeed);
 
 		gbLoadGame = false;
 
