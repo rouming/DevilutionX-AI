@@ -532,8 +532,8 @@ def delayed_import(binary_path):
 
 # Flag to control the main loop
 RUNNING = True
-# Global variable to track the last key pressed
 LAST_KEY = 0
+SHOW_CHARS = False
 
 class EventsQueue:
     queue = None
@@ -690,8 +690,7 @@ def list_devilution_processes(binary_path, mshared_filename):
             print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
 
 def handle_keyboard(stdscr):
-    global LAST_KEY
-    global RUNNING
+    global LAST_KEY, RUNNING, SHOW_CHARS
 
     k = stdscr.getch()
     if k == -1:
@@ -723,6 +722,8 @@ def handle_keyboard(stdscr):
         key = ring.RingEntryType.RING_ENTRY_KEY_SAVE
     elif k == ord('p'):
         key = ring.RingEntryType.RING_ENTRY_KEY_PAUSE
+    elif k == ord('c'):
+        SHOW_CHARS = not SHOW_CHARS
     elif k == ord('q'):
         RUNNING = False  # Stop the main loop
 
@@ -841,6 +842,131 @@ def display_matrix(dunwin, m):
             # square in a terminal
             _addch(dunwin, row + y_off, col + x_off + 1, ' ')
 
+def _res_char(r, immune_bit, resist_bit):
+    if r & immune_bit: return '+'
+    if r & resist_bit: return '~'
+    return '-'
+
+def _pct(cur, max_val):
+    return max(0, min(100, int(100 * cur / max_val))) if max_val > 0 else 0
+
+def _active_flags(p):
+    return '[MS]' if p.pManaShield else ''
+
+def _spell_name(p):
+    sid = int(p._pRSpell)
+    if sid <= 0:
+        return '-', 0
+    try:
+        name = dx.SpellID(sid).name
+    except Exception:
+        name = f'#{sid}'
+    lvl = int(p._pSplLvl[sid]) if 0 <= sid < len(p._pSplLvl) else 0
+    return name, lvl
+
+def _speed_strs(iflags):
+    f = int(iflags)
+    ISE = dx.ItemSpecialEffect
+    atk = ('Faster' if f & ISE.FasterAttack.value
+           else 'Fast' if f & ISE.FastAttack.value
+           else 'Quick' if f & ISE.QuickAttack.value
+           else '-')
+    rec = ('Fastest' if f & ISE.FastestHitRecovery.value
+           else 'Faster' if f & ISE.FasterHitRecovery.value
+           else 'Fast' if f & ISE.FastHitRecovery.value
+           else '-')
+    return atk, rec
+
+def nearest_monster_info(d):
+    pos = diablo_state.player_position(d)
+    best, best_dist = None, float('inf')
+    cnt = int(d.ActiveMonsterCount.value)
+    ranged_ids = diablo_state.ranged_ai_ids_array()
+    resist = dx.monster_resistance
+    unique_none = dx.UniqueMonsterType.None_.value
+    for i in range(cnt):
+        mid = int(d.ActiveMonsters[i])
+        m = d.Monsters[mid]
+        if int(m.hitPoints) <= 0:
+            continue
+        mx, my = int(m.position.tile.x), int(m.position.tile.y)
+        if not (int(d.dFlags[mx, my]) & dx.DungeonFlag.Lit.value):
+            continue
+        dist = abs(mx - pos[0]) + abs(my - pos[1])
+        if dist < best_dist:
+            best_dist = dist
+            hp_pct = _pct(int(m.hitPoints), int(m.maxHitPoints))
+            r = int(m.resistance)
+            try:
+                ti  = d.monster_type_info[int(m.levelType)]
+                lvl = int(ti.level)
+                mv  = int(ti.walk_frames)
+                atk = int(ti.attack_frames)
+            except Exception:
+                lvl = mv = atk = 0
+            try:
+                name = dx.MonsterAIID(int(m.ai)).name
+            except Exception:
+                name = '?'
+            max_mv  = max(1, int(d.max_walk_frames.value))
+            max_atk = max(1, int(d.max_attack_frames.value))
+            best = {
+                'dist': dist, 'hp_pct': hp_pct, 'lvl': lvl, 'name': name,
+                'ranged': int(m.ai) in ranged_ids,
+                'boss':   int(m.uniqueType) != unique_none,
+                'fire':   _res_char(r, resist.IMMUNE_FIRE.value,      resist.RESIST_FIRE.value),
+                'light':  _res_char(r, resist.IMMUNE_LIGHTNING.value, resist.RESIST_LIGHTNING.value),
+                'magic':  _res_char(r, resist.IMMUNE_MAGIC.value,     resist.RESIST_MAGIC.value),
+                'spd':  int((1.0 - mv  / max_mv)  * 100),
+                'aspd': int((1.0 - atk / max_atk) * 100),
+            }
+    return best
+
+def display_chars_window(d, stdscr):
+    p = d.player
+    hp_cur = int(p._pHitPoints) >> 6
+    hp_max = int(p._pMaxHP) >> 6
+    mp_cur = int(p._pMana) >> 6
+    mp_max = int(p._pMaxMana) >> 6
+    spell, slvl = _spell_name(p)
+    atk_spd, rec_spd = _speed_strs(int(p._pIFlags))
+
+    lines = [
+        f" Name:     {''.join(chr(c) for c in p._pName if c)} (lvl {int(p._pLevel)})",
+        f" HP:       {hp_cur} / {hp_max}",
+        f" Mana:     {mp_cur} / {mp_max}",
+        f" Strength: {int(p._pStrength)}",
+        f" Magic:    {int(p._pMagic)}",
+        f" Dexterity:{int(p._pDexterity)}",
+        f" Vitality: {int(p._pVitality)}",
+        f" AC:       {int(p._pIAC)}",
+        f" Damage:   {int(p._pIMinDam)}-{int(p._pIMaxDam)}",
+        f" To Hit:   {int(p._pIBonusToHit)}%",
+        f" Resist:   Fire {int(p._pFireResist)}%  "
+        f"Lgth {int(p._pLghtResist)}%  Mag {int(p._pMagResist)}%",
+        f" Spell:    {spell} (lvl {slvl})",
+        f" Atk spd:  {atk_spd}",
+        f" Rec spd:  {rec_spd}",
+    ]
+
+    w = max(len(l) for l in lines) + 2
+    h = len(lines) + 2
+    scr_h, scr_w = stdscr.getmaxyx()
+    y = max(0, scr_h // 2 - h // 2)
+    x = max(0, scr_w // 2 - w // 2)
+
+    for i, line in enumerate(lines):
+        row = y + 1 + i
+        if row >= scr_h:
+            break
+        padded = line.ljust(w)
+        _addstr(stdscr, row, x, '│' + padded + '│')
+    top = '┌' + '─' * w + '┐'
+    bot = '└' + '─' * w + '┘'
+    _addstr(stdscr, y, x, top)
+    if y + h - 1 < scr_h:
+        _addstr(stdscr, y + h - 1, x, bot)
+
 def display_dungeon(d, stdscr, view_radius, goal_pos):
     height, width = stdscr.getmaxyx()
     dunwin = stdscr.subwin(height - (4 + 1), width, 4, 0)
@@ -853,44 +979,59 @@ def display_dungeon(d, stdscr, view_radius, goal_pos):
 
 def display_diablo_state(game, stdscr, events, envlog, view_radius):
     d = game.safe_state
+    p = d.player
     pos = diablo_state.player_position(d)
-
-    # Get the screen size
     height, width = stdscr.getmaxyx()
 
-    msg = "Diablo ticks: %4d; Kills: %003d; HP: %d; Pos: %d:%d; State: %-18s" % \
-        (game.ticks(d),
-         np.sum(d.MonsterKillCounts),
-         d.player._pHitPoints,
-         pos[0], pos[1],
-         dx.PLR_MODE(d.player._pmode).name)
+    hp_pct = _pct(int(p._pHitPoints), int(p._pMaxHP))
+    mp_pct = _pct(int(p._pMana), int(p._pMaxMana))
+    spell, slvl = _spell_name(p)
+    active_flags = _active_flags(p)
+
+    msg = "Ticks: %4d  Kills: %3d  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s/%d  State: %s%s" % (
+        game.ticks(d),
+        np.sum(d.MonsterKillCounts),
+        pos[0], pos[1],
+        hp_pct, mp_pct,
+        spell, slvl,
+        dx.PLR_MODE(d.player._pmode).name,
+        (' ' + active_flags) if active_flags else '')
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 0, width // 2 - len(msg) // 2, msg)
-
-    msg = "Press 'q' to quit"
-    _addstr(stdscr, height - 1, width // 2 - len(msg) // 2, msg)
-
-    msg = "Animation: ticksPerFrame %2d; tickCntOfFrame %2d; frames %2d; frame %2d" % \
-        (d.player.AnimInfo.ticksPerFrame,
-         d.player.AnimInfo.tickCounterOfCurrentFrame,
-         d.player.AnimInfo.numberOfFrames,
-         d.player.AnimInfo.currentFrame)
-    msg = truncate_line(msg, width - 1)
-    _addstr(stdscr, 1, width // 2 - len(msg) // 2, msg)
 
     obj_cnt = diablo_state.count_active_objects(d)
     items_cnt = diablo_state.count_active_items(d)
     total_hp = diablo_state.count_active_monsters_total_hp(d)
     events_str, events_progress = get_events_as_string(game, events)
 
-    msg = "Total: mons HP %d, items %d, objs %d, lvl %d %c %s" % \
-        (total_hp, items_cnt, obj_cnt, d.player.plrlevel,
-         events_progress, events_str)
+    msg = "Mons HP: %d  Items: %d  Objs: %d  Lvl: %d  %c %s" % (
+        total_hp, items_cnt, obj_cnt, d.player.plrlevel,
+        events_progress, events_str)
+    msg = truncate_line(msg, width - 1)
+    _addstr(stdscr, 1, width // 2 - len(msg) // 2, msg)
+
+    mons = nearest_monster_info(d)
+    if mons:
+        flags = ''
+        if mons['ranged']: flags += ' Rng'
+        if mons['boss']:   flags += ' Boss'
+        msg = "Nearest: %s  d%d  lv%d  HP%d%%%s  F%sL%sM%s  Rate: mov%d%% atk%d%%" % (
+            mons['name'], mons['dist'], mons['lvl'], mons['hp_pct'], flags,
+            mons['fire'], mons['light'], mons['magic'],
+            mons['spd'], mons['aspd'])
+    else:
+        msg = "Nearest: none"
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 2, width // 2 - len(msg) // 2, msg)
 
+    msg = "Press 'q' quit  'c' chars  'y' cast spell"
+    _addstr(stdscr, height - 1, width // 2 - len(msg) // 2, msg)
+
     display_dungeon(d, stdscr, view_radius, game.goal_pos)
     display_env_log(stdscr, envlog)
+
+    if SHOW_CHARS:
+        display_chars_window(d, stdscr)
 
     if diablo_state.is_game_paused(d):
         msgs = ["            ",

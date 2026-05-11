@@ -288,6 +288,31 @@ def find_trigger(d, tmsg):
             return trig
     return None
 
+# Source: monster.cpp AiProc[] - types whose handler calls StartRangedAttack:
+#   AiRanged/AiRangedAvoidance directly, SkeletonBowAi, CounselorAi (also used by
+#   Lazarus/LazarusSuccubus), and FireMan (Hellfire, nullptr AI but ranged by design).
+# Lazy-init so dx.MonsterAIID attribute resolution is deferred until first use.
+# Python `x in np.array` works element-wise, so the single array view serves
+# both Python membership checks and @njit callers (frozensets don't survive
+# @njit, arrays do).
+_RANGED_AI_IDS_ARR = None
+def ranged_ai_ids_array():
+    """Numpy int64 array of MonsterAIID values that use ranged behavior."""
+    global _RANGED_AI_IDS_ARR
+    if _RANGED_AI_IDS_ARR is None:
+        _RANGED_AI_IDS_ARR = np.array(sorted([
+            dx.MonsterAIID.SkeletonRanged.value, dx.MonsterAIID.GoatRanged.value,
+            dx.MonsterAIID.Magma.value,          dx.MonsterAIID.Succubus.value,
+            dx.MonsterAIID.Storm.value,          dx.MonsterAIID.FireMan.value,
+            dx.MonsterAIID.Acid.value,           dx.MonsterAIID.AcidUnique.value,
+            dx.MonsterAIID.Counselor.value,      dx.MonsterAIID.Lazarus.value,
+            dx.MonsterAIID.LazarusSuccubus.value,dx.MonsterAIID.FireBat.value,
+            dx.MonsterAIID.Torchant.value,       dx.MonsterAIID.Lich.value,
+            dx.MonsterAIID.ArchLich.value,       dx.MonsterAIID.Psychorb.value,
+            dx.MonsterAIID.Necromorb.value,      dx.MonsterAIID.BoneDemon.value,
+            dx.MonsterAIID.Diablo.value,
+        ]), dtype=np.int64)
+    return _RANGED_AI_IDS_ARR
 
 spec = [ ('lt', types.uint64[:]) ]
 @jitclass(spec)
