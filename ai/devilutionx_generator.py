@@ -10,6 +10,12 @@ DEVILUTIONX_VARS = [
     "devilution::shared::game_ticks",
     "devilution::shared::game_saves",
     "devilution::shared::game_loads",
+    "devilution::shared::monster_type_info",
+    "devilution::shared::max_monster_level",
+    "devilution::shared::max_walk_frames",
+    "devilution::shared::max_attack_frames",
+    "devilution::shared::max_weapon_dam",
+    "devilution::shared::player_class_attrs",
 
     # Options
     "devilution::GameTicksPerStep",
@@ -34,10 +40,14 @@ DEVILUTIONX_VARS = [
     # Items
 
     "devilution::ActiveItemCount",
+    "devilution::ActiveItems",
+    "devilution::Items",
     "devilution::dItem",
 
     # Gendung
 
+    "devilution::currlevel",
+    "devilution::setlvlnum",
     "devilution::dFlags",
     "devilution::dMonster",
     "devilution::dObject",
