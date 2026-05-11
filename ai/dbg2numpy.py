@@ -185,7 +185,15 @@ def lookup_dependent_types(type_infos_dict):
         types_to_resolve = new_types_to_resolve
 
     # Do topological sort to ensure correct types dependency
-    sorted_type_names = graph.static_order()
+    sorted_type_names = list(graph.static_order())
+
+    # Types used directly as variable types (e.g. bare enums) are in type_infos_dict
+    # but never added to the graph because type_may_depend() excludes them. Append them
+    # so generate_numpy_type() emits their definitions before the VARS list references them.
+    sorted_set = set(sorted_type_names)
+    for name in type_infos_dict:
+        if name not in sorted_set:
+            sorted_type_names.append(name)
 
     return sorted_type_names, type_infos_dict
 
@@ -515,6 +523,16 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
         name = type_name_to_numpy_primitive(typename, structured_primitive=True)
         if name:
             return name
+        # Enums cannot be used as numpy dtypes; map to their underlying integer type.
+        ti = type_infos_dict.get(typename)
+        if ti and ti['class'] == 'enum':
+            signed = ti.get('is_signed', True)
+            size_map = {1: ('np.int8',  'np.uint8'),
+                        2: ('np.int16', 'np.uint16'),
+                        4: ('np.int32', 'np.uint32'),
+                        8: ('np.int64', 'np.uint64')}
+            pair = size_map.get(ti['sizeof'], ('np.int32', 'np.uint32'))
+            return pair[0] if signed else pair[1]
         return strip_namespaces(typename)
 
     # Represent the class name without quotes so that it becomes a
