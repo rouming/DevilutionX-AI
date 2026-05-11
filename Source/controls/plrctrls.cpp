@@ -533,6 +533,9 @@ void Interact()
 
 	if (pcursmonst != -1) {
 		if (!myPlayer.UsesRangedWeapon() || CanTalkToMonst(Monsters[pcursmonst])) {
+			if (*GetOptions().Gameplay.noMonstersAutoPursuing
+			    && GetMinDistance(Monsters[pcursmonst].position.future) > 1)
+				return;
 			NetSendCmdParam1(true, CMD_ATTACKID, pcursmonst);
 		} else {
 			NetSendCmdParam1(true, CMD_RATTACKID, pcursmonst);
