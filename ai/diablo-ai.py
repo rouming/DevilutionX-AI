@@ -17,6 +17,7 @@ import json
 import os
 import re
 import resource
+import shlex
 import shutil
 import signal
 import subprocess
@@ -43,6 +44,18 @@ def set_rlimits():
     # Set new limits
     new_soft = min(65535, hard)
     resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+
+def parse_dungeon_level(s):
+    """Parse dungeon level as a single int or lo-hi range, e.g. '8' or '1-8'."""
+    if '-' in s:
+        parts = s.split('-', 1)
+        lo, hi = int(parts[0]), int(parts[1])
+    else:
+        lo = hi = int(s)
+    if not (1 <= lo <= hi <= 16):
+        raise argparse.ArgumentTypeError(
+            f"dungeon level must be within 1-16, got {s!r}")
+    return (lo, hi)
 
 def parse_int_with_suffix(value: str) -> int:
     """Parse integer with optional k, M, G suffix or scientific notation."""
@@ -148,6 +161,9 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--seed-base", type=int, default=0,
         help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
+    common_parser.add_argument(
+        "--dungeon-level", type=parse_dungeon_level, default=(1, 1),
+        help="Starting dungeon level or range, e.g. 8 or 1-8 (default: 1)")
 
     #
     # sprout: reuse sprout's parser
@@ -886,6 +902,12 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
         for i, msg in enumerate(msgs):
             _addstr(stdscr, h + i, width // 2 - len(msg) // 2, msg)
 
+def new_game_data(gameconfig, n_counter):
+    seed = diablo_state.make_episode_seed(gameconfig['seed'], 0, n_counter)
+    dungeon_level = diablo_state.sample_dungeon_level(
+        gameconfig.get('dungeon-level', (1, 1)), seed)
+    return (dungeon_level << 1) | 1, seed
+
 def run_tui(stdscr, args, gameconfig):
     global RUNNING
     global LAST_KEY
@@ -899,6 +921,7 @@ def run_tui(stdscr, args, gameconfig):
 
     events = EventsQueue()
     envlog = None
+    n_counter = 0
 
     # Main loop
     while RUNNING:
@@ -914,7 +937,11 @@ def run_tui(stdscr, args, gameconfig):
         if LAST_KEY:
             key = LAST_KEY
             key |= ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
-            game.submit_key(key)
+            data = (0, 0)
+            if LAST_KEY & ring.RingEntryType.RING_ENTRY_KEY_NEW:
+                n_counter += 1
+                data = new_game_data(gameconfig, n_counter)
+            game.submit_key(key, data=data)
             LAST_KEY = 0
 
         # Refresh the screen to show the content
@@ -938,7 +965,11 @@ def prepare_directory_for_run(args, dir_name):
     # just controls model states, so should be skipped.
     skip_keys = ["model", "demos", "cont"]
     run_dir = utils.get_run_dir(dir_name)
-    params_str = " ".join(f"{k}={v}" for k, v in vars(args).items() if k not in skip_keys)
+    # shlex.quote() the value so tuples / strings containing spaces (e.g.
+    # dungeon_level=(1, 16)) round-trip through sprout's shlex-based
+    # parse_params_string without splitting mid-value.
+    params_str = " ".join(f"{k}={shlex.quote(str(v))}"
+                          for k, v in vars(args).items() if k not in skip_keys)
 
     if not os.path.isdir(run_dir):
         # Create model state
@@ -1703,6 +1734,7 @@ def main():
         "game-ticks-per-step": args.game_ticks_per_step,
         "step-mode": not args.real_time,
         "gui": args.gui,
+        "dungeon-level": args.dungeon_level,
 
         # AI
         "log-to-stdout": args.log_to_stdout \

@@ -82,6 +82,24 @@ class DoorState(enum.Enum):
     DOOR_OPEN     = 1
     DOOR_BLOCKED  = 2
 
+def fmix32(h):
+    """MurmurHash3 finalizer: bijective 32-bit mixer with full avalanche."""
+    h &= 0xFFFFFFFF
+    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF
+    return (h ^ (h >> 16)) & 0xFFFFFFFF
+
+def make_episode_seed(base_seed, index, counter):
+    """Deterministic per-episode seed: fmix32(fmix32(base+index) + counter)."""
+    initial = fmix32(base_seed + index)
+    return fmix32(initial + counter)
+
+def sample_dungeon_level(dungeon_level_range, seed):
+    lo, hi = dungeon_level_range
+    if lo == hi:
+        return lo
+    return lo + (seed % (hi - lo + 1))
+
 @njit(cache=True)
 def round_up_int(i, d):
     assert type(i) == int
@@ -821,6 +839,7 @@ class DiabloGame:
 
         cfg = cfg.format(seed=config["seed"],
                          fixed_seed=1 if config["fixed-seed"] else 0,
+                         dungeon_level=config.get("dungeon-level", (1, 1))[0],
                          automap_active=1 if config["gui"] else 0,
                          skip_progress=1 if config["gui"] else 0,
                          skip_animation=0 if config["gui"] else 1,

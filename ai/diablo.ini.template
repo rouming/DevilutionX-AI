@@ -6,8 +6,8 @@ Game=2
 Shareware=0
 
 [StartUp]
-Diablo Intro=1
-Hellfire Intro=1
+Diablo Intro=0
+Hellfire Intro=0
 Splash=0
 
 [Graphics]
@@ -96,7 +96,7 @@ Skip loading screen threshold, ms=0
 Game and player initial seed={seed}
 Fixed seed for game run={fixed_seed}
 Share game state via file={mshared_filename}
-Load player into the level=1
+Load player into the level={dungeon_level}
 Disable all monsters={no_monsters}
 Blind monsters={blind_monsters}
 Skip animation={skip_animation}

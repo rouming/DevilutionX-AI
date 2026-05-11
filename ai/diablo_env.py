@@ -48,11 +48,6 @@ class ActionMask(enum.Enum):
     MASK_WALLS         = 1<<2
     MASK_OTHER_SOLIDS  = 1<<3
 
-def _fmix32(h):
-    """MurmurHash3 finalizer: bijective 32-bit mixer with full avalanche."""
-    h = ((h ^ (h >> 16)) * 0x85ebca6b) & 0xFFFFFFFF
-    h = ((h ^ (h >> 13)) * 0xc2b2ae35) & 0xFFFFFFFF
-    return (h ^ (h >> 16)) & 0xFFFFFFFF
 
 class DiabloEnv(gym.Env):
     MASK_EVERYTHING = (ActionMask.MASK_TRIGGERS.value |
@@ -171,7 +166,7 @@ class DiabloEnv(gym.Env):
         self.config = env_config
         self.game = game
         self.seed = self.config['seed']
-        self.initial_seed = _fmix32((self.seed + self.config['index']) & 0xFFFFFFFF)
+        self.initial_seed = diablo_state.fmix32(self.seed + self.config['index'])
         self.auto_reset_counter = 0
         self.paused = False
         self.view_radius = None
@@ -282,16 +277,15 @@ class DiabloEnv(gym.Env):
         super().reset(seed=seed)
 
         if seed is not None:
-            seed_data = (1, seed)
+            episode_seed = seed
             self.seed = seed
         else:
             # Auto-reset path: hash (initial_seed + counter) via fmix32.
             # Eval resets always supply an explicit seed and never touch
             # auto_reset_counter, so the training RNG sequence is completely
             # isolated from eval resets.
-            auto_seed = _fmix32((self.initial_seed + self.auto_reset_counter) & 0xFFFFFFFF)
-            self.auto_reset_counter = (self.auto_reset_counter + 1) & 0xFFFFFFFF
-            seed_data = (1, auto_seed)
+            episode_seed = diablo_state.fmix32(self.initial_seed + self.auto_reset_counter)
+            self.auto_reset_counter += 1
 
         if seed is not None or self.config.get("fixed-seed", False):
             self.resets_cnt = 0
@@ -306,10 +300,16 @@ class DiabloEnv(gym.Env):
             # Resume first
             self.pause_game(False)
 
+        dungeon_level = diablo_state.sample_dungeon_level(
+            self.config.get('dungeon-level', (1, 1)), episode_seed)
+
         if seed is not None:
-            print(f"RESET seed={seed}", file=self.log)
+            print(f"RESET seed={episode_seed} dungeon_level={dungeon_level}", file=self.log)
         else:
-            print(f"RESET auto_seed={auto_seed:08x}", file=self.log)
+            print(f"RESET auto_seed={episode_seed:08x} dungeon_level={dungeon_level}", file=self.log)
+
+        # Bits 0: seed present; bits 5:1: dungeon level for stat injection.
+        seed_data = ((dungeon_level << 1) | 1, episode_seed)
 
         # Start new game
         key = ring.RingEntryType.RING_ENTRY_KEY_NEW | \
