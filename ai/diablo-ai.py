@@ -29,7 +29,7 @@ import sprout
 from rl import utils
 from rl.constants import KL_GOOD_HI, CLIP_FRAC_GOOD_HI, GRAD_NORM_GOOD_HI
 
-VERSION='Diablo AI Tool v1.6'
+VERSION='Diablo AI Tool v2.0'
 
 def set_sighandlers():
     # Silently terminate on Ctrl-C
