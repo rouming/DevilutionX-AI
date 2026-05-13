@@ -941,6 +941,38 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 
 			continue;
 
+		} else if (bit == RING_ENTRY_KEY_INV_USE_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				bool ok = UseInvItem(static_cast<int>(data1));
+				printf(">> %s: INV_USE_ITEM cii=%u, ok=%d\n", __func__, data1, ok);
+			}
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_INV_MOVE_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				bool ok = InvMoveItem(*MyPlayer, static_cast<int>(data1), static_cast<int>(data2));
+				printf(">> %s: INV_MOVE_ITEM src=%u dst=%u ok=%d\n", __func__, data1, data2, ok);
+			}
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_INV_DROP_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				bool ok = InvDropItem(*MyPlayer, static_cast<int>(data1));
+				printf(">> %s: INV_DROP_ITEM cii=%u ok=%d\n", __func__, data1, ok);
+			}
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_INV_REORGANIZE) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				printf(">> %s: INV_REORGANIZE\n", __func__);
+				ReorganizeInventory(*MyPlayer);
+			}
+			continue;
+
 		} else {
 			// Unknown key
 			continue;

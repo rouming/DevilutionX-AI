@@ -2055,6 +2055,91 @@ Item &GetInventoryItem(Player &player, int location)
 	return player.SpdList[location - INVITEM_BELT_FIRST];
 }
 
+static void PickUpFromSlot(Player &player, int cii)
+{
+	if (cii < INVITEM_INV_FIRST) {
+		RemoveEquipment(player, static_cast<inv_body_loc>(cii), false);
+		CalcPlrInv(player, true);
+	} else if (cii <= INVITEM_INV_LAST) {
+		player.RemoveInvItem(cii - INVITEM_INV_FIRST);
+	} else {
+		player.RemoveSpdBarItem(cii - INVITEM_BELT_FIRST);
+	}
+}
+
+bool InvDropItem(Player &player, int cii)
+{
+	Item &item = GetInventoryItem(player, cii);
+	if (item.isEmpty())
+		return false;
+	if (!FindAdjacentPositionForItem(player.position.future, player._pdir))
+		return false;
+
+	player.HoldItem = item;
+	NewCursor(player.HoldItem);
+	PickUpFromSlot(player, cii);
+	TryDropItem();
+	return true;
+}
+
+bool InvMoveItem(Player &player, int src_cii, int dst_cii)
+{
+	const Item &src = GetInventoryItem(player, src_cii);
+	if (src.isEmpty())
+		return false;
+
+	const bool srcIsInv = src_cii >= INVITEM_INV_FIRST && src_cii <= INVITEM_INV_LAST;
+
+	if (dst_cii < INVITEM_INV_FIRST) {
+		// CanEquip requires the body slot to be empty, so no displacement to handle.
+		if (!CanEquip(player, src, static_cast<inv_body_loc>(dst_cii)))
+			return false;
+	} else if (dst_cii <= INVITEM_INV_LAST) {
+		// If src comes from inventory, removing it frees space >= src size, so placement always succeeds.
+		if (!srcIsInv && !CanFitItemInInventory(player, src))
+			return false;
+	} else {
+		if (!CanBePlacedOnBelt(player, src))
+			return false;
+		// Belt items are always 1x1. If the target slot is occupied and src is not from inventory,
+		// verify inventory has room for the displaced belt item before committing.
+		const int belt_slot = dst_cii - INVITEM_BELT_FIRST;
+		if (!player.SpdList[belt_slot].isEmpty() && !srcIsInv) {
+			if (!CanFitItemInInventory(player, player.SpdList[belt_slot]))
+				return false;
+		}
+	}
+
+	player.HoldItem = src;
+	PickUpFromSlot(player, src_cii);
+
+	if (dst_cii < INVITEM_INV_FIRST) {
+		const auto loc = static_cast<inv_body_loc>(dst_cii);
+		ChangeEquipment(player, loc, player.HoldItem.pop(), &player == MyPlayer);
+		CalcPlrInv(player, true);
+	} else if (dst_cii <= INVITEM_INV_LAST) {
+		AutoPlaceItemInInventory(player, player.HoldItem, true);
+		player.HoldItem.clear();
+		NewCursor(CURSOR_HAND);
+	} else {
+		const int belt_slot = dst_cii - INVITEM_BELT_FIRST;
+		if (!player.SpdList[belt_slot].isEmpty())
+			std::swap(player.SpdList[belt_slot], player.HoldItem);
+		else
+			player.SpdList[belt_slot] = player.HoldItem.pop();
+		if (&player == MyPlayer)
+			NetSendCmdChBeltItem(false, belt_slot);
+		player.CalcScrolls();
+		RedrawComponent(PanelDrawComponent::Belt);
+		if (!player.HoldItem.isEmpty()) {
+			AutoPlaceItemInInventory(player, player.HoldItem, true);
+			player.HoldItem.clear();
+			NewCursor(CURSOR_HAND);
+		}
+	}
+	return true;
+}
+
 bool UseInvItem(int cii)
 {
 	if (IsInspectingPlayer())

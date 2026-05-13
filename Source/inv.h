@@ -240,6 +240,8 @@ void ConsumeStaffCharge(Player &player);
 bool CanUseStaff(Player &player, SpellID spellId);
 Item &GetInventoryItem(Player &player, int location);
 bool UseInvItem(int cii);
+bool InvDropItem(Player &player, int cii);
+bool InvMoveItem(Player &player, int src_cii, int dst_cii);
 void DoTelekinesis();
 int CalculateGold(Player &player);
 
