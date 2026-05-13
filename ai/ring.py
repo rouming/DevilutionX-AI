@@ -60,6 +60,9 @@ class RingEntryType:
     RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18  # data1 = item_slot
     RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19
 
+    # Spell cast: auto-targets via the gamepad QuickCast path on the engine side.
+    RING_ENTRY_KEY_CAST_SPELL      = 1<<20  # data1 = SpellID
+
     # Events
     RING_ENTRY_EVENT_STEP_FINISHED = 1<<30
 
