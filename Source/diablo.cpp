@@ -75,6 +75,7 @@
 #include "pfile.h"
 #include "playerdat.hpp"
 #include "plrmsg.h"
+#include "spells.h"
 #include "qol/chatlog.h"
 #include "qol/floatingnumbers.h"
 #include "qol/itemlabels.h"
@@ -970,6 +971,31 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
 				printf(">> %s: INV_REORGANIZE\n", __func__);
 				ReorganizeInventory(*MyPlayer);
+			}
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_CAST_SPELL) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				SpellID spellID = static_cast<SpellID>(data1);
+				if (!IsValidSpell(spellID)) {
+					printf(">> %s: CAST_SPELL invalid spell=%u\n", __func__, data1);
+				} else {
+					const SpellType spellType = ResolveSpellSource(*MyPlayer, spellID);
+					if (spellType == SpellType::Invalid) {
+						printf(">> %s: CAST_SPELL unavailable spell=%u '%s'\n",
+						       __func__, data1, GetSpellData(spellID).sNameText.c_str());
+					} else {
+						// Same path as gamepad QuickCast: refresh target (falls back
+						// to _pdir for untargeted/wall spells), then validate + cast.
+						UpdateSpellTarget(spellID);
+						CheckPlrSpell(false, spellID, spellType);
+						printf(">> %s: CAST_SPELL spell=%u '%s' type=%u\n",
+						       __func__, data1,
+						       GetSpellData(spellID).sNameText.c_str(),
+						       static_cast<unsigned>(spellType));
+					}
+				}
 			}
 			continue;
 

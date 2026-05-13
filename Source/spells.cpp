@@ -211,6 +211,16 @@ SpellCheckResult CheckSpell(const Player &player, SpellID sn, SpellType st, bool
 	return SpellCheckResult::Success;
 }
 
+SpellType ResolveSpellSource(const Player &player, SpellID spellId)
+{
+	const uint64_t mask = GetSpellBitmask(spellId);
+	if ((player._pAblSpells  & mask) != 0) return SpellType::Skill;
+	if ((player._pMemSpells  & mask) != 0) return SpellType::Spell;
+	if ((player._pISpells    & mask) != 0) return SpellType::Charges;
+	if ((player._pScrlSpells & mask) != 0) return SpellType::Scroll;
+	return SpellType::Invalid;
+}
+
 void CastSpell(Player &player, SpellID spl, WorldTilePosition src, WorldTilePosition dst, int spllvl)
 {
 	Direction dir = player._pdir;

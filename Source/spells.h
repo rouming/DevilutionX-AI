@@ -59,4 +59,14 @@ constexpr uint64_t GetSpellBitmask(SpellID spellId)
 	return 1ULL << (static_cast<int8_t>(spellId) - 1);
 }
 
+/**
+ * @brief Resolve the SpellType the engine should use when casting @p spellId
+ * from @p player's current state, walking the spell-source masks in priority
+ * order: free class ability (Skill) -> learned (Spell) -> staff charge
+ * (Charges) -> scroll in inventory (Scroll). Returns SpellType::Invalid if the
+ * spell is in none of the four masks. Mirrors what gamepad QuickCast does
+ * internally when a human picks a spell from the belt.
+ */
+SpellType ResolveSpellSource(const Player &player, SpellID spellId);
+
 } // namespace devilution
