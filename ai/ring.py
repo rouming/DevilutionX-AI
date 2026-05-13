@@ -54,6 +54,12 @@ class RingEntryType:
     RING_ENTRY_KEY_NOOP     = 1<<12
     RING_ENTRY_KEY_SET_GOAL = 1<<13
 
+    # Inventory operations: item_slot uses inv_item addressing (0-6 body, 7-46 inv, 47-54 belt)
+    RING_ENTRY_KEY_INV_USE_ITEM    = 1<<16  # data1 = item_slot
+    RING_ENTRY_KEY_INV_MOVE_ITEM   = 1<<17  # data1 = src_slot, data2 = dst_slot
+    RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18  # data1 = item_slot
+    RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19
+
     # Events
     RING_ENTRY_EVENT_STEP_FINISHED = 1<<30
 

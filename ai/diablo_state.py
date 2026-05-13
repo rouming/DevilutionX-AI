@@ -45,6 +45,93 @@ import procutils
 import ring
 
 
+def inv_slot(inv_list_index):
+    """Return item slot for InvList[inv_list_index]: INVITEM_INV_FIRST + inv_list_index."""
+    return dx.inv_item.INVITEM_INV_FIRST.value + inv_list_index
+
+def belt_slot(belt_index):
+    """Return item slot for SpdList[belt_index]: INVITEM_BELT_FIRST + belt_index (0-7)."""
+    return dx.inv_item.INVITEM_BELT_FIRST.value + belt_index
+
+def find_inv_item(player, misc_id, spell_id=None):
+    """Return item slot of first matching item in belt then inventory, or -1."""
+    for i in range(8):
+        item = player.SpdList[i]
+        if item._iMiscId == misc_id and (spell_id is None or item._iSpell == spell_id):
+            return belt_slot(i)
+    for i in range(int(player._pNumInv)):
+        item = player.InvList[i]
+        if item._iMiscId == misc_id and (spell_id is None or item._iSpell == spell_id):
+            return inv_slot(i)
+    return -1
+
+# Cap for potion-count observation scalars. Matches the starting-potion
+# injection range so the model sees the full [0, 1] normalised range from
+# episode 1.
+POTION_CAP = 5.0
+
+def count_item(items, misc_id, spell_id=None):
+    """Count items matching misc_id (and optionally _iSpell) in an iterable."""
+    n = 0
+    for item in items:
+        if item._iMiscId == misc_id and (spell_id is None or item._iSpell == spell_id):
+            n += 1
+    return n
+
+@njit(cache=True)
+def player_pot_counts(p):
+    """Walk belt (SpdList[0..7]) and inventory (InvList[0..pNumInv-1]) once
+    each, tallying the 7 potion categories in observation order:
+    small_hp, scroll_heal, full_hp, small_mana, full_mana, rejuv, full_rejuv.
+    Returns a float32 array of length 7, each entry normalised against
+    POTION_CAP and clipped to 1.0."""
+    imisc_heal      = dx.item_misc_id.IMISC_HEAL.value
+    imisc_scroll    = dx.item_misc_id.IMISC_SCROLL.value
+    imisc_fullheal  = dx.item_misc_id.IMISC_FULLHEAL.value
+    imisc_mana      = dx.item_misc_id.IMISC_MANA.value
+    imisc_fullmana  = dx.item_misc_id.IMISC_FULLMANA.value
+    imisc_rejuv     = dx.item_misc_id.IMISC_REJUV.value
+    imisc_fullrejuv = dx.item_misc_id.IMISC_FULLREJUV.value
+    spellid_healing = dx.SpellID.Healing.value
+
+    counts = np.zeros(7, dtype=np.int32)
+
+    for k in range(8):
+        it = p.SpdList[k]
+        misc = it._iMiscId
+        if   misc == imisc_heal:       counts[0] += 1
+        elif misc == imisc_scroll and it._iSpell == spellid_healing: counts[1] += 1
+        elif misc == imisc_fullheal:   counts[2] += 1
+        elif misc == imisc_mana:       counts[3] += 1
+        elif misc == imisc_fullmana:   counts[4] += 1
+        elif misc == imisc_rejuv:      counts[5] += 1
+        elif misc == imisc_fullrejuv:  counts[6] += 1
+
+    for k in range(p._pNumInv):
+        it = p.InvList[k]
+        misc = it._iMiscId
+        if   misc == imisc_heal:       counts[0] += 1
+        elif misc == imisc_scroll and it._iSpell == spellid_healing: counts[1] += 1
+        elif misc == imisc_fullheal:   counts[2] += 1
+        elif misc == imisc_mana:       counts[3] += 1
+        elif misc == imisc_fullmana:   counts[4] += 1
+        elif misc == imisc_rejuv:      counts[5] += 1
+        elif misc == imisc_fullrejuv:  counts[6] += 1
+
+    cap = POTION_CAP
+    out = np.empty(7, dtype=np.float32)
+    for i in range(7):
+        c = counts[i]
+        out[i] = (c if c < cap else cap) / cap
+    return out
+
+def get_pot_counts(d):
+    """Public wrapper -- returns the 7 normalised potion counts as a plain
+    Python list (for diablo-ai.py / TUI code that expects list semantics).
+    Delegates to player_pot_counts(d.player) under @njit for the actual work."""
+    return list(player_pot_counts(d.player))
+
+
 # Define a StructRef used in njit. `structref.register` associates the
 # type with the default data model.  This will also install getters
 # and setters to the fields of the StructRef.
@@ -851,6 +938,26 @@ class DiabloGame:
                 if not self.game_ticks_per_step:
                     # We receive only release event
                     break
+
+    def find_restore_item(self, candidates):
+        """Search belt then inventory for the first matching item; return its
+        inv_item slot (cii) or -1 if no candidate is present.
+
+        candidates: iterable of item_misc_id values searched in priority order.
+        IMISC_SCROLL is matched as a healing scroll (SpellID::Healing).
+
+        Pure search -- no ring submission. The caller decides whether to act
+        on the result by submitting INV_USE_ITEM(slot). Keeping this side-
+        effect-free lets ALGO code peek ("would this potion be available?")
+        without committing a tick.
+        """
+        player = self.state.player
+        for misc_id in candidates:
+            spell_id = dx.SpellID.Healing if misc_id == dx.item_misc_id.IMISC_SCROLL else None
+            slot = find_inv_item(player, misc_id, spell_id)
+            if slot >= 0:
+                return slot
+        return -1
 
     @staticmethod
     def run(config):

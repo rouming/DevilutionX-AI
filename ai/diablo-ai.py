@@ -534,6 +534,8 @@ def delayed_import(binary_path):
 RUNNING = True
 LAST_KEY = 0
 SHOW_CHARS = False
+SHOW_INV = False
+INV_CMD = ''
 
 class EventsQueue:
     queue = None
@@ -689,12 +691,166 @@ def list_devilution_processes(binary_path, mshared_filename):
         for i, proc in enumerate(result):
             print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
 
-def handle_keyboard(stdscr):
-    global LAST_KEY, RUNNING, SHOW_CHARS
+def _slot_for_section(section, idx):
+    """Map (section, idx) to inv_item slot, or None if out of range."""
+    if section == 'i':
+        if 0 <= idx < 40:
+            return diablo_state.inv_slot(idx)
+    elif section == 'b':
+        if 0 <= idx < 8:
+            return diablo_state.belt_slot(idx)
+    elif section == 'e':
+        if 0 <= idx <= 6:
+            return idx
+    return None
+
+def _parse_target(buf, player_for_inv_bound=None):
+    """Parse '<section?><digits>' into inv_item slot, or None.
+    If player_for_inv_bound is provided, inventory idx is bounded by _pNumInv (source semantics)."""
+    if not buf:
+        return None
+    if buf[0].isalpha():
+        section, digits = buf[0], buf[1:]
+    else:
+        section, digits = 'i', buf
+    if not digits or not digits.isdigit():
+        return None
+    idx = int(digits)
+    if player_for_inv_bound is not None and section == 'i':
+        if not (0 <= idx < int(player_for_inv_bound._pNumInv)):
+            return None
+    return _slot_for_section(section, idx)
+
+def _split_move(buf):
+    """If buf contains 'm', return (src, dst). Otherwise (None, None)."""
+    if 'm' not in buf:
+        return None, None
+    src, dst = buf.split('m', 1)
+    return src, dst
+
+def _submit_move(game, src_slot, dst_slot):
+    key = (ring.RingEntryType.RING_ENTRY_KEY_INV_MOVE_ITEM |
+           ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS)
+    game.submit_key(key, data=(src_slot, dst_slot))
+
+def _auto_route_dst(game, src_slot):
+    """Pick a destination slot based on the source item, or None if no obvious choice."""
+    p = game.state.player
+    II = dx.inv_item
+    IE = dx.item_equip_type
+    EMPTY = dx.ItemType.None_.value
+
+    # Body or belt source -> any inventory slot (engine auto-places).
+    if src_slot < II.INVITEM_INV_FIRST.value or src_slot > II.INVITEM_INV_LAST.value:
+        return II.INVITEM_INV_FIRST.value
+
+    item = p.InvList[src_slot - II.INVITEM_INV_FIRST.value]
+    iloc = int(item._iLoc)
+
+    # Equipment -> body slot (prefer empty for paired slots).
+    if iloc == IE.ILOC_HELM.value:
+        return II.INVITEM_HEAD.value
+    if iloc == IE.ILOC_ARMOR.value:
+        return II.INVITEM_CHEST.value
+    if iloc == IE.ILOC_AMULET.value:
+        return II.INVITEM_AMULET.value
+    if iloc == IE.ILOC_RING.value:
+        return (II.INVITEM_RING_LEFT.value
+                if int(p.InvBody[II.INVITEM_RING_LEFT.value]._itype) == EMPTY
+                else II.INVITEM_RING_RIGHT.value)
+    if iloc in (IE.ILOC_ONEHAND.value, IE.ILOC_TWOHAND.value):
+        return (II.INVITEM_HAND_LEFT.value
+                if int(p.InvBody[II.INVITEM_HAND_LEFT.value]._itype) == EMPTY
+                else II.INVITEM_HAND_RIGHT.value)
+
+    # Non-equipment (potions/scrolls) -> first empty belt slot.
+    for i in range(8):
+        if int(p.SpdList[i]._itype) == EMPTY:
+            return II.INVITEM_BELT_FIRST.value + i
+    return II.INVITEM_BELT_FIRST.value
+
+def _handle_inv_key(game, k):
+    global INV_CMD, SHOW_INV
+
+    if k == 27:  # Esc: clear buffer and close window
+        INV_CMD = ''
+        SHOW_INV = False
+        return
+
+    if k in (curses.KEY_BACKSPACE, 127, 8):
+        INV_CMD = INV_CMD[:-1]
+        return
+
+    if k < 0 or k > 127:
+        return
+    ch = chr(k)
+
+    src_part, dst_part = _split_move(INV_CMD)
+    in_move = src_part is not None
+
+    if ch.isdigit():
+        INV_CMD += ch
+        # Auto-execute move once dst has section + first digit. All dst
+        # indices are effectively single-digit (belt 0-7, body 0-6, and
+        # inv ignores the specific index since engine auto-places).
+        if in_move and dst_part and len(dst_part) >= 1 and dst_part[0].isalpha():
+            src_slot = _parse_target(src_part, game.state.player)
+            dst_slot = _parse_target(INV_CMD.split('m', 1)[1])
+            if src_slot is not None and dst_slot is not None:
+                _submit_move(game, src_slot, dst_slot)
+            INV_CMD = ''
+    elif ch in 'ibe':
+        if not in_move:
+            # Source section letter (only at start, no digits yet).
+            if not INV_CMD or (len(INV_CMD) == 1 and INV_CMD[0].isalpha()):
+                INV_CMD = ch
+        else:
+            # Destination section letter.
+            if not dst_part:
+                INV_CMD += ch
+            elif len(dst_part) == 1 and dst_part.isalpha():
+                INV_CMD = src_part + 'm' + ch
+            # else: dst has digits already, ignore (use Backspace to change)
+    elif ch == 'm':
+        if not in_move:
+            # Enter move state if source is parseable.
+            if _parse_target(INV_CMD, game.state.player) is not None:
+                INV_CMD += 'm'
+        elif not dst_part:
+            # Second 'm' with no dst specified -> auto-route based on src item.
+            src_slot = _parse_target(src_part, game.state.player)
+            if src_slot is not None:
+                dst_slot = _auto_route_dst(game, src_slot)
+                if dst_slot is not None:
+                    _submit_move(game, src_slot, dst_slot)
+            INV_CMD = ''
+        # else: dst already started, ignore extra m
+    elif ch == 'r':
+        key = (ring.RingEntryType.RING_ENTRY_KEY_INV_REORGANIZE |
+               ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS)
+        game.submit_key(key)
+        INV_CMD = ''
+    elif ch in 'du':
+        if not in_move:
+            slot = _parse_target(INV_CMD, game.state.player)
+            if slot is not None:
+                key_type = (ring.RingEntryType.RING_ENTRY_KEY_INV_DROP_ITEM if ch == 'd'
+                            else ring.RingEntryType.RING_ENTRY_KEY_INV_USE_ITEM)
+                key = key_type | ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
+                game.submit_key(key, data=(slot, 0))
+            INV_CMD = ''
+
+def handle_keyboard(stdscr, game):
+    global LAST_KEY, RUNNING, SHOW_CHARS, SHOW_INV
 
     k = stdscr.getch()
     if k == -1:
         return False
+
+    # Modal: when inventory window is open, all keys feed the inv parser.
+    if SHOW_INV:
+        _handle_inv_key(game, k)
+        return True
 
     key = 0
 
@@ -724,6 +880,8 @@ def handle_keyboard(stdscr):
         key = ring.RingEntryType.RING_ENTRY_KEY_PAUSE
     elif k == ord('c'):
         SHOW_CHARS = not SHOW_CHARS
+    elif k == ord('i'):
+        SHOW_INV = not SHOW_INV
     elif k == ord('q'):
         RUNNING = False  # Stop the main loop
 
@@ -967,6 +1125,119 @@ def display_chars_window(d, stdscr):
     if y + h - 1 < scr_h:
         _addstr(stdscr, y + h - 1, x, bot)
 
+INV_BODY_LABELS = ["Head", "L.Ring", "R.Ring", "Amul", "L.Hand", "R.Hand", "Chest"]
+INV_SECTION_NAMES = {'i': 'inventory', 'b': 'belt', 'e': 'equipment'}
+
+def _item_name(item):
+    # Item::clear() only resets _itype to None; _iName and other fields stay stale.
+    if int(item._itype) == dx.ItemType.None_.value:
+        return ''
+    return ''.join(chr(c) for c in item._iName if c)
+
+def _describe_inv_src(buf):
+    if not buf:
+        return "?"
+    if buf[0].isalpha():
+        section_name = INV_SECTION_NAMES.get(buf[0], '?')
+        digits = buf[1:]
+        return f"{section_name} {digits}" if digits else section_name
+    return f"inventory {buf}"
+
+def _inv_prompt():
+    buf = INV_CMD
+    if not buf:
+        return "Choose section: i=inv  b=belt  e=equip  (or digit for inv)"
+    src, dst = _split_move(buf)
+    if src is not None:
+        src_desc = _describe_inv_src(src)
+        if not dst:
+            return f"Move {src_desc} -> m=auto, or section: i=inv  b=belt  e=equip"
+        if len(dst) == 1 and dst.isalpha():
+            return f"Move {src_desc} -> {INV_SECTION_NAMES[dst]} - choose dst index"
+        return f"Move {src_desc} -> {_describe_inv_src(dst)}"
+    if len(buf) == 1 and buf[0].isalpha():
+        return f"Section: {INV_SECTION_NAMES[buf]} - choose item index"
+    return f"{_describe_inv_src(buf).capitalize()} - action: d=drop  u=use  m=move"
+
+def display_inventory_window(d, stdscr):
+    p = d.player
+
+    body_lines = ["Body:"]
+    for i, label in enumerate(INV_BODY_LABELS):
+        name = _item_name(p.InvBody[i]) or "-"
+        body_lines.append(f"  {i} {label:7}: {name}")
+
+    grid_chars = [['.' for _ in range(10)] for _ in range(4)]
+    legend = {}
+    for y in range(4):
+        for x in range(10):
+            cell = int(p.InvGrid[y * 10 + x])
+            if cell == 0:
+                continue
+            inv_idx = abs(cell) - 1
+            name = _item_name(p.InvList[inv_idx])
+            letter = name[0] if name else '?'
+            grid_chars[y][x] = letter
+            if inv_idx not in legend:
+                legend[inv_idx] = (name, letter)
+
+    grid_lines = ["Inventory:"]
+    grid_lines.append("  ┌" + "─" * 10 + "┐")
+    for row in grid_chars:
+        grid_lines.append("  │" + "".join(row) + "│")
+    grid_lines.append("  └" + "─" * 10 + "┘")
+
+    legend_lines = ["Items:"]
+    for idx in sorted(legend):
+        name, letter = legend[idx]
+        legend_lines.append(f"  {idx:2d} [{letter}]: {name}")
+
+    left_width = max(len(l) for l in grid_lines)
+    rows = max(len(grid_lines), len(legend_lines))
+    middle_lines = []
+    for i in range(rows):
+        left = grid_lines[i] if i < len(grid_lines) else ""
+        right = legend_lines[i] if i < len(legend_lines) else ""
+        middle_lines.append(left.ljust(left_width) + "   " + right)
+
+    belt_parts = []
+    for i in range(8):
+        name = _item_name(p.SpdList[i])
+        bch = name[0] if name else '.'
+        belt_parts.append(f"{i}:{bch}")
+    belt_line = "Belt: [" + "][".join(belt_parts) + "]"
+
+    free_cells = int(np.count_nonzero(np.asarray(p.InvGrid) == 0))
+    stats_line = f"Gold: {int(p._pGold)}  Free cells: {free_cells}/40"
+
+    # Pad bottom lines to a stable width so the window doesn't resize as the
+    # user types and the prompt text changes length.
+    INV_FOOTER_W = 65
+    prompt_line  = ("> " + _inv_prompt()).ljust(INV_FOOTER_W)
+    cmd_line     = ("  " + INV_CMD + "_").ljust(INV_FOOTER_W)
+    globals_line = "  (r=reorganize  Esc=close  Backspace=undo)".ljust(INV_FOOTER_W)
+
+    lines = (body_lines + [""] + middle_lines + [""] + [belt_line] +
+             [""] + [stats_line] + [""] + [prompt_line, cmd_line, globals_line])
+
+    w = max(len(l) for l in lines) + 2
+    h = len(lines) + 2
+    scr_h, scr_w = stdscr.getmaxyx()
+    y = max(0, scr_h // 2 - h // 2)
+    x = max(0, scr_w // 2 - w // 2)
+
+    for i, line in enumerate(lines):
+        row = y + 1 + i
+        if row >= scr_h:
+            break
+        padded = line.ljust(w)
+        _addstr(stdscr, row, x, '│' + padded + '│')
+    top = '┌' + '─' * w + '┐'
+    bot = '└' + '─' * w + '┘'
+    _addstr(stdscr, y, x, top)
+    if y + h - 1 < scr_h:
+        _addstr(stdscr, y + h - 1, x, bot)
+
 def display_dungeon(d, stdscr, view_radius, goal_pos):
     height, width = stdscr.getmaxyx()
     dunwin = stdscr.subwin(height - (4 + 1), width, 4, 0)
@@ -1024,7 +1295,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 2, width // 2 - len(msg) // 2, msg)
 
-    msg = "Press 'q' quit  'c' chars  'y' cast spell"
+    msg = "'q' quit │ 'c' chars │ 'i' inv │ 'y' cast spell"
     _addstr(stdscr, height - 1, width // 2 - len(msg) // 2, msg)
 
     display_dungeon(d, stdscr, view_radius, game.goal_pos)
@@ -1032,6 +1303,9 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     if SHOW_CHARS:
         display_chars_window(d, stdscr)
+
+    if SHOW_INV:
+        display_inventory_window(d, stdscr)
 
     if diablo_state.is_game_paused(d):
         msgs = ["            ",
@@ -1059,6 +1333,8 @@ def run_tui(stdscr, args, gameconfig):
     # Disable cursor and enable keypad input
     curses.curs_set(0)
     stdscr.nodelay(True)
+    # Reduce Esc delay (default ~1000ms waits for escape sequences).
+    curses.set_escdelay(25)
 
     events = EventsQueue()
     envlog = None
@@ -1089,7 +1365,7 @@ def run_tui(stdscr, args, gameconfig):
         stdscr.refresh()
 
         # Handle keys
-        while handle_keyboard(stdscr):
+        while handle_keyboard(stdscr, game):
             pass
 
         game.update_ticks()
