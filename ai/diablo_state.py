@@ -524,7 +524,13 @@ def get_environment(d, radius=None, goal_pos=None,
                     s |= EnvironmentFlag.Goal.value
                 if d.dFlags[spos] & dx.DungeonFlag.Missile.value:
                     s |= EnvironmentFlag.Missile.value
-                if d.dMonster[spos] > 0:
+                # dMonster keeps the monster id during the death animation;
+                # the engine only zeroes it in MonsterDeath() at isLastFrame().
+                # Filter on hitPoints > 0 so a dead-but-animating monster does
+                # not leave a stale '@' on the grid, matching what
+                # nearest_monster_info reports.
+                mid = d.dMonster[spos]
+                if mid > 0 and d.Monsters[mid - 1].hitPoints > 0:
                     s |= EnvironmentFlag.Monster.value
 
                 if obj is not None:
