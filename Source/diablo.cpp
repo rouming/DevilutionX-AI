@@ -1033,6 +1033,12 @@ static bool receive_and_inject_input(bool receive_new,
 {
 	static bool should_release_keys;
 	static uint32_t keys_state;
+	// Carry data1/data2 from a single-tick input across to the deferred
+	// release event so external observers (TUI debug overlay, replay tools)
+	// can see which slot / spell id was acted on. Movement-style events
+	// leave these zero -- the released_keys mask carries all the info there.
+	static uint32_t pending_data1;
+	static uint32_t pending_data2;
 
 	struct ring_entry *entry;
 	uint32_t released_keys = 0;
@@ -1056,8 +1062,12 @@ static bool receive_and_inject_input(bool receive_new,
 		should_release_keys = (keys & RING_ENTRY_F_SINGLE_TICK_PRESS);
 		keys &= ~RING_ENTRY_FLAGS;
 
-		if (!should_release_keys)
+		if (should_release_keys) {
+			pending_data1 = data1;
+			pending_data2 = data2;
+		} else {
 			released_keys = (keys_state ^ keys) & ~keys;
+		}
 
 		injected = inject_sdl_events(&keys_state, keys, data1, data2);
 		if (injected && request_tag)
@@ -1070,7 +1080,11 @@ static bool receive_and_inject_input(bool receive_new,
 		entry = ring_queue_get_entry_to_submit(&shared::events_queue);
 		entry->en_type = released_keys;
 		entry->en_tag = request_tag ? *request_tag : 0;
+		entry->en_data1 = pending_data1;
+		entry->en_data2 = pending_data2;
 		ring_queue_submit(&shared::events_queue);
+		pending_data1 = 0;
+		pending_data2 = 0;
 	}
 
 	return injected;
