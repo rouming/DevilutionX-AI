@@ -1134,6 +1134,31 @@ def _item_name(item):
         return ''
     return ''.join(chr(c) for c in item._iName if c)
 
+def _item_glyph(item):
+    """Return a 2-character glyph for the item, or '..' if empty.
+
+    Potions and the healing scroll all share '_iName' starting with 'P' or 'S',
+    so a first-letter glyph collapses them to a single 'P' or 'S' and loses
+    differentiation. Use the misc-id-aware mapping below for those, fall back
+    to the first 2 chars of _iName for everything else (weapons, armor, etc.).
+    Lowercase first letter = regular potion, uppercase = Full variant.
+    """
+    if int(item._itype) == dx.ItemType.None_.value:
+        return '..'
+    name = _item_name(item)
+    is_full = 'Full' in name
+    if 'Healing' in name:
+        if 'Scroll' in name:
+            return 'sh'
+        return 'Hp' if is_full else 'hp'
+    if 'Mana' in name:
+        return 'Mp' if is_full else 'mp'
+    if 'Rejuv' in name:
+        return 'Rj' if is_full else 'rj'
+    if len(name) >= 2:
+        return name[:2]
+    return (name + '?')[:2]
+
 def _describe_inv_src(buf):
     if not buf:
         return "?"
@@ -1167,7 +1192,11 @@ def display_inventory_window(d, stdscr):
         name = _item_name(p.InvBody[i]) or "-"
         body_lines.append(f"  {i} {label:7}: {name}")
 
-    grid_chars = [['.' for _ in range(10)] for _ in range(4)]
+    # Each grid cell is 2 chars wide so glyphs like 'hp', 'Hp', 'sh' fit.
+    # Multi-cell items repeat the same glyph in every cell they occupy, as
+    # before - the InvGrid encoding gives the same InvList_index for all of
+    # them. 10 cols * 2 chars = 20-char grid interior.
+    grid_chars = [['..' for _ in range(10)] for _ in range(4)]
     legend = {}
     for y in range(4):
         for x in range(10):
@@ -1175,22 +1204,22 @@ def display_inventory_window(d, stdscr):
             if cell == 0:
                 continue
             inv_idx = abs(cell) - 1
-            name = _item_name(p.InvList[inv_idx])
-            letter = name[0] if name else '?'
-            grid_chars[y][x] = letter
+            item = p.InvList[inv_idx]
+            glyph = _item_glyph(item)
+            grid_chars[y][x] = glyph
             if inv_idx not in legend:
-                legend[inv_idx] = (name, letter)
+                legend[inv_idx] = (_item_name(item), glyph)
 
     grid_lines = ["Inventory:"]
-    grid_lines.append("  ┌" + "─" * 10 + "┐")
+    grid_lines.append("  ┌" + "─" * 20 + "┐")
     for row in grid_chars:
         grid_lines.append("  │" + "".join(row) + "│")
-    grid_lines.append("  └" + "─" * 10 + "┘")
+    grid_lines.append("  └" + "─" * 20 + "┘")
 
     legend_lines = ["Items:"]
     for idx in sorted(legend):
-        name, letter = legend[idx]
-        legend_lines.append(f"  {idx:2d} [{letter}]: {name}")
+        name, glyph = legend[idx]
+        legend_lines.append(f"  {idx:2d} [{glyph}]: {name}")
 
     left_width = max(len(l) for l in grid_lines)
     rows = max(len(grid_lines), len(legend_lines))
@@ -1202,9 +1231,7 @@ def display_inventory_window(d, stdscr):
 
     belt_parts = []
     for i in range(8):
-        name = _item_name(p.SpdList[i])
-        bch = name[0] if name else '.'
-        belt_parts.append(f"{i}:{bch}")
+        belt_parts.append(f"{i}:{_item_glyph(p.SpdList[i])}")
     belt_line = "Belt: [" + "][".join(belt_parts) + "]"
 
     free_cells = int(np.count_nonzero(np.asarray(p.InvGrid) == 0))
