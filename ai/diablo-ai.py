@@ -905,8 +905,11 @@ def get_radius(d, dunwin):
 
 def get_events_as_string(game, events):
     advance_progress = False
+    RE = ring.RingEntryType
     while (event := game.retrieve_event()) is not None:
         keys = event.en_type
+        data1 = int(event.en_data1)
+        data2 = int(event.en_data2)
         k = None
 
         if keys == 0:
@@ -956,6 +959,26 @@ def get_events_as_string(game, events):
             k = "L"
         elif keys == (ring.RingEntryType.RING_ENTRY_KEY_PAUSE):
             k = "P"
+        elif keys == RE.RING_ENTRY_KEY_NOOP:
+            # Explicit NOOP - same glyph as Stand
+            k = "◦"
+        elif keys == RE.RING_ENTRY_KEY_SET_GOAL:
+            # data1=x, data2=y target tile
+            k = f"g{data1},{data2}"
+        elif keys == RE.RING_ENTRY_KEY_INV_USE_ITEM:
+            # data1=cii: 0-6 body, 7-46 inv, 47-54 belt
+            k = f"u{data1}"
+        elif keys == RE.RING_ENTRY_KEY_INV_MOVE_ITEM:
+            # data1=src_cii, data2=dst_cii; "→" rightwards arrow
+            k = f"m{data1}→{data2}"
+        elif keys == RE.RING_ENTRY_KEY_INV_DROP_ITEM:
+            # data1=cii
+            k = f"d{data1}"
+        elif keys == RE.RING_ENTRY_KEY_INV_REORGANIZE:
+            k = "R"
+        elif keys == RE.RING_ENTRY_KEY_CAST_SPELL:
+            # data1=SpellID (numeric)
+            k = f"~{data1}"
 
         if k is not None:
             events.queue.append(k)
