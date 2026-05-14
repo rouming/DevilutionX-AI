@@ -3729,6 +3729,13 @@ void SpawnTheodore(Point position, bool sendmsg)
 void RespawnItem(Item &item, bool flipFlag)
 {
 	int it = ItemCAnimTbl[item._iCurs];
+	// Gameplay.skipAnimation already collapses walk animations to the last
+	// frame for AI training. Extend it to the drop animation: jump straight
+	// to the settled state so the item is selectable (selectionRegion =
+	// Bottom) the same tick it lands, instead of waiting ~10 frames for the
+	// bounce to finish.
+	if (*GetOptions().Gameplay.skipAnimation)
+		flipFlag = false;
 	item.setNewAnimation(flipFlag);
 	item._iRequest = false; // Item isn't being picked up by a player
 
