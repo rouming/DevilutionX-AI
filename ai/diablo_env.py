@@ -191,24 +191,10 @@ class DiabloEnv(gym.Env):
         self.reset(seed=self.seed)
 
         d = self.game.safe_state
-        env_status = self.get_env_status(d)
         env = diablo_state.get_environment(d, radius=self.view_radius)
 
-        self.action_space = gym.spaces.Discrete(len(ActionEnum))
-
-        env_space = gym.spaces.Box(low=0,
-                                   high=(1 << self.nr_env_channels) - 1,
-                                   shape=env.shape,
-                                   dtype=np.uint32)
-        env_status_space = gym.spaces.Box(low=0,
-                                          high=0xfffff,
-                                          shape=env_status.shape,
-                                          dtype=np.uint32)
-
-        self.observation_space = gym.spaces.Dict({
-            "env": env_space,
-            "env-status": env_status_space,
-        })
+        self.action_space = gym.spaces.Discrete(self.num_actions)
+        self.observation_space = self._build_observation_space(d, env)
 
 
     @property
@@ -216,6 +202,80 @@ class DiabloEnv(gym.Env):
         # Explicit Goal channel for v1
         EnvFlag = diablo_state.EnvironmentFlag
         return list(EnvFlag).index(EnvFlag.Goal) + 1
+
+    @property
+    def num_actions(self):
+        """Width of the action head. Old env classes (FindNextLevel, FindRandomGoal,
+        ClearTheLevel, their HRL twins) use the original 8 movement + Stand +
+        PrimaryAction + SecondaryAction set. Future env classes that add restore /
+        spell actions override this to extend the head."""
+        return ActionEnum.SecondaryAction.value + 1
+
+    @property
+    def obs_includes_old_status(self):
+        """Old broadcast-plane status (monsters_cnt, hp, mode, player_x, player_y)
+        concatenated as five constant H x W planes in the rl preprocessor.
+        Pre-existing models depend on this being present and 5-wide."""
+        return True
+
+    @property
+    def obs_includes_monster_attrs(self):
+        """Per-tile monster attribute grid (W, H, 9) -- new env classes only."""
+        return False
+
+    @property
+    def obs_includes_scalars(self):
+        """Flat scalar vector concatenated after the CNN embedding before the
+        LSTM -- new env classes only."""
+        return False
+
+    def _get_monster_attrs(self, d):
+        """Per-tile monster attribute grid. Default returns None; new env classes
+        that set obs_includes_monster_attrs override this."""
+        return None
+
+    def _get_scalars(self, d):
+        """Flat scalar vector (hp, mana, potion counts, etc.). Default returns
+        None; new env classes that set obs_includes_scalars override this."""
+        return None
+
+    def _build_observation_space(self, d, env):
+        """Assemble the gym observation_space dict from the obs_includes_* flags.
+        Computes sample arrays once at init to derive shapes."""
+        spaces = {
+            "env": gym.spaces.Box(low=0,
+                                  high=(1 << self.nr_env_channels) - 1,
+                                  shape=env.shape,
+                                  dtype=np.uint32),
+        }
+        if self.obs_includes_old_status:
+            env_status = self.get_env_status(d)
+            spaces["env-status"] = gym.spaces.Box(low=0, high=0xfffff,
+                                                  shape=env_status.shape,
+                                                  dtype=np.uint32)
+        if self.obs_includes_monster_attrs:
+            ma = self._get_monster_attrs(d)
+            spaces["monster_attrs"] = gym.spaces.Box(low=0.0, high=1.0,
+                                                     shape=ma.shape,
+                                                     dtype=np.float32)
+        if self.obs_includes_scalars:
+            sc = self._get_scalars(d)
+            spaces["scalars"] = gym.spaces.Box(low=0.0, high=1.0,
+                                                shape=sc.shape,
+                                                dtype=np.float32)
+        return gym.spaces.Dict(spaces)
+
+    def _build_obs(self, d, env):
+        """Assemble the per-step / per-reset observation dict using the same
+        include flags. Old env classes get exactly the original two-key dict."""
+        obss = {"env": env}
+        if self.obs_includes_old_status:
+            obss["env-status"] = self.get_env_status(d)
+        if self.obs_includes_monster_attrs:
+            obss["monster_attrs"] = self._get_monster_attrs(d)
+        if self.obs_includes_scalars:
+            obss["scalars"] = self._get_scalars(d)
+        return obss
 
     def pause_game(self, pause=True):
         if self.paused != pause:
@@ -321,7 +381,6 @@ class DiabloEnv(gym.Env):
         # First init all goal related members
         self.init_goal(d)
 
-        env_status = self.get_env_status(d)
         # Keep compatibility with old environments
         goal_pos = None
         if self.used_goal:
@@ -362,7 +421,7 @@ class DiabloEnv(gym.Env):
         # Starting dungeon level
         self.start_dungeon_level = d.player.plrlevel
 
-        obss = {"env": env, "env-status": env_status}
+        obss = self._build_obs(d, env)
         info = {"env-counters": (self.resets_cnt, self.steps_cnt)}
         return obss, info
 
@@ -624,7 +683,6 @@ class DiabloEnv(gym.Env):
         if self.hist_player_pos[0] != pos:
             self.hist_player_pos.appendleft(pos)
 
-        env_status = self.get_env_status(d)
         # Keep compatibility with old environments
         goal_pos = self.goal_pos if self.used_goal is not None else None
         env = diablo_state.get_environment(d, radius=self.view_radius,
@@ -636,7 +694,7 @@ class DiabloEnv(gym.Env):
         if done:
             print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
 
-        obss = {"env": env, "env-status": env_status}
+        obss = self._build_obs(d, env)
         info = {"hierarchy/opt-changed": self._opt_changed(action),
                 "hierarchy/reward": rewards,
                 "env-counters": (self.resets_cnt, self.steps_cnt),
