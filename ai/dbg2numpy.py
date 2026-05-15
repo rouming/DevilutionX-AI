@@ -197,7 +197,7 @@ def lookup_dependent_types(type_infos_dict):
 
     return sorted_type_names, type_infos_dict
 
-def lookup_variables_names(names):
+def lookup_variables_names(names, types_names=None):
     seen = set()
     # Ensure names unique while preserving the order
     names = [n.strip() for n in names if not (n in seen or seen.add(n))]
@@ -215,6 +215,18 @@ def lookup_variables_names(names):
         })
         if type_name not in type_infos_dict:
             type_infos_dict[type_name] = get_type_info(v.type, 0)
+
+    # Explicit type names -- typically bitflag enums whose values are
+    # referenced as bare constants but never appear as a struct field type,
+    # so the dependency walker below would not discover them.
+    if types_names:
+        seen_types = set()
+        extras = [n.strip() for n in types_names if not (n in seen_types or seen_types.add(n))]
+        for type_name in extras:
+            t = gdb.lookup_type(type_name)
+            tn = str(t)
+            if tn not in type_infos_dict:
+                type_infos_dict[tn] = get_type_info(t, 0)
 
     sorted_type_names, type_infos_dict = lookup_dependent_types(type_infos_dict)
 
@@ -502,7 +514,7 @@ def validate_generated_env(env, type_infos_dict):
             # Why? See the comment above.
             # assert gdb_field['type']['sizeof'] == np_field_size
 
-def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
+def generate_types_and_variables(sorted_type_names, type_infos_dict, variables, types_names=None):
     content = []
     for n in sorted_type_names:
         ti = type_infos_dict[n]
@@ -587,6 +599,7 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
     GENERATOR_SHA256 = '{generator_sha256}'
     BINARY_SHA256 = '{binary_sha256}'
     BINARY_PATH = '{binary_path}'
+    TYPES = {repr(list(types_names) if types_names else [])}
     """
     content = \
         [l.strip() for l in top_content.strip().split("\n")] + \
@@ -620,7 +633,7 @@ def generate_types_and_variables(sorted_type_names, type_infos_dict, variables):
 
     return content
 
-def is_module_actual(variables_names, binary_path, module_path):
+def is_module_actual(variables_names, binary_path, module_path, types_names=None):
     try:
         with open(module_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -634,6 +647,8 @@ def is_module_actual(variables_names, binary_path, module_path):
             return None
         if sorted([v['name'] for v in module["VARS"]]) != sorted(variables_names):
             return None
+        if sorted(module.get("TYPES", [])) != sorted(types_names or []):
+            return None
         binary_sha256 = hashlib.sha256(open(binary_path, "rb").read()).hexdigest()
         if module["BINARY_SHA256"] != binary_sha256:
             return None
@@ -642,8 +657,8 @@ def is_module_actual(variables_names, binary_path, module_path):
     except:
         return None
 
-def generate_numpy_module(variables_names, binary_path, module_path=None):
-    if (content := is_module_actual(variables_names, binary_path, module_path)):
+def generate_numpy_module(variables_names, binary_path, module_path=None, types_names=None):
+    if (content := is_module_actual(variables_names, binary_path, module_path, types_names)):
         # Great, nothing to do. Regeneration is not required, thus False
         return content, False
 
@@ -663,8 +678,9 @@ def generate_numpy_module(variables_names, binary_path, module_path=None):
     sys.path.insert(0, '{this_venv_site_packages}')
     import {this_module}
     variables_names = {repr(variables_names)}
-    sorted_type_names, type_infos_dict, variables = {this_module}.lookup_variables_names(variables_names)
-    script = {this_module}.generate_types_and_variables(sorted_type_names, type_infos_dict, variables)
+    types_names = {repr(list(types_names) if types_names else [])}
+    sorted_type_names, type_infos_dict, variables = {this_module}.lookup_variables_names(variables_names, types_names)
+    script = {this_module}.generate_types_and_variables(sorted_type_names, type_infos_dict, variables, types_names)
     print("\\n".join(script))
     """
     script_for_gdb = ";".join([l.strip() for l in script_for_gdb.strip().split("\n")])
