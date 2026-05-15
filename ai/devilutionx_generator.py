@@ -3,6 +3,7 @@ devilutionx_generate.py - Generator of the devilutionx.py module
 """
 import dbg2numpy
 
+# Variables which should be exported
 DEVILUTIONX_VARS = [
     "devilution::shared::input_queue",
     "devilution::shared::events_queue",
@@ -61,9 +62,16 @@ DEVILUTIONX_VARS = [
     "devilution::numtrigs",
 ]
 
+# Types which should be exported
+DEVILUTIONX_TYPES = [
+    "devilution::monster_resistance",
+    "devilution::inv_item",
+]
+
 def generate(binary_path):
     module_path = "devilutionx.py"
     content, regenerate = dbg2numpy.generate_numpy_module(
-        DEVILUTIONX_VARS, binary_path, module_path)
+        DEVILUTIONX_VARS, binary_path, module_path,
+        types_names=DEVILUTIONX_TYPES)
     if regenerate:
         open(module_path, "w").writelines(content)
