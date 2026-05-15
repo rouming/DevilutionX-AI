@@ -33,6 +33,37 @@ def get_obss_preprocessor(obs_space):
                                                                device=device),
             })
 
+    # Check if it is a Diablo v2 observation space (monster_attrs + scalars,
+    # no env-status). The "image" tensor concatenates bit-decoded env flags
+    # and per-tile monster_attrs along the channel axis; "scalars" is a
+    # separate global vector for an MLP head.
+    elif (isinstance(obs_space, gym.spaces.Dict) and
+          {"env", "monster_attrs", "scalars"} <= set(obs_space.spaces)):
+
+        env_space = obs_space.spaces["env"]
+        monster_attrs_space = obs_space.spaces["monster_attrs"]
+        scalars_space = obs_space.spaces["scalars"]
+        nr_env_channels = int(math.log2(env_space.high.max() + 1))
+        nr_monster_channels = monster_attrs_space.shape[-1]
+        nr_channels = nr_env_channels + nr_monster_channels
+        obs_space = {
+            "image":   (*env_space.shape, nr_channels),
+            "scalars": scalars_space.shape,
+        }
+
+        def preprocess_obss(obss, device=None):
+            env = numpy.array([obs["env"] for obs in obss])
+            monster_attrs = numpy.array([obs["monster_attrs"] for obs in obss])
+            scalars = numpy.array([obs["scalars"] for obs in obss])
+            return torch_ac.DictList({
+                "image": batch_dungeon_observations_v2_to_image(env,
+                                                                monster_attrs,
+                                                                nr_env_channels,
+                                                                device=device),
+                "scalars": torch.as_tensor(scalars, dtype=torch.float32,
+                                           device=device),
+            })
+
     # Check if obs_space is an image space
     elif isinstance(obs_space, gym.spaces.Box):
         obs_space = {"image": obs_space.shape}
@@ -90,6 +121,30 @@ def batch_dungeon_observations_to_one_hot(env, env_status,
     # (B, H, W, S)
     env_status_t = env_status_t.expand(-1, env.shape[1], env.shape[2], -1)
     return torch.cat([bit_planes, env_status_t], dim=-1)
+
+
+def batch_dungeon_observations_v2_to_image(env, monster_attrs,
+                                           nr_env_channels,
+                                           device=None):
+    """
+    v2 dungeon image: bit-decode env flags and concatenate with per-tile
+    monster_attrs along the channel axis. Scalars are handled separately
+    by the caller and stay out of this tensor.
+
+    Batch args:
+      env (np.ndarray): (B, W, H) bitfield-encoded environment flags
+      monster_attrs (np.ndarray): (B, W, H, A) float32 monster attributes
+
+    Returns:
+      torch.tensor: (B, W, H, nr_env_channels + A) float32
+    """
+    env_t = torch.as_tensor(env, dtype=torch.int64, device=device)
+    monster_attrs_t = torch.as_tensor(monster_attrs, dtype=torch.float32,
+                                      device=device)
+
+    bit_indices = torch.arange(nr_env_channels, device=device, dtype=torch.int64)
+    bit_planes = ((env_t.unsqueeze(-1) >> bit_indices) & 1).to(torch.float32)
+    return torch.cat([bit_planes, monster_attrs_t], dim=-1)
 
 
 def preprocess_images(images, device=None):
