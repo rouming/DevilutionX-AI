@@ -28,6 +28,8 @@ import maze
 import ring
 
 class ActionEnum(enum.Enum):
+    # Indices are stable; pre-trained models rely on them. Append only.
+    # v1 set: 8 movement + Stand + PrimaryAction + SecondaryAction.
     Walk_N          = 0
     Walk_NE         = enum.auto()
     Walk_E          = enum.auto()
@@ -41,6 +43,44 @@ class ActionEnum(enum.Enum):
     PrimaryAction   = enum.auto()
     # Open chests, interact with doors, pick up items.
     SecondaryAction = enum.auto()
+    # v2 set: 2 restore + 7 cast spells.
+    RestoreHealth   = enum.auto()
+    RestoreMana     = enum.auto()
+    CastFirebolt    = enum.auto()
+    CastChargedBolt = enum.auto()
+    CastFireWall    = enum.auto()
+    CastStoneCurse  = enum.auto()
+    CastManaShield  = enum.auto()
+    CastPhasing     = enum.auto()
+    CastFireball    = enum.auto()
+
+# Priority order for the two restore actions. Searched belt then inventory
+# inside DiabloGame.find_restore_item; smallest-first by convention so the
+# agent does not waste a full-heal when a small_hp would do.
+_RESTORE_HEALTH_CANDIDATES = [
+    dx.item_misc_id.IMISC_HEAL,
+    dx.item_misc_id.IMISC_SCROLL,      # matched as Scroll of Healing
+    dx.item_misc_id.IMISC_FULLHEAL,
+    dx.item_misc_id.IMISC_REJUV,
+    dx.item_misc_id.IMISC_FULLREJUV,
+]
+_RESTORE_MANA_CANDIDATES = [
+    dx.item_misc_id.IMISC_MANA,
+    dx.item_misc_id.IMISC_FULLMANA,
+    dx.item_misc_id.IMISC_REJUV,
+    dx.item_misc_id.IMISC_FULLREJUV,
+]
+
+# ActionEnum -> SpellID for the seven cast actions.
+_ACTION_TO_SPELL = {
+    ActionEnum.CastFirebolt:    dx.SpellID.Firebolt,
+    ActionEnum.CastChargedBolt: dx.SpellID.ChargedBolt,
+    ActionEnum.CastFireWall:    dx.SpellID.FireWall,
+    ActionEnum.CastStoneCurse:  dx.SpellID.StoneCurse,
+    ActionEnum.CastManaShield:  dx.SpellID.ManaShield,
+    ActionEnum.CastPhasing:     dx.SpellID.Phasing,
+    ActionEnum.CastFireball:    dx.SpellID.Fireball,
+}
 
 class ActionMask(enum.Enum):
     MASK_TRIGGERS      = 1<<0
@@ -90,6 +130,20 @@ class DiabloEnv(gym.Env):
                 key = (ring.RingEntryType.RING_ENTRY_KEY_A)
             case ActionEnum.SecondaryAction:
                 key = (ring.RingEntryType.RING_ENTRY_KEY_X)
+            case ActionEnum.RestoreHealth | ActionEnum.RestoreMana:
+                # Dispatched in step() via DiabloGame.find_restore_item.
+                # NOOP is returned as a fallback so static callers (e.g. the
+                # bot, which only emits v1 actions anyway) do not crash if
+                # a v2 action ever leaks through.
+                key = (ring.RingEntryType.RING_ENTRY_KEY_NOOP)
+            case ActionEnum.CastFirebolt | ActionEnum.CastChargedBolt \
+                 | ActionEnum.CastFireWall | ActionEnum.CastStoneCurse \
+                 | ActionEnum.CastManaShield | ActionEnum.CastPhasing \
+                 | ActionEnum.CastFireball:
+                # step() packs SpellID into data1 before submitting; this
+                # branch only returns the key so the fallback above stays
+                # consistent.
+                key = (ring.RingEntryType.RING_ENTRY_KEY_CAST_SPELL)
         return key
 
     # Return neighbours in cardinal CW directions:
@@ -228,6 +282,45 @@ class DiabloEnv(gym.Env):
         """Flat scalar vector concatenated after the CNN embedding before the
         LSTM -- new env classes only."""
         return False
+
+    def _submit_action(self, action):
+        """Translate a discrete action into a (key, data) pair and submit once.
+
+        The dispatch lives in this single helper so every action goes through
+        exactly one submit_key call, and ring-protocol knowledge (key bits,
+        data1/data2 layout) does not leak into find_* helpers in
+        diablo_state.
+
+          - RestoreHealth / RestoreMana: ask DiabloGame.find_restore_item for
+            the best matching slot (pure search). If found, submit
+            INV_USE_ITEM(slot); else fall back to NOOP so the tick still
+            advances (otherwise submit_key would deadlock waiting for the
+            step-finished event).
+          - Cast* actions: submit RING_ENTRY_KEY_CAST_SPELL with the SpellID
+            packed into data1.
+          - All other actions go through action_to_key (movement, Stand,
+            PrimaryAction, SecondaryAction).
+        """
+        RE = ring.RingEntryType
+        data = (0, 0)
+        ae = ActionEnum(int(action))
+        if ae == ActionEnum.RestoreHealth:
+            slot = self.game.find_restore_item(_RESTORE_HEALTH_CANDIDATES)
+            if slot >= 0:
+                key, data = RE.RING_ENTRY_KEY_INV_USE_ITEM, (slot, 0)
+            else:
+                key = RE.RING_ENTRY_KEY_NOOP
+        elif ae == ActionEnum.RestoreMana:
+            slot = self.game.find_restore_item(_RESTORE_MANA_CANDIDATES)
+            if slot >= 0:
+                key, data = RE.RING_ENTRY_KEY_INV_USE_ITEM, (slot, 0)
+            else:
+                key = RE.RING_ENTRY_KEY_NOOP
+        elif (spell := _ACTION_TO_SPELL.get(ae)) is not None:
+            key, data = RE.RING_ENTRY_KEY_CAST_SPELL, (int(spell.value), 0)
+        else:
+            key = DiabloEnv.action_to_key(action)
+        self.game.submit_key(key | RE.RING_ENTRY_F_SINGLE_TICK_PRESS, data=data)
 
     def _get_monster_attrs(self, d):
         """Per-tile monster attribute grid. Default returns None; new env classes
@@ -669,12 +762,11 @@ class DiabloEnv(gym.Env):
         if self.no_actions:
             # We still submit NOOP and synchronize with the diablo
             # instance game ticks
-            key = ring.RingEntryType.RING_ENTRY_KEY_NOOP
+            key = ring.RingEntryType.RING_ENTRY_KEY_NOOP \
+                  | ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
+            self.game.submit_key(key)
         else:
-            key = DiabloEnv.action_to_key(worker_action)
-
-        key |= ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
-        self.game.submit_key(key)
+            self._submit_action(worker_action)
 
         d = self.game.safe_state
 
