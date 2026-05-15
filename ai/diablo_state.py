@@ -361,6 +361,12 @@ def count_active_monsters(d):
     return d.ActiveMonsterCount.value
 
 @njit(cache=True)
+def player_spell_bits(d):
+    """OR of the four spell-source masks. Bit i set iff SpellID(i) is castable."""
+    p = d.player
+    return p._pMemSpells | p._pAblSpells | p._pISpells | p._pScrlSpells
+
+@njit(cache=True)
 def count_active_monsters_total_hp(d):
     total = 0
     for mid in d.ActiveMonsters:
@@ -575,6 +581,251 @@ def get_environment(d, radius=None, goal_pos=None,
             env[dpos] = s
 
     return env
+
+
+@njit(cache=True)
+def compute_monster_attrs(d, view_radius, max_level, max_walk, max_attack,
+                          ranged_ids):
+    """njit compute of the (W, H, 9) monster attribute grid used by the v2
+    observation. Mirrors the Python implementation in DiabloEnvV2Mixin
+    but stays in jit land for the inner loop."""
+    env_rect = EnvRect(d, view_radius)
+    attrs = np.zeros((env_rect.drect.width, env_rect.drect.height, 9),
+                     dtype=np.float32)
+
+    visible_flag = dx.DungeonFlag.Visible.value
+    unique_none  = dx.UniqueMonsterType.None_.value
+    imm_fire     = dx.monster_resistance.IMMUNE_FIRE.value
+    res_fire     = dx.monster_resistance.RESIST_FIRE.value
+    imm_light    = dx.monster_resistance.IMMUNE_LIGHTNING.value
+    res_light    = dx.monster_resistance.RESIST_LIGHTNING.value
+    imm_magic    = dx.monster_resistance.IMMUNE_MAGIC.value
+    res_magic    = dx.monster_resistance.RESIST_MAGIC.value
+
+    for j in range(env_rect.srect.height):
+        for i in range(env_rect.srect.width):
+            sx = env_rect.srect.lt[0] + i
+            sy = env_rect.srect.lt[1] + j
+            if not (d.dFlags[sx, sy] & visible_flag):
+                continue
+            mid = d.dMonster[sx, sy]
+            if mid <= 0:
+                continue
+            m = d.Monsters[mid - 1]
+            if m.hitPoints <= 0:
+                continue
+            ti = d.monster_type_info[m.levelType]
+            r  = m.resistance
+            ox = env_rect.drect.lt[0] + i
+            oy = env_rect.drect.lt[1] + j
+
+            fire_val  = 1.0 if (r & imm_fire)  else (0.5 if (r & res_fire)  else 0.0)
+            light_val = 1.0 if (r & imm_light) else (0.5 if (r & res_light) else 0.0)
+            magic_val = 1.0 if (r & imm_magic) else (0.5 if (r & res_magic) else 0.0)
+
+            ai = m.ai
+            is_ranged = False
+            for k in range(len(ranged_ids)):
+                if ai == ranged_ids[k]:
+                    is_ranged = True
+                    break
+
+            denom = m.maxHitPoints
+            if m.hitPoints > denom:
+                denom = m.hitPoints
+            if denom < 1:
+                denom = 1
+
+            attrs[ox, oy, 0] = m.hitPoints / denom
+            attrs[ox, oy, 1] = ti.level / max_level
+            attrs[ox, oy, 2] = 0.0 if m.uniqueType == unique_none else 1.0
+            attrs[ox, oy, 3] = 1.0 - ti.walk_frames / max_walk
+            attrs[ox, oy, 4] = 1.0 - ti.attack_frames / max_attack
+            attrs[ox, oy, 5] = fire_val
+            attrs[ox, oy, 6] = light_val
+            attrs[ox, oy, 7] = magic_val
+            attrs[ox, oy, 8] = 1.0 if is_ranged else 0.0
+    return attrs
+
+
+@njit(cache=True)
+def compute_scalars(d):
+    """njit compute of the 46-float scalar observation vector used by the
+    v2 observation. Layout (matches DiabloEnvV2Mixin._get_scalars):
+
+    Player progression context:
+        [ 0]      dungeon_level / 16
+        [ 1]      char_level / 50
+
+    Vital state (current resources + facing):
+        [ 2]      hp / max_hp
+        [ 3]      mana / max_mana
+        [ 4]      hero_dir / 8
+
+    Base stats (normalised by class cap, clipped to 1.0):
+        [ 5..8]   strength / magic / dexterity / vitality
+
+    Offense (weapon damage range):
+        [ 9]      weapon_dam_min / max_weapon_dam
+        [10]      weapon_dam_max / max_weapon_dam
+
+    Defense:
+        [11]      armor class: max(0, _pArmorClass) / 127, clipped to 1.0.
+        [12..14]  elemental resists (fire / lightning / magic):
+                  max(0, _pFireResist | _pLghtResist | _pMagResist) /
+                  MaxResistance, clipped to 1.0. Engine caps damage reduction
+                  at MaxResistance (75%), so 1.0 here = full effective
+                  immunity. Negative resist (cursed gear) clamped to 0.
+
+    Active buff:
+        [15]      mana_shield (0/1) -- when on, incoming damage drains mana
+                  instead of HP.
+
+    Inventory consumables:
+        [16..22]  potion counts (small_hp, scroll_heal, full_hp, small_mana,
+                  full_mana, rejuv, full_rejuv), normalised to [0,1] with
+                  cap POTION_CAP.
+
+    Special level type:
+        [23..31]  setlvlnum one-hot (9 entries: SL_NONE .. SL_ARENA_*).
+
+    Spellbook (paired blocks, in ActionEnum Cast* order: Firebolt,
+    ChargedBolt, FireWall, StoneCurse, ManaShield, Phasing, Fireball):
+        [32..38]  spell availability bits (binary 0/1). Set when the spell
+                  appears in any of _pMemSpells | _pAblSpells | _pISpells |
+                  _pScrlSpells (learned + class ability + staff + scroll).
+        [39..45]  spell levels: _pSplLvl[spell_id] / MaxSpellLevel (15). 0
+                  means "not learned by the player" (still castable via
+                  scroll / class ability / staff with their own levels)."""
+    # Normalisation caps. Mirrored from the engine (player.h) where
+    # applicable, so 1.0 here corresponds to the engine-bound maximum.
+    SPELL_LEVEL_CAP   = 15.0   # devilution::MaxSpellLevel (player.h:39)
+    RESIST_CAP        = 75.0   # devilution::MaxResistance (player.h:38)
+    ARMOR_CLASS_CAP   = 127.0  # int8_t positive range; AC is _pArmorClass int8
+    DUNGEON_LEVEL_CAP = 16.0   # Diablo I has 16 dungeon floors (4 cathedral +
+                               # 4 catacombs + 4 caves + 4 hell). NUMLEVELS=25
+                               # in the engine includes town and set levels.
+    CHAR_LEVEL_CAP    = 50.0   # max character level in Diablo I. Not a compile-
+                               # time constant in the engine; ultimately driven
+                               # by Experience.tsv (see getMaxCharacterLevel()).
+    HERO_DIR_CAP      = 8.0    # Direction enum has 8 compass headings; divide
+                               # by 8 (not 7) because direction is circular --
+                               # 7 (NW) is not an endpoint.
+
+    p  = d.player
+    ca = d.player_class_attrs
+
+    str_cap = ca.maxStr
+    if str_cap < 1: str_cap = 1
+    mag_cap = ca.maxMag
+    dex_cap = ca.maxDex
+    if dex_cap < 1: dex_cap = 1
+    vit_cap = ca.maxVit
+    if vit_cap < 1: vit_cap = 1
+
+    out = np.zeros(46, dtype=np.float32)
+
+    # [0..1] progression context
+    out[0] = d.currlevel.value / DUNGEON_LEVEL_CAP
+    out[1] = p._pLevel         / CHAR_LEVEL_CAP
+
+    # [2..4] vital state + facing
+    hp_denom = p._pMaxHP
+    if p._pHitPoints > hp_denom: hp_denom = p._pHitPoints
+    if hp_denom < 1: hp_denom = 1
+    out[2] = p._pHitPoints / hp_denom
+
+    mana_denom = p._pMaxMana
+    if p._pMana > mana_denom: mana_denom = p._pMana
+    if mana_denom < 1: mana_denom = 1
+    out[3] = p._pMana / mana_denom
+
+    out[4] = p._pdir / HERO_DIR_CAP
+
+    # [5..8] base stats
+    v = p._pStrength / str_cap
+    out[5] = v if v < 1.0 else 1.0
+    if mag_cap > 0:
+        v = p._pMagic / mag_cap
+        out[6] = v if v < 1.0 else 1.0
+    else:
+        out[6] = 0.0
+    v = p._pDexterity / dex_cap
+    out[7] = v if v < 1.0 else 1.0
+    v = p._pVitality / vit_cap
+    out[8] = v if v < 1.0 else 1.0
+
+    # [9..10] offense: weapon damage range (min, then max)
+    # max_weapon_dam covers only base weapon iMaxDam from itemdat.tsv, but
+    # _pIMaxDam includes additive bonuses from prefixes/suffixes and jewelry,
+    # so clip to 1.0 the same way stats are handled above.
+    weapon_denom = d.max_weapon_dam.value
+    if weapon_denom < 1: weapon_denom = 1
+    v = p._pIMinDam / weapon_denom
+    out[9]  = v if v < 1.0 else 1.0
+    v = p._pIMaxDam / weapon_denom
+    out[10] = v if v < 1.0 else 1.0
+
+    # [11..14] defense: armor class + elemental resists
+    ac = p._pArmorClass
+    if ac < 0: ac = 0
+    v = ac / ARMOR_CLASS_CAP
+    out[11] = v if v < 1.0 else 1.0
+    fr = p._pFireResist
+    if fr < 0: fr = 0
+    v = fr / RESIST_CAP
+    out[12] = v if v < 1.0 else 1.0
+    lr = p._pLghtResist
+    if lr < 0: lr = 0
+    v = lr / RESIST_CAP
+    out[13] = v if v < 1.0 else 1.0
+    mr = p._pMagResist
+    if mr < 0: mr = 0
+    v = mr / RESIST_CAP
+    out[14] = v if v < 1.0 else 1.0
+
+    # [15] active buff
+    out[15] = 1.0 if p.pManaShield else 0.0
+
+    # [16..22] inventory consumables (belt + inv, capped at POTION_CAP)
+    pot = player_pot_counts(p)
+    for i in range(7):
+        out[16 + i] = pot[i]
+
+    # [23..31] special level type
+    out[23 + d.setlvlnum] = 1.0
+
+    # Spell availability (binary), one bit per Cast action in ActionEnum order.
+    # Castable when any of memorised / class ability / staff / scroll has the bit set.
+    spell_bits = player_spell_bits(d)
+    one = np.uint64(1)
+    sp_firebolt    = dx.SpellID.Firebolt.value
+    sp_chargedbolt = dx.SpellID.ChargedBolt.value
+    sp_firewall    = dx.SpellID.FireWall.value
+    sp_stonecurse  = dx.SpellID.StoneCurse.value
+    sp_manashield  = dx.SpellID.ManaShield.value
+    sp_phasing     = dx.SpellID.Phasing.value
+    sp_fireball    = dx.SpellID.Fireball.value
+    # [32..38] spell availability bits
+    out[32] = 1.0 if (spell_bits & (one << sp_firebolt))    else 0.0
+    out[33] = 1.0 if (spell_bits & (one << sp_chargedbolt)) else 0.0
+    out[34] = 1.0 if (spell_bits & (one << sp_firewall))    else 0.0
+    out[35] = 1.0 if (spell_bits & (one << sp_stonecurse))  else 0.0
+    out[36] = 1.0 if (spell_bits & (one << sp_manashield))  else 0.0
+    out[37] = 1.0 if (spell_bits & (one << sp_phasing))     else 0.0
+    out[38] = 1.0 if (spell_bits & (one << sp_fireball))    else 0.0
+
+    # [39..45] spell levels (one per Cast action), normalised against the engine cap.
+    out[39] = p._pSplLvl[sp_firebolt]    / SPELL_LEVEL_CAP
+    out[40] = p._pSplLvl[sp_chargedbolt] / SPELL_LEVEL_CAP
+    out[41] = p._pSplLvl[sp_firewall]    / SPELL_LEVEL_CAP
+    out[42] = p._pSplLvl[sp_stonecurse]  / SPELL_LEVEL_CAP
+    out[43] = p._pSplLvl[sp_manashield]  / SPELL_LEVEL_CAP
+    out[44] = p._pSplLvl[sp_phasing]     / SPELL_LEVEL_CAP
+    out[45] = p._pSplLvl[sp_fireball]    / SPELL_LEVEL_CAP
+
+    return out
+
 
 def get_surroundings_by_env(d, env):
     surroundings = np.full(env.shape, ' ', dtype=str)

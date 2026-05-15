@@ -1143,6 +1143,57 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
         return [worker_reward, manager_reward], done, truncated
 
 
+### v2 Environment Classes (extended action + observation contract)
+
+class DiabloEnvV2Mixin:
+    """Switches an env class to the v2 contract:
+    - full action set (movement + Stand + primary/secondary + 2 restore + 7 cast)
+    - drops the legacy broadcast env-status planes
+    - adds the per-tile monster_attrs (W,H,9) grid
+    - adds a flat scalars vector (17 continuous + 1 binary + 9 one-hot)
+    Apply before any DiabloEnv-derived class in the MRO so the overrides win."""
+
+    @property
+    def num_actions(self):
+        return ActionEnum.CastFireball.value + 1
+
+    @property
+    def obs_includes_old_status(self):
+        return False
+
+    @property
+    def obs_includes_monster_attrs(self):
+        return True
+
+    @property
+    def obs_includes_scalars(self):
+        return True
+
+    def _get_monster_attrs(self, d):
+        # Thin wrapper; the hot loop lives in diablo_state.compute_monster_attrs
+        # under @njit. Module-level helper takes ints (not enum values) and a
+        # numpy array of ranged AI ids (frozensets don't survive @njit).
+        max_level  = max(int(d.max_monster_level.value), 1)
+        max_walk   = max(int(d.max_walk_frames.value),   1)
+        max_attack = max(int(d.max_attack_frames.value), 1)
+        return diablo_state.compute_monster_attrs(
+            d, self.view_radius, max_level, max_walk, max_attack,
+            diablo_state.ranged_ai_ids_array(),
+        )
+
+    def _get_scalars(self, d):
+        # Thin wrapper; assembly + pot-count loop live in
+        # diablo_state.compute_scalars under @njit.
+        return diablo_state.compute_scalars(d)
+
+
+class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
+    """Combat + exploration across all dungeon levels with the v2 action and
+    observation set. Inherits ClearTheLevel's reward shaping for now; spell-
+    and restore-aware tuning is a follow-up."""
+    pass
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1154,6 +1205,9 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_FindRandomGoal_v0 },
     { 'id': 'Diablo-ClearTheLevel-v0',
       'entry_point': DiabloEnv_ClearTheLevel_v0 },
+
+    { 'id': 'Diablo-ClearAllLevels-v0',
+      'entry_point': DiabloEnv_ClearAllLevels_v0 },
 
     # HRL Environment Classes
 
