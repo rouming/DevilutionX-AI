@@ -512,6 +512,11 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         image_shape = obs_space["image"]
         in_channels = image_shape[-1]
 
+        # Number of env-bit channels at the start of the image tensor.
+        # Used by load_from_status to preserve env-bit conv filters when
+        # padding a v1 checkpoint up to a v2 first-conv input width.
+        self.nr_env_channels = obs_space.get("nr_env_channels")
+
         # Optional scalar branch (Diablo v2 obs). A small affine lift +
         # ReLU brings the [0,1] scalar features onto a scale comparable
         # to post-conv activations so the LSTM input weights see
@@ -730,8 +735,66 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
                 logger.info("Converted cnn32 -> cnn32expert weights\n")
             status.pop("optimizer_state", None)
             self.load_from_cnn32_status(status)
+            return
+
+        src = status["model_state"]
+        own = self.state_dict()
+        has_mismatch = any(k in own and src[k].shape != own[k].shape
+                           for k in src)
+        if has_mismatch:
+            if logger:
+                logger.info("Detected obs/action shape mismatch, "
+                            "applying zero-pad surgery\n")
+            status.pop("optimizer_state", None)
+            self.load_state_dict(self._pad_state_dict(src))
         else:
-            self.load_state_dict(status["model_state"])
+            self.load_state_dict(src)
+
+    def _pad_state_dict(self, src):
+        """Build a state_dict for self by copying matching tensors from src
+        and zero-padding mismatched ones to self's shapes.
+
+        Two pad strategies:
+          - First-conv weight (4D, matching out_channels and kernel size,
+            differing in_channels): preserve only the env-bit channel
+            prefix. v1's env-status broadcast filters and v2's new
+            monster_attrs channels both end up zero -- the env-status
+            filters were trained for constant-valued planes and would
+            misbehave on the per-tile floats that occupy those indices
+            in v2.
+          - All other mismatched tensors: left-align src in the new
+            shape, zero-fill the trailing positions. Covers the LSTM
+            input weight (new scalar columns at the right edge of W_ih)
+            and the actor's last linear weight/bias (new action rows at
+            the bottom).
+
+        Keys in src that aren't in own state_dict are dropped. Keys in
+        own that aren't in src keep their freshly-initialized values
+        (e.g. the new scalars_enc module on a v1 -> v2 upgrade).
+        """
+        own = self.state_dict()
+        for k, v in src.items():
+            if k not in own:
+                continue
+            dst = own[k]
+            if v.shape == dst.shape:
+                own[k] = v
+                continue
+            new = torch.zeros(dst.shape, dtype=v.dtype, device=v.device)
+            is_first_conv = (v.dim() == 4 and
+                             v.shape[0] == dst.shape[0] and
+                             tuple(v.shape[2:]) == tuple(dst.shape[2:]) and
+                             v.shape[1] != dst.shape[1] and
+                             self.nr_env_channels is not None)
+            if is_first_conv:
+                n = min(self.nr_env_channels, v.shape[1], dst.shape[1])
+                new[:, :n, ...] = v[:, :n, ...]
+            else:
+                slices = tuple(slice(0, min(s, d))
+                               for s, d in zip(v.shape, dst.shape))
+                new[slices] = v[slices]
+            own[k] = new
+        return own
 
     def load_from_cnn32_status(self, status):
         """Bootstrap a cnn32expert model from a pretrained cnn32 status.

@@ -20,7 +20,10 @@ def get_obss_preprocessor(obs_space):
         nr_env_channels = int(math.log2(env_space.high.max() + 1))
         env_status_space_high = env_status_space.high.max()
         nr_channels = nr_env_channels + env_status_space.shape[-1]
-        obs_space = { "image": (*env_space.shape, nr_channels) }
+        obs_space = {
+            "image": (*env_space.shape, nr_channels),
+            "nr_env_channels": nr_env_channels,
+        }
 
         def preprocess_obss(obss, device=None):
             env = numpy.array([obs["env"] for obs in obss])
@@ -49,6 +52,7 @@ def get_obss_preprocessor(obs_space):
         obs_space = {
             "image":   (*env_space.shape, nr_channels),
             "scalars": scalars_space.shape,
+            "nr_env_channels": nr_env_channels,
         }
 
         def preprocess_obss(obss, device=None):
