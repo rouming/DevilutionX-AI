@@ -512,6 +512,21 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         image_shape = obs_space["image"]
         in_channels = image_shape[-1]
 
+        # Optional scalar branch (Diablo v2 obs). A small affine lift +
+        # ReLU brings the [0,1] scalar features onto a scale comparable
+        # to post-conv activations so the LSTM input weights see
+        # balanced gradients across image and scalar columns.
+        self.has_scalars = "scalars" in obs_space
+        if self.has_scalars:
+            scalar_dim = obs_space["scalars"][0]
+            self.scalar_embed_size = 64
+            self.scalars_enc = nn.Sequential(
+                nn.Linear(scalar_dim, self.scalar_embed_size),
+                nn.ReLU(),
+            )
+        else:
+            self.scalar_embed_size = 0
+
         if self.cnn_arch == "cnn1":
             self.image_conv = nn.Sequential(
                 nn.Conv2d(in_channels=in_channels, out_channels=16, kernel_size=(2, 2)),
@@ -569,9 +584,13 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
             dummy = self.image_conv(dummy)
         self.image_embedding_size = dummy.numel()
 
-        # Define memory
+        # Define memory. Scalars (when present) are concatenated with
+        # the image embedding at the LSTM input, so the recurrence sees
+        # both spatial and global state every step. Hidden size stays
+        # at image_embedding_size so actor/critic dims are unchanged.
         if self.use_memory:
-            self.memory_rnn = nn.LSTMCell(self.image_embedding_size, self.semi_memory_size)
+            rnn_input_size = self.image_embedding_size + self.scalar_embed_size
+            self.memory_rnn = nn.LSTMCell(rnn_input_size, self.semi_memory_size)
 
         # Define text embedding
         if self.use_text:
@@ -598,6 +617,10 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         #    self.embedding_size += self.text_embedding_size
         if self.use_text and not "filmcnn" in self.cnn_arch:
             self.embedding_size += self.final_instr_dim
+        # Without an RNN, scalars cannot ride the recurrence; concat
+        # them straight into the actor/critic input instead.
+        if self.has_scalars and not self.use_memory:
+            self.embedding_size += self.scalar_embed_size
 
         if self.cnn_arch.startswith("expert_filmcnn"):
             if self.cnn_arch == "expert_filmcnn":
@@ -781,13 +804,17 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         # Flatten (B, C, H, W) to (B, C x H x W)
         x = x.reshape(x.shape[0], -1)
 
+        if self.has_scalars:
+            s = self.scalars_enc(obs.scalars)
+
         if self.use_memory:
+            rnn_in = torch.cat([x, s], dim=1) if self.has_scalars else x
             hidden = (memory[:, :self.semi_memory_size], memory[:, self.semi_memory_size:])
-            hidden = self.memory_rnn(x, hidden)
+            hidden = self.memory_rnn(rnn_in, hidden)
             embedding = hidden[0]
             memory = torch.cat(hidden, dim=1)
         else:
-            embedding = x
+            embedding = torch.cat([x, s], dim=1) if self.has_scalars else x
 
         if self.use_text and not "filmcnn" in self.cnn_arch:
             embedding = torch.cat((embedding, embed_text), dim=1)
