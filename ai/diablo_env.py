@@ -1189,9 +1189,155 @@ class DiabloEnvV2Mixin:
 
 class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     """Combat + exploration across all dungeon levels with the v2 action and
-    observation set. Inherits ClearTheLevel's reward shaping for now; spell-
-    and restore-aware tuning is a follow-up."""
-    pass
+    observation set. The reward extends ClearTheLevel's structure with five
+    spell-and-restore-aware terms in the non-terminal branch."""
+
+    def reset(self, *, seed=None, options=None):
+        obs, info = super().reset(seed=seed, options=options)
+        self.prev_mana = int(self.game.state.player._pMana)
+        self.v2_spells_used = set()
+        return obs, info
+
+    def evaluate_step(self, d, env, action):
+        action           = int(action)
+        monsters_cnt     = diablo_state.count_active_monsters(d)
+        total_hp         = diablo_state.count_active_monsters_total_hp(d)
+        obj_cnt          = diablo_state.count_active_objects(d)
+        closed_doors_ids = diablo_state.get_closed_doors_ids(d)
+        items_cnt        = diablo_state.count_active_items(d)
+        player_pos       = diablo_state.player_position(d)
+        hp               = d.player._pHitPoints
+        mana             = int(d.player._pMana)
+        max_hp           = max(int(d.player._pMaxHP),   1)
+        max_mana         = max(int(d.player._pMaxMana), 1)
+
+        truncated = False
+        done = False
+        reward = int(0)
+
+        if diablo_state.is_player_dead(d):
+            reward = -10.0
+            done = True
+            print("Death, R %.2f" % reward, file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            reward = 0.0
+            done = True
+            print("Escape, R %.2f" % reward, file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
+            reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Goal, R %.2f" % reward, file=self.log)
+        else:
+            monster_damaged = total_hp < self.prev_total_hp
+
+            if hp < self.prev_hp:
+                # Player took damage. prev_hp is updated unconditionally
+                # at end of step (same pattern as prev_mana) so v2 branches
+                # reading self.prev_hp see the pre-step value, and a damage
+                # event right after a heal still credits the full drop.
+                reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                print("Damage taken, R %.2f" % reward, file=self.log)
+            if monster_damaged:
+                # Monster took damage
+                reward += 0.02
+                print("Attack monster, R %.2f" % reward, file=self.log)
+            if monsters_cnt < self.prev_monsters_cnt:
+                # Monsters killed
+                reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
+                self.prev_monsters_cnt = monsters_cnt
+                print("Kill monster, R %.2f" % reward, file=self.log)
+            if obj_cnt < self.prev_obj_cnt:
+                # Chests, sarcophagi, barrels, crucifixes etc.
+                reward += (self.prev_obj_cnt - obj_cnt) * 0.05
+                self.prev_obj_cnt = obj_cnt
+                print("Activate object, R %.2f" % reward, file=self.log)
+            if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
+                if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
+                    opened = list(set(self.prev_closed_doors_ids) - set(closed_doors_ids))
+                    # Exclude doors we previously opened (re-closed -> re-opened cycle).
+                    opened = [o for o in opened if o not in self.opened_doors_ids]
+                    self.opened_doors_ids.extend(opened)
+                    if opened:
+                        reward += len(opened) * 0.02
+                        print("Open door, R %.2f" % reward, file=self.log)
+                self.prev_closed_doors_ids = closed_doors_ids
+            if items_cnt != self.prev_items_cnt:
+                if items_cnt < self.prev_items_cnt:
+                    # Items can also appear (chest spill), so only the
+                    # decrease branch credits a pickup.
+                    reward += (self.prev_items_cnt - items_cnt) * 0.02
+                    print("Collect item, R %.2f" % reward, file=self.log)
+                self.prev_items_cnt = items_cnt
+
+            # v2: restore actions
+            if action == ActionEnum.RestoreHealth.value:
+                if self.prev_hp / max_hp >= 0.9:
+                    reward -= 0.1
+                    print("Wasteful restore HP, R %.2f" % reward, file=self.log)
+                elif self.prev_hp / max_hp <= 0.5 and hp > self.prev_hp:
+                    reward += 0.05
+                    print("Correct restore HP, R %.2f" % reward, file=self.log)
+            elif action == ActionEnum.RestoreMana.value:
+                if self.prev_mana / max_mana >= 0.9:
+                    reward -= 0.1
+                    print("Wasteful restore mana, R %.2f" % reward, file=self.log)
+                elif self.prev_mana / max_mana <= 0.5 and mana > self.prev_mana:
+                    reward += 0.05
+                    print("Correct restore mana, R %.2f" % reward, file=self.log)
+            # v2: cast spells
+            elif (ActionEnum.CastFirebolt.value <= action
+                  <= ActionEnum.CastFireball.value):
+                spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
+                if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
+                    # Spell isn't learned / available -- engine drops the
+                    # cast, no mana spent. Penalty teaches the agent to read
+                    # the spell-availability scalar bits before picking the
+                    # action.
+                    reward -= 0.05
+                    print("Unavailable spell, R %.2f" % reward, file=self.log)
+                elif mana < self.prev_mana:
+                    # Mana actually spent -> spell really fired.
+                    if diablo_state.count_visible_monsters(env) == 0:
+                        reward -= 0.05
+                        print("Wasteful spell, R %.2f" % reward, file=self.log)
+                    if monster_damaged:
+                        reward += 0.02
+                        print("Successful spell, R %.2f" % reward, file=self.log)
+                    if action not in self.v2_spells_used:
+                        self.v2_spells_used.add(action)
+                        reward += 0.1
+                        print("First spell use, R %.2f" % reward, file=self.log)
+
+            if monster_damaged:
+                self.prev_total_hp = total_hp
+
+        # prev_hp and prev_mana update every step so that v2 branches see
+        # the pre-step value, and damage signal is not silently suppressed
+        # after a heal (RestoreHealth or natural regen). prev_total_hp
+        # intentionally stays on the "only-on-decrease" pattern so that
+        # monster regen / new-monster spawns don't get double-credited as
+        # damage.
+        self.prev_hp   = hp
+        self.prev_mana = mana
+
+        was_exploring = (type(reward) != int)
+
+        if self.is_agent_stuck(d, was_exploring):
+            truncated = True
+            reward = 0.0
+            if self.is_agent_timedout():
+                print("Timedout, R %.2f" % reward, file=self.log)
+            else:
+                print("Stuck, R %.2f" % reward, file=self.log)
+        elif not was_exploring:
+            # Penalize only movement that didn't accomplish anything.
+            if action < ActionEnum.Stand.value:
+                reward -= 0.01
+
+        return [reward], done, truncated
 
 
 from gymnasium.envs.registration import register
