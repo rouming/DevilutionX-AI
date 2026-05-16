@@ -330,15 +330,18 @@ def player_direction(d):
     # warning occurs.
     return (int(d.player._pdir) - 1) % (len(dx.Direction) - 1)
 
+@njit(cache=True)
 def count_active_objects(d):
-    def interesting_objects(oid):
+    count = 0
+    for oid in d.ActiveObjects:
         obj = d.Objects[oid]
         if is_barrel(obj):
-            return 1 if obj._oSolidFlag else 0
+            if obj._oSolidFlag:
+                count += 1
         elif is_chest(obj) or is_sarcophagus(obj) or is_crucifix(obj):
-            return 1 if is_interactable(obj) else 0
-        return 0
-    return sum(map(interesting_objects, d.ActiveObjects))
+            if is_interactable(obj):
+                count += 1
+    return count
 
 @njit(cache=True)
 def get_closed_doors_ids(d):
@@ -357,11 +360,16 @@ def count_active_items(d):
 def count_active_monsters(d):
     return d.ActiveMonsterCount.value
 
+@njit(cache=True)
 def count_active_monsters_total_hp(d):
-    return sum(map(lambda mid: d.Monsters[mid].hitPoints, d.ActiveMonsters))
+    total = 0
+    for mid in d.ActiveMonsters:
+        total += d.Monsters[mid].hitPoints
+    return total
 
+@njit(cache=True)
 def count_visible_monsters(env):
-    return int(np.count_nonzero(env & EnvironmentFlag.Monster.value))
+    return np.sum((env & EnvironmentFlag.Monster.value) != 0)
 
 @njit(cache=True)
 def count_explored_tiles(d):
