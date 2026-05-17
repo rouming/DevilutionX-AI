@@ -508,6 +508,20 @@ def make_diablo_parser():
         help="List all Diablo instances grouped by parent ID of the test runner."
     )
 
+    #
+    # model-drop-best
+    #
+    model_drop_best_parser = subparsers.add_parser(
+        "model-drop-best",
+        help="Drop a model's 'best' marker - delete best-status.pt and clear\n"
+             "the 'best' entry from the sprout run's custom metadata. Useful\n"
+             "when retraining a cloned checkpoint on a different env, where\n"
+             "the previous best is no longer meaningful for the new training.",
+        formatter_class=IndentedHelpFormatter)
+    model_drop_best_parser.add_argument(
+        "--model", required=True,
+        help="Name of the model (REQUIRED)")
+
     return incompatible_options, parser
 
 def delayed_import(binary_path):
@@ -690,6 +704,48 @@ def list_devilution_processes(binary_path, mshared_filename):
     if result:
         for i, proc in enumerate(result):
             print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
+
+def model_drop_best(args):
+    """Drop the 'best' marker for a model:
+      - delete <model_dir>/best-status.pt (success-rate snapshot of weights),
+      - clear the 'best' key from the sprout run's custom metadata.
+
+    After this the next evaluation that improves on a freshly-tracked
+    baseline becomes the new best - nothing carries over from the
+    previous training context (different env, different action space,
+    etc.) where the recorded best is no longer meaningful.
+    """
+    model_dir = utils.get_run_dir(args.model)
+    if not os.path.isdir(model_dir):
+        print(f"Error: model directory not found: {model_dir}")
+        return 1
+
+    # 1. best-status.pt on disk
+    best_status_path = utils.get_status_path(model_dir, best=True)
+    if os.path.exists(best_status_path):
+        os.remove(best_status_path)
+        print(f"Removed {best_status_path}")
+    else:
+        print(f"No best-status.pt at {best_status_path} (nothing to remove)")
+
+    # 2. sprout run's custom['best']
+    spr = sprout.Sprout(utils.get_models_dir())
+    try:
+        run, _ = spr.get_run(head=args.model)
+    except Exception as e:
+        print(f"No sprout run for head '{args.model}' ({e}); skipping sprout step")
+        return 0
+
+    custom = dict(run.get("custom", {}) or {})
+    if "best" in custom:
+        custom.pop("best")
+        # custom_update=False replaces the whole custom dict with the popped version.
+        spr.edit(head=args.model, custom_dict=custom, custom_update=False)
+        print(f"Cleared 'best' from sprout custom metadata for head '{args.model}'")
+    else:
+        print(f"No 'best' in sprout custom metadata for head '{args.model}' (nothing to clear)")
+
+    return 0
 
 def _slot_for_section(section, idx):
     """Map (section, idx) to inv_item slot, or None if out of range."""
@@ -2179,6 +2235,8 @@ def main():
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
         return 0
+    if args.command == 'model-drop-best':
+        return model_drop_best(args)
 
     # Set seed for all randomness sources
     utils.seed(args.seed)
