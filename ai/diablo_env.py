@@ -1362,8 +1362,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             else:
                 print("Stuck, R %.2f" % reward, file=self.log)
         elif not was_exploring:
-            if action < ActionEnum.Stand.value:
-                # Penalize movement that didn't accomplish anything.
+            if action <= ActionEnum.Stand.value:
+                # Penalize movement and stand that didn't accomplish anything.
                 reward -= 0.01
             elif self.view_radius is not None:
                 EF = diablo_state.EnvironmentFlag
