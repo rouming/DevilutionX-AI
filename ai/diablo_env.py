@@ -319,6 +319,10 @@ class DiabloEnv(gym.Env):
         elif (spell := _ACTION_TO_SPELL.get(ae)) is not None:
             key, data = RE.RING_ENTRY_KEY_CAST_SPELL, (int(spell.value), 0)
         else:
+            if ae == ActionEnum.PrimaryAction:
+                right_hand = self.game.state.player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
+                assert right_hand._itype != dx.ItemType.Bow.value, \
+                    "bow equipped - PrimaryAction range assumption (radius 1) is invalid"
             key = DiabloEnv.action_to_key(action)
         self.game.submit_key(key | RE.RING_ENTRY_F_SINGLE_TICK_PRESS, data=data)
 
