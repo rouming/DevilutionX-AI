@@ -871,7 +871,10 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
         self.used_goal = "random"
 
     def generate_goal_pos(self, d, env_whole):
-        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+        start_pos = diablo_state.player_position(d)
+        goal_pos, _ = diablo_state.pick_random_clean_goal(
+            env_whole, start_pos, self.np_random)
+        return goal_pos
 
     def evaluate_step(self, d, env, action):
         player_pos = diablo_state.player_position(d)
@@ -950,7 +953,10 @@ class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
         self.used_goal = "random"
 
     def generate_goal_pos(self, d, env_whole):
-        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+        start_pos = diablo_state.player_position(d)
+        goal_pos, _ = diablo_state.pick_random_clean_goal(
+            env_whole, start_pos, self.np_random)
+        return goal_pos
 
     def evaluate_step(self, d, env, action):
         monsters_cnt = diablo_state.count_active_monsters(d)
@@ -1050,7 +1056,10 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
         return bool(changed)
 
     def generate_goal_pos(self, d, env_whole):
-        return diablo_state.pick_random_empty_tile_pos(env_whole, self.np_random)
+        start_pos = diablo_state.player_position(d)
+        goal_pos, _ = diablo_state.pick_random_clean_goal(
+            env_whole, start_pos, self.np_random)
+        return goal_pos
 
     def evaluate_step(self, d, env, action):
         worker_action = int(action[0])

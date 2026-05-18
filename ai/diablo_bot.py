@@ -125,7 +125,9 @@ class FindRandomGoal_Bot:
             self.goal_pos = self.game.goal_pos
             assert self.goal_pos and all(self.goal_pos)
         else:
-            self.goal_pos = diablo_state.pick_random_empty_tile_pos(env_whole, self.rng)
+            start_pos = diablo_state.player_position(d)
+            self.goal_pos, _ = diablo_state.pick_random_clean_goal(
+                env_whole, start_pos, self.rng)
         self.explored = np.zeros(env_whole.shape, dtype=bool)
         self.unexplored_points = set()
         self.current_path = []

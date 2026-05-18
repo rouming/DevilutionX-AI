@@ -896,12 +896,18 @@ def get_surroundings(d, radius, goal_pos):
     env = get_environment(d, radius, goal_pos=goal_pos)
     return get_surroundings_by_env(d, env)
 
-def pick_random_empty_tile_pos(env: np.ndarray, rng: np.random.Generator):
-    """Randomly select a tile in a random room. Since all rooms vary
-    in size, we first select a room with equal probability and then
-    randomly choose a tile coordinate within that room."""
-    # 1 - empty, not occupied cell
-    # 0 - everything else
+def pick_random_clean_goal(env, start, rng):
+    """Pick a goal tile that doesn't match any known dungeon-layout issue
+    (see goal_known_issue). Iterates over the picker's strict-empty regions
+    in random order WITHOUT REPLACEMENT - once a region is proved sealed
+    (or otherwise known-bad) it is dropped from the candidate pool and
+    never re-tried within this call.
+
+    Returns (goal_pos, retried_issues) on success.
+    Raises AssertionError if every strict-empty region in the dungeon
+    matches a known issue (means we have a new scenario to investigate
+    or the dungeon really has no walkable goal beyond the player tile).
+    """
     empty_env = \
         (env == 0) | \
         (env == EnvironmentFlag.Explored.value) | \
@@ -912,13 +918,71 @@ def pick_random_empty_tile_pos(env: np.ndarray, rng: np.random.Generator):
     # Label independent regions (rooms)
     labeled_regions, num_regions = maze.detect_regions(empty_env)
 
-    # Randomly select a region
-    region_nr = rng.integers(num_regions) + 1
+    # Pool of picker regions still untested. We pop from this list each
+    # iteration so the same region is never sampled twice in one call.
+    remaining = list(range(1, num_regions + 1))
+    retried_issues = []
 
-    xs, ys = np.where(labeled_regions == region_nr)
-    # Randomly select a position in the labeled region
-    i = rng.integers(len(xs))
-    return (xs[i], ys[i])
+    while remaining:
+        i = rng.integers(len(remaining))
+        r = remaining.pop(i)
+        xs, ys = np.where(labeled_regions == r)
+        j = rng.integers(len(xs))
+        goal_pos = (int(xs[j]), int(ys[j]))
+
+        issue = goal_known_issue(env, start, goal_pos)
+        if issue is None:
+            return goal_pos, retried_issues
+        retried_issues.append((r, goal_pos, issue))
+
+    raise AssertionError(
+        f"pick_random_clean_goal: exhausted all {num_regions} picker regions; "
+        f"every region matched a known issue. retried_issues={retried_issues}")
+
+def goal_known_issue(env, start, goal):
+    """Return "isolated_subgraph" if goal is unreachable from start via
+    the door graph, or None if no known issue applies.
+
+    Two dungeon layouts produce unreachable goals:
+      - Catacombs (lvl 5-8): the generator occasionally creates orphan
+        sub-areas whose doors only connect to each other, forming a
+        component disconnected from the main playable space.
+      - Hell (lvl 13-16): certain quest chambers (e.g. Lazarus altar
+        room) have no walkable door at all - access is scripted-only.
+    Both reduce to the same graph property: goal's floor region is not
+    reachable from start's floor region via BFS over door-bridged
+    region neighbours. A sealed room (no doors) trivially fails the
+    same BFS, so one check covers both cases.
+
+    Callers use the non-None return as a repick signal. If no known
+    issue matches but the path-finder still reports unreachable, the
+    assertion in get_dungeon_graph_and_path fires - that means a new
+    layout variant to investigate.
+    """
+    empty_env = \
+        (env & (EnvironmentFlag.Wall.value | EnvironmentFlag.Door.value)) == 0
+    labeled_regions, num_regions = maze.detect_regions(empty_env)
+    start_region = labeled_regions[start]
+    goal_region  = labeled_regions[goal]
+    if start_region == 0 or goal_region == 0:
+        return None
+    if start_region == goal_region:
+        return None
+    doors = np.argwhere(env & EnvironmentFlag.Door.value)
+    regions_graph, _, _ = maze.get_regions_graph(
+        doors, labeled_regions, num_regions)
+    reachable = {int(start_region)}
+    queue = [int(start_region)]
+    while queue:
+        r = queue.pop()
+        for nbr in regions_graph.get(r, set()):
+            nbr = int(nbr)
+            if nbr not in reachable:
+                reachable.add(nbr)
+                queue.append(nbr)
+    if int(goal_region) not in reachable:
+        return "isolated_subgraph"
+    return None
 
 def get_dungeon_graph_and_path(env, start, goal):
     # 0 - walls
@@ -947,7 +1011,19 @@ def get_dungeon_graph_and_path(env, start, goal):
     # Shortest path between regions
     regions_path = maze.bfs_regions_path(regions_graph, start_region,
                                          goal_region)
-    assert regions_path is not None
+    if regions_path is None:
+        # Dump reproduction info before tripping the assert so logs show
+        # the broken state. Caller is expected to also print the seed +
+        # dungeon level above this line.
+        import sys
+        print(f"get_dungeon_graph_and_path: NO PATH "
+              f"start={tuple(int(s) for s in start)} (region={int(start_region)}) -> "
+              f"goal={tuple(int(g) for g in goal)} (region={int(goal_region)}); "
+              f"num_regions={int(num_regions)}, "
+              f"graph_edges={sum(len(v) for v in regions_graph.values()) // 2}, "
+              f"start_region_neighbors={sorted(regions_graph.get(int(start_region), set()))}",
+              file=sys.stderr, flush=True)
+        assert False, "regions_path is None - unreachable goal"
 
     # Doors between regions on the shortest path. We could use set()
     # here, but we need to keep an order
