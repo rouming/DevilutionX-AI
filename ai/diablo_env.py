@@ -1264,7 +1264,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 print("Kill monster, R %.2f" % reward, file=self.log)
             if obj_cnt < self.prev_obj_cnt:
                 # Chests, sarcophagi, barrels, crucifixes etc.
-                # reward += (self.prev_obj_cnt - obj_cnt) * 0.05
+                reward += (self.prev_obj_cnt - obj_cnt) * 0.05
                 self.prev_obj_cnt = obj_cnt
                 print("Activate object, R %.2f" % reward, file=self.log)
             if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
@@ -1274,7 +1274,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     opened = [o for o in opened if o not in self.opened_doors_ids]
                     self.opened_doors_ids.extend(opened)
                     if opened:
-                        # reward += len(opened) * 0.02
+                        reward += len(opened) * 0.02
                         print("Open door, R %.2f" % reward, file=self.log)
                 self.prev_closed_doors_ids = closed_doors_ids
             if items_cnt != self.prev_items_cnt:

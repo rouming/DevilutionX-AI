@@ -379,8 +379,8 @@ def player_has_adjacent(env, view_radius, mask, exclude_mask):
     Player is always at (view_radius, view_radius) in the windowed env.
 
     Typical calls:
-      has_adjacent(env, r, Monster,                    0)    - melee target
-      has_adjacent(env, r, Item|Interactable|Door, Open)    - pickup/open target
+      player_has_adjacent(env, r, Monster,                    0)    - melee target
+      player_has_adjacent(env, r, Item|Interactable|Door, Open)    - pickup/open target
     """
     rows, cols = env.shape
     for dy in range(-1, 2):
