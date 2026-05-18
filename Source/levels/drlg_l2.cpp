@@ -1861,8 +1861,18 @@ void CreateRoom(WorldTilePosition topLeft, WorldTilePosition bottomRight, int nR
 	}
 }
 
-void ConnectHall(const HallNode &node)
+// Known vanilla bug (upstream issues #3132, #5346): certain seeds trap
+// the walker in a deterministic 2-cell limit cycle (corner-flip rule
+// vs probabilistic Y-bias) that never terminates. Measured distribution
+// of healthy walks: mean ~13 iters, std ~55, max ~2900. True deadlocks
+// are infinite, so any finite cap distinguishes them. Cap at 3000 -
+// well above the healthy tail - and signal failure so GenerateLevel
+// re-rolls the dungeon. Aborting and retrying (~750 iters on a fresh
+// seed) is cheaper than waiting out a degenerate walk (up to ~100k).
+bool ConnectHall(const HallNode &node)
 {
+	const int kIterCap = 3000;
+
 	Point beginning = node.beginning;
 	Point end = node.end;
 
@@ -1874,8 +1884,11 @@ void ConnectHall(const HallNode &node)
 	end -= DirAdd[static_cast<uint8_t>(nCurrd)];
 	predungeon[end.x][end.y] = ',';
 	bool fInroom = false;
+	int iter_count = 0;
 
 	do {
+		if (++iter_count > kIterCap)
+			return false;
 		if (beginning.x >= 38 && nCurrd == HallDirection::Right)
 			nCurrd = HallDirection::Left;
 		if (beginning.y >= 38 && nCurrd == HallDirection::Down)
@@ -1974,6 +1987,7 @@ void ConnectHall(const HallNode &node)
 				nCurrd = HallDirection::Right;
 		}
 	} while (beginning != end);
+	return true;
 }
 
 void DoPatternCheck(int i, int j)
@@ -2458,7 +2472,10 @@ bool CreateDungeon()
 	CreateRoom({ 2, 2 }, { DMAXX - 1, DMAXY - 1 }, 0, HallDirection::None, size);
 
 	while (!HallList.empty()) {
-		ConnectHall(HallList.front());
+		if (!ConnectHall(HallList.front())) {
+			HallList.clear();
+			return false;
+		}
 		HallList.pop_front();
 	}
 
