@@ -3371,6 +3371,7 @@ void OperateStoryBook(Object &storyBook)
 	if (!storyBook.canInteractWith() || qtextflag) {
 		return;
 	}
+	storyBook.selectionRegion = SelectionRegion::None;
 	storyBook._oAnimFrame = storyBook._oVar4;
 	PlaySfxLoc(SfxID::ItemScroll, storyBook.position);
 	auto msg = static_cast<_speech_id>(storyBook._oVar2);
