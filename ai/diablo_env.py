@@ -1315,10 +1315,16 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     # Mana actually spent -> spell really fired.
                     ae = ActionEnum(action)
                     if ae == ActionEnum.CastPhasing:
+                        # Escape spell: reward when monsters are visible, no
+                        # penalty without (repositioning is also a valid use).
                         if diablo_state.count_visible_monsters(env) > 0:
                             reward += 0.02
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae != ActionEnum.CastManaShield:
+                        # Exclude ManaShield, which is self-buff
+                        # rewarded implicitly - the damage-taken
+                        # penalty shrinks when the shield absorbs
+                        # hits, so no explicit signal is needed here.
                         if diablo_state.count_visible_monsters(env) == 0:
                             reward -= 0.05
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
