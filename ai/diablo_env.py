@@ -1286,16 +1286,20 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 if self.prev_hp / max_hp >= 0.9:
                     reward -= 0.1
                     print("Wasteful restore HP, R %.2f" % reward, file=self.log)
-                elif self.prev_hp / max_hp <= 0.5 and hp > self.prev_hp:
+                elif hp > self.prev_hp:
                     reward += 0.05
                     print("Correct restore HP, R %.2f" % reward, file=self.log)
+                else:
+                    print("No-potion restore HP, R %.2f" % reward, file=self.log)
             elif action == ActionEnum.RestoreMana.value:
                 if self.prev_mana / max_mana >= 0.9:
                     reward -= 0.1
                     print("Wasteful restore mana, R %.2f" % reward, file=self.log)
-                elif self.prev_mana / max_mana <= 0.5 and mana > self.prev_mana:
+                elif mana > self.prev_mana:
                     reward += 0.05
                     print("Correct restore mana, R %.2f" % reward, file=self.log)
+                else:
+                    print("No-potion restore mana, R %.2f" % reward, file=self.log)
             # v2: cast spells
             elif (ActionEnum.CastFirebolt.value <= action
                   <= ActionEnum.CastFireball.value):
