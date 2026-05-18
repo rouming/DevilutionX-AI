@@ -1313,9 +1313,12 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
                 elif mana < self.prev_mana:
                     # Mana actually spent -> spell really fired.
-                    is_damage_spell = ActionEnum(action) not in (
-                        ActionEnum.CastManaShield, ActionEnum.CastPhasing)
-                    if is_damage_spell:
+                    ae = ActionEnum(action)
+                    if ae == ActionEnum.CastPhasing:
+                        if diablo_state.count_visible_monsters(env) > 0:
+                            reward += 0.02
+                            print("Successful spell, R %.2f" % reward, file=self.log)
+                    elif ae != ActionEnum.CastManaShield:
                         if diablo_state.count_visible_monsters(env) == 0:
                             reward -= 0.05
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
