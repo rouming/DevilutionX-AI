@@ -1316,7 +1316,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     if diablo_state.count_visible_monsters(env) == 0:
                         reward -= 0.05
                         print("Wasteful spell, R %.2f" % reward, file=self.log)
-                    if monster_damaged:
+                    else:
                         reward += 0.02
                         print("Successful spell, R %.2f" % reward, file=self.log)
                     if action not in self.v2_spells_used:
