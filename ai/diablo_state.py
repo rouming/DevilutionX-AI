@@ -72,13 +72,6 @@ def find_inv_item(player, misc_id, spell_id=None):
 # episode 1.
 POTION_CAP = 5.0
 
-def count_item(items, misc_id, spell_id=None):
-    """Count items matching misc_id (and optionally _iSpell) in an iterable."""
-    n = 0
-    for item in items:
-        if item._iMiscId == misc_id and (spell_id is None or item._iSpell == spell_id):
-            n += 1
-    return n
 
 @njit(cache=True)
 def player_pot_counts(p):
