@@ -1362,9 +1362,27 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             else:
                 print("Stuck, R %.2f" % reward, file=self.log)
         elif not was_exploring:
-            # Penalize only movement that didn't accomplish anything.
             if action < ActionEnum.Stand.value:
+                # Penalize movement that didn't accomplish anything.
                 reward -= 0.01
+            elif self.view_radius is not None:
+                EF = diablo_state.EnvironmentFlag
+                if action == ActionEnum.PrimaryAction.value:
+                    # Penalize attack with no adjacent monster (melee assumed,
+                    # enforced by the assert in _submit_action).
+                    if not diablo_state.player_has_adjacent(
+                            env, self.view_radius,
+                            EF.Monster.value, 0):
+                        reward -= 0.01
+                        print("Wasted primary, R %.2f" % reward, file=self.log)
+                elif action == ActionEnum.SecondaryAction.value:
+                    # Penalize interact with nothing adjacent to pick up or open.
+                    if not diablo_state.player_has_adjacent(
+                            env, self.view_radius,
+                            EF.Item.value | EF.Interactable.value | EF.Door.value,
+                            EF.Open.value):
+                        reward -= 0.01
+                        print("Wasted secondary, R %.2f" % reward, file=self.log)
 
         return [reward], done, truncated
 

@@ -373,6 +373,29 @@ def count_visible_monsters(env):
     return np.sum((env & EnvironmentFlag.Monster.value) != 0)
 
 @njit(cache=True)
+def player_has_adjacent(env, view_radius, mask, exclude_mask):
+    """Return True if any of the 8 tiles adjacent to the player matches:
+      (t & mask) != 0 and (t & exclude_mask) == 0.
+    Player is always at (view_radius, view_radius) in the windowed env.
+
+    Typical calls:
+      has_adjacent(env, r, Monster,                    0)    - melee target
+      has_adjacent(env, r, Item|Interactable|Door, Open)    - pickup/open target
+    """
+    rows, cols = env.shape
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            if dx == 0 and dy == 0:
+                continue
+            x = view_radius + dx
+            y = view_radius + dy
+            if 0 <= x < rows and 0 <= y < cols:
+                t = env[x, y]
+                if t & mask and not (t & exclude_mask):
+                    return True
+    return False
+
+@njit(cache=True)
 def count_explored_tiles(d):
     bits = dx.DungeonFlag.Explored.value
     return np.sum((d.dFlags & bits) == bits)
