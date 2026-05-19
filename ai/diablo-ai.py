@@ -522,6 +522,20 @@ def make_diablo_parser():
         "--model", required=True,
         help="Name of the model (REQUIRED)")
 
+    #
+    # env-stats
+    #
+    log_stats_parser = subparsers.add_parser(
+        "env-stats",
+        help="Aggregate event statistics from /tmp/diablo-*/env.log files.",
+        formatter_class=IndentedHelpFormatter)
+    log_stats_parser.add_argument(
+        "--pattern", default="/tmp/diablo-*/env.log",
+        help="Glob pattern for env.log files (default: /tmp/diablo-*/env.log)")
+    log_stats_parser.add_argument(
+        "--sort", choices=["count", "sum", "label"], default="count",
+        help="Sort output by count, sum_R, or label (default: count)")
+
     return incompatible_options, parser
 
 def delayed_import(binary_path):
@@ -698,6 +712,52 @@ def dump_self_to_file(dt, begin, end, file_path):
         f.write(dt + "\n\n")
         f.write("\n".join(collected) + "\n")
         f.write("\n")
+
+def log_stats(args):
+    import glob
+    import re
+    counts = {}
+    sums   = {}
+    files  = glob.glob(args.pattern)
+    if not files:
+        print("No files matched: %s" % args.pattern)
+        return 1
+    for path in files:
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.rstrip()
+                    m = re.match(r'^(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)$', line)
+                    if not m:
+                        continue
+                    label   = m.group(1).strip()
+                    val_str = m.group(2)
+                    if val_str.startswith('['):
+                        val = sum(float(x) for x in val_str.strip('[]').split(','))
+                    else:
+                        val = float(val_str)
+                    counts[label] = counts.get(label, 0) + 1
+                    sums[label]   = sums.get(label, 0.0) + val
+        except OSError:
+            pass
+    if not counts:
+        print("No events found.")
+        return 0
+    if args.sort == "count":
+        order = sorted(counts, key=lambda k: counts[k], reverse=True)
+    elif args.sort == "sum":
+        order = sorted(counts, key=lambda k: abs(sums[k]), reverse=True)
+    else:
+        order = sorted(counts)
+    w_cnt = max(len(str(counts[k])) for k in order)
+    w_sum = max(len("%.1f" % sums[k]) for k in order)
+    w_sum = max(w_sum, len("sum_R"))
+    print("%*s  %*s  label" % (w_cnt, "count", w_sum, "sum_R"))
+    print("%s  %s  %s" % ("-" * w_cnt, "-" * w_sum, "-" * 20))
+    for k in order:
+        print("%*d  %*.1f  %s" % (w_cnt, counts[k], w_sum, sums[k], k))
+    print("(%d files)" % len(files))
+    return 0
 
 def list_devilution_processes(binary_path, mshared_filename):
     result = procutils.find_processes_with_mapped_file(binary_path, mshared_filename)
@@ -2237,6 +2297,8 @@ def main():
         return 0
     if args.command == 'model-drop-best':
         return model_drop_best(args)
+    if args.command == 'env-stats':
+        return log_stats(args)
 
     # Set seed for all randomness sources
     utils.seed(args.seed)
