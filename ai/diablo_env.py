@@ -669,7 +669,7 @@ class DiabloEnv(gym.Env):
                 # from 0 to -100
                 change = (hp - self.prev_hp) / self.prev_hp
                 reward += change * 100.0
-                print("Damage, R %.1f" % reward, file=self.log)
+                print("Damage taken, R %.1f" % reward, file=self.log)
                 self.prev_hp = hp
             if explored_cnt > self.prev_explored_cnt:
                 # Exploration
@@ -716,7 +716,7 @@ class DiabloEnv(gym.Env):
                     # closed chest and picking up an item, so object counter
                     # should be checked first
                     reward += 5.0
-                    print("Collecting item, R %.1f" % reward, file=self.log)
+                    print("Collect item, R %.1f" % reward, file=self.log)
                 self.prev_items_cnt = items_cnt
             if total_hp < self.prev_total_hp:
                 # Monster took damage
