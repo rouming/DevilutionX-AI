@@ -1227,6 +1227,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         truncated = False
         done = False
         reward = int(0)
+        made_progress = False
 
         if diablo_state.is_player_dead(d):
             reward = -10.0
@@ -1256,16 +1257,19 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             if monster_damaged:
                 # Monster took damage
                 reward += 0.02
+                made_progress = True
                 print("Attack monster, R %.2f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
                 reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
                 self.prev_monsters_cnt = monsters_cnt
+                made_progress = True
                 print("Kill monster, R %.2f" % reward, file=self.log)
             if obj_cnt < self.prev_obj_cnt:
                 # Chests, sarcophagi, barrels, crucifixes etc.
                 reward += (self.prev_obj_cnt - obj_cnt) * 0.05
                 self.prev_obj_cnt = obj_cnt
+                made_progress = True
                 print("Activate object, R %.2f" % reward, file=self.log)
             if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
                 if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
@@ -1275,6 +1279,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     self.opened_doors_ids.extend(opened)
                     if opened:
                         reward += len(opened) * 0.02
+                        made_progress = True
                         print("Open door, R %.2f" % reward, file=self.log)
                 self.prev_closed_doors_ids = closed_doors_ids
             if items_cnt != self.prev_items_cnt:
@@ -1282,6 +1287,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     # Items can also appear (chest spill), so only the
                     # decrease branch credits a pickup.
                     reward += (self.prev_items_cnt - items_cnt) * 0.02
+                    made_progress = True
                     print("Collect item, R %.2f" % reward, file=self.log)
                 self.prev_items_cnt = items_cnt
 
@@ -1323,6 +1329,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         # penalty without (repositioning is also a valid use).
                         if diablo_state.count_visible_monsters(env) > 0:
                             reward += 0.05
+                            made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae != ActionEnum.CastManaShield:
                         # Exclude ManaShield, which is self-buff
@@ -1334,6 +1341,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
                         else:
                             reward += 0.10
+                            made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     if action not in self.v2_spells_used:
                         self.v2_spells_used.add(action)
@@ -1354,9 +1362,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
 
         was_exploring = (type(reward) != int)
 
-        if self.is_agent_stuck(d, was_exploring):
+        # made_progress gates the stuck counter; was_exploring (which includes
+        # damage taken) gates the idle penalty. Damage alone must not reset the
+        # stuck counter - otherwise corner-dancing under monster fire loops
+        # indefinitely until the 3000-step hard timeout.
+        if not done and self.is_agent_stuck(d, made_progress):
             truncated = True
-            reward = 0.0
+            reward = -10.0
             if self.is_agent_timedout():
                 print("Timedout, R %.2f" % reward, file=self.log)
             else:
