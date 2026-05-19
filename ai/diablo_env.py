@@ -1163,7 +1163,7 @@ class DiabloEnvV2Mixin:
     - full action set (movement + Stand + primary/secondary + 2 restore + 7 cast)
     - drops the legacy broadcast env-status planes
     - adds the per-tile monster_attrs (W,H,9) grid
-    - adds a flat scalars vector (17 continuous + 1 binary + 9 one-hot)
+    - adds a flat scalars vector (see compute_scalars in diablo_state.py)
     Apply before any DiabloEnv-derived class in the MRO so the overrides win."""
 
     @property
