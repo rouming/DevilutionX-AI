@@ -1322,7 +1322,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         # Escape spell: reward when monsters are visible, no
                         # penalty without (repositioning is also a valid use).
                         if diablo_state.count_visible_monsters(env) > 0:
-                            reward += 0.10
+                            reward += 0.05
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae != ActionEnum.CastManaShield:
                         # Exclude ManaShield, which is self-buff
