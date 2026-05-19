@@ -1233,6 +1233,14 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             reward = -10.0
             done = True
             print("Death, R %.2f" % reward, file=self.log)
+        elif d.player._pmode == dx.PLR_MODE.PM_QUIT.value:
+            # PrepDoEnding() fired: Diablo (final boss) was killed.
+            # The game loop stays alive in HeadlessMode; reset() will
+            # send RING_ENTRY_KEY_NEW to start the next episode.
+            reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Diablo killed, R %.2f" % reward, file=self.log)
         elif d.player.plrlevel < self.start_dungeon_level or \
              (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
             reward = 0.0
