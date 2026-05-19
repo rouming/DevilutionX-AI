@@ -3951,9 +3951,14 @@ void DoEnding()
 void PrepDoEnding()
 {
 	gbSoundOn = sgbSaveSoundOn;
-	gbRunGame = false;
+	if (!HeadlessMode) {
+		// In headless mode the game loop must stay alive so the Python
+		// env can send RING_ENTRY_KEY_NEW to reset the episode.
+		// DoEnding() / play_movie() are no-ops in HeadlessMode anyway.
+		gbRunGame = false;
+		cineflag = true;
+	}
 	MyPlayerIsDead = false;
-	cineflag = true;
 
 	Player &myPlayer = *MyPlayer;
 
