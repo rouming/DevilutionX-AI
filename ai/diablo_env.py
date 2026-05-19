@@ -1309,11 +1309,11 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                   <= ActionEnum.CastFireball.value):
                 spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
-                    # Spell isn't learned / available -- engine drops the
-                    # cast, no mana spent. Penalty teaches the agent to read
-                    # the spell-availability scalar bits before picking the
-                    # action.
-                    reward -= 0.05
+                    # Spell isn't learned / available -- engine drops the cast,
+                    # no mana spent. spell_avail[7] scalars in the observation
+                    # already tell the policy which spells are castable; no
+                    # explicit penalty needed here (it was suppressing spell use
+                    # by making the average expected return negative).
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
                 elif mana < self.prev_mana:
                     # Mana actually spent -> spell really fired.
@@ -1322,7 +1322,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         # Escape spell: reward when monsters are visible, no
                         # penalty without (repositioning is also a valid use).
                         if diablo_state.count_visible_monsters(env) > 0:
-                            reward += 0.02
+                            reward += 0.10
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae != ActionEnum.CastManaShield:
                         # Exclude ManaShield, which is self-buff
@@ -1333,7 +1333,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             reward -= 0.05
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
                         else:
-                            reward += 0.02
+                            reward += 0.10
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     if action not in self.v2_spells_used:
                         self.v2_spells_used.add(action)
@@ -1376,11 +1376,14 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         reward -= 0.01
                         print("Wasted primary, R %.2f" % reward, file=self.log)
                 elif action == ActionEnum.SecondaryAction.value:
-                    # Penalize interact with nothing adjacent to pick up or open.
+                    # Penalize interact with nothing adjacent to pick up or
+                    # activate. Door is intentionally excluded: a first-time
+                    # door open fires a reward (was_exploring=True) so the
+                    # idle block is never reached; re-open/close of an already-
+                    # opened door produces no reward and must be penalized.
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
-                            EF.Item.value | EF.Interactable.value | EF.Door.value,
-                            EF.Open.value):
+                            EF.Item.value | EF.Interactable.value, 0):
                         reward -= 0.01
                         print("Wasted secondary, R %.2f" % reward, file=self.log)
 
