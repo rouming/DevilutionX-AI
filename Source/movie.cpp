@@ -13,6 +13,7 @@
 #include "engine/demomode.h"
 #include "engine/events.hpp"
 #include "engine/sound.h"
+#include "headless_mode.hpp"
 #include "hwcursor.hpp"
 #include "storm/storm_svid.h"
 #include "utils/display.h"
@@ -27,6 +28,8 @@ bool loop_movie;
 void play_movie(const char *pszMovie, bool userCanClose)
 {
 	if (demo::IsRunning())
+		return;
+	if (HeadlessMode)
 		return;
 
 	movie_playing = true;
