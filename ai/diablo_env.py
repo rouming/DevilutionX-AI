@@ -1323,11 +1323,14 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                   <= ActionEnum.CastFireball.value):
                 spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
-                    # Spell isn't learned / available -- engine drops the cast,
-                    # no mana spent. spell_avail[7] scalars in the observation
-                    # already tell the policy which spells are castable; no
-                    # explicit penalty needed here (it was suppressing spell use
-                    # by making the average expected return negative).
+                    # Spell isn't learned / available -- engine drops the cast.
+                    # Small penalty to create a gradient: spell_avail[i]=0 in
+                    # the observation should predict "this action is bad".
+                    # Previously this was 0.0 because ManaShield was randomly
+                    # unavailable ~75% of episodes, making a penalty suppress
+                    # all spell use. Now ManaShield is always guaranteed so
+                    # unavailable events are only for the 5 spells not in kit.
+                    reward -= 0.01
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
                 elif mana < self.prev_mana:
                     # Mana actually spent -> spell really fired.
