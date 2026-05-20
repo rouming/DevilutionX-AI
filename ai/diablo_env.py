@@ -1362,8 +1362,6 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
                     # Spell not in kit -- engine drops the cast.
                     # Penalty provides gradient: spell_avail[i]=0 -> bad action.
-                    # At -0.05 spamming 1500 times/episode costs -75, well
-                    # outside the reward range (sigma~25), so it's unprofitable.
                     reward -= 0.05
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
                 elif mana < self.prev_mana:
@@ -1387,7 +1385,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             reward -= 0.05
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
                         else:
-                            reward += 0.10
+                            reward += 0.30
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     if action not in self.v2_spells_used:
