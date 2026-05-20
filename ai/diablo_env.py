@@ -1345,6 +1345,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     reward += 0.05
                     print("Correct restore HP, R %.2f" % reward, file=self.log)
                 else:
+                    reward -= 0.1
                     print("No-potion restore HP, R %.2f" % reward, file=self.log)
             elif action == ActionEnum.RestoreMana.value:
                 if self.prev_mana / max_mana >= 0.9:
@@ -1354,6 +1355,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     reward += 0.05
                     print("Correct restore mana, R %.2f" % reward, file=self.log)
                 else:
+                    reward -= 0.1
                     print("No-potion restore mana, R %.2f" % reward, file=self.log)
             # v2: cast spells
             elif (ActionEnum.CastFirebolt.value <= action
