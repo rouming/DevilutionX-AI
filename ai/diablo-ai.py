@@ -1161,6 +1161,29 @@ def _spell_name(p):
     lvl = int(p._pSplLvl[sid]) if 0 <= sid < len(p._pSplLvl) else 0
     return name, lvl
 
+def _spell_summary(p):
+    """Available episode spells with levels; active spell prefixed with '*'."""
+    episode_spells = [
+        (dx.SpellID.Firebolt,    'Fbt'),
+        (dx.SpellID.ChargedBolt, 'Cbt'),
+        (dx.SpellID.FireWall,    'Fwl'),
+        (dx.SpellID.ManaShield,  'Msh'),
+        (dx.SpellID.StoneCurse,  'Stc'),
+        (dx.SpellID.Phasing,     'Phz'),
+        (dx.SpellID.Fireball,    'Fbl'),
+    ]
+    spell_bits = (int(p._pMemSpells) | int(p._pAblSpells)
+                  | int(p._pISpells) | int(p._pScrlSpells))
+    active = int(p._pRSpell)
+    parts = []
+    for sid, abbrev in episode_spells:
+        sv = sid.value
+        if not (spell_bits & (1 << sv)):
+            continue
+        lvl = int(p._pSplLvl[sv]) if 0 <= sv < len(p._pSplLvl) else 0
+        parts.append(('*' if sv == active else '') + f'{abbrev}/{lvl}')
+    return ' '.join(parts) if parts else '-'
+
 def _speed_strs(iflags):
     f = int(iflags)
     ISE = dx.ItemSpecialEffect
@@ -1225,7 +1248,6 @@ def display_chars_window(d, stdscr):
     hp_max = int(p._pMaxHP) >> 6
     mp_cur = int(p._pMana) >> 6
     mp_max = int(p._pMaxMana) >> 6
-    spell, slvl = _spell_name(p)
     atk_spd, rec_spd = _speed_strs(int(p._pIFlags))
 
     lines = [
@@ -1241,7 +1263,7 @@ def display_chars_window(d, stdscr):
         f" To Hit:   {int(p._pIBonusToHit)}%",
         f" Resist:   Fire {int(p._pFireResist)}%  "
         f"Lgth {int(p._pLghtResist)}%  Mag {int(p._pMagResist)}%",
-        f" Spell:    {spell} (lvl {slvl})",
+        f" Spells:   {_spell_summary(p)}",
         f" Atk spd:  {atk_spd}",
         f" Rec spd:  {rec_spd}",
     ]
@@ -1422,15 +1444,15 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     hp_pct = _pct(int(p._pHitPoints), int(p._pMaxHP))
     mp_pct = _pct(int(p._pMana), int(p._pMaxMana))
-    spell, slvl = _spell_name(p)
+    spell_sum = _spell_summary(p)
     active_flags = _active_flags(p)
 
-    msg = "Ticks: %4d  Kills: %3d  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s/%d  State: %s%s" % (
+    msg = "Ticks: %4d  Kills: %3d  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s  State: %s%s" % (
         game.ticks(d),
         np.sum(d.MonsterKillCounts),
         pos[0], pos[1],
         hp_pct, mp_pct,
-        spell, slvl,
+        spell_sum,
         dx.PLR_MODE(d.player._pmode).name,
         (' ' + active_flags) if active_flags else '')
     msg = truncate_line(msg, width - 1)
