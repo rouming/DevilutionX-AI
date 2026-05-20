@@ -1219,6 +1219,20 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         pots = diablo_state.player_pot_counts(d.player)
         return pots[3] + pots[4] + pots[5] + pots[6]
 
+    def is_agent_stuck(self, d, made_progress):
+        """Override: drop the position-based counter reset.
+        The base class resets the stuck counter whenever the player moves >10
+        tiles, which lets a wandering agent dodge it indefinitely. For this env
+        the counter resets only on real combat/item progress (made_progress).
+        Threshold stays at 300 (same as the base class)."""
+        if self.is_agent_timedout():
+            return True
+        if made_progress:
+            self.last_steps_cnt = self.steps_cnt
+            self.last_player_pos = diablo_state.player_position(d)
+            return False
+        return self.steps_cnt - self.last_steps_cnt >= 300
+
     def reset(self, *, seed=None, options=None):
         obs, info = super().reset(seed=seed, options=options)
         d = self.game.state
@@ -1421,7 +1435,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
                             EF.Monster.value, 0):
-                        reward -= 0.01
+                        reward -= 0.05
                         print("Wasted primary, R %.2f" % reward, file=self.log)
                 elif action == ActionEnum.SecondaryAction.value:
                     # Penalize interact with nothing adjacent to pick up or
@@ -1432,7 +1446,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
                             EF.Item.value | EF.Interactable.value, 0):
-                        reward -= 0.01
+                        reward -= 0.05
                         print("Wasted secondary, R %.2f" % reward, file=self.log)
 
         return [reward], done, truncated
