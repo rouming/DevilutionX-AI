@@ -57,8 +57,12 @@ def find_inv_item(player, misc_id, spell_id=None):
     """Return item slot of first matching item in belt then inventory, or -1."""
     misc_val  = misc_id.value  if hasattr(misc_id,  'value') else misc_id
     spell_val = spell_id.value if hasattr(spell_id, 'value') else spell_id
+    itype_none = dx.ItemType.None_.value
     for i in range(8):
         item = player.SpdList[i]
+        # RemoveSpdBarItem only clears _itype; skip ghost slots.
+        if int(item._itype) == itype_none:
+            continue
         if item._iMiscId == misc_val and (spell_val is None or item._iSpell == spell_val):
             return belt_slot(i)
     for i in range(int(player._pNumInv)):
@@ -88,11 +92,16 @@ def player_pot_counts(p):
     imisc_rejuv     = dx.item_misc_id.IMISC_REJUV.value
     imisc_fullrejuv = dx.item_misc_id.IMISC_FULLREJUV.value
     spellid_healing = dx.SpellID.Healing.value
+    itype_none      = dx.ItemType.None_.value
 
     counts = np.zeros(7, dtype=np.int32)
 
     for k in range(8):
         it = p.SpdList[k]
+        # RemoveSpdBarItem only clears _itype; other fields are left stale.
+        # Skip cleared slots so ghost entries don't inflate the count.
+        if it._itype == itype_none:
+            continue
         misc = it._iMiscId
         if   misc == imisc_heal:       counts[0] += 1
         elif misc == imisc_scroll and it._iSpell == spellid_healing: counts[1] += 1

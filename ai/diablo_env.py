@@ -1205,10 +1205,27 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     observation set. The reward extends ClearTheLevel's structure with five
     spell-and-restore-aware terms in the non-terminal branch."""
 
+    @staticmethod
+    def _hp_pot_sum(d):
+        """Normalised sum of all HP-restoring pots (heal + scroll + fullheal + rejuv + fullrejuv).
+        Decreases by >0 iff at least one HP-restore pot was consumed this step."""
+        pots = diablo_state.player_pot_counts(d.player)
+        return pots[0] + pots[1] + pots[2] + pots[5] + pots[6]
+
+    @staticmethod
+    def _mana_pot_sum(d):
+        """Normalised sum of all mana-restoring pots (mana + fullmana + rejuv + fullrejuv).
+        Decreases by >0 iff at least one mana-restore pot was consumed this step."""
+        pots = diablo_state.player_pot_counts(d.player)
+        return pots[3] + pots[4] + pots[5] + pots[6]
+
     def reset(self, *, seed=None, options=None):
         obs, info = super().reset(seed=seed, options=options)
-        self.prev_mana = int(self.game.state.player._pMana)
-        self.prev_mana_shield = bool(self.game.state.player.pManaShield)
+        d = self.game.state
+        self.prev_mana = int(d.player._pMana)
+        self.prev_mana_shield = bool(d.player.pManaShield)
+        self.prev_hp_pots = self._hp_pot_sum(d)
+        self.prev_mana_pots = self._mana_pot_sum(d)
         self.v2_spells_used = set()
         return obs, info
 
@@ -1301,11 +1318,16 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 self.prev_items_cnt = items_cnt
 
             # v2: restore actions
+            # Use pot-count change to detect actual consumption: net HP can drop
+            # even after healing when the player takes damage in the same step,
+            # so hp > prev_hp would falsely deny the reward in that case.
+            hp_pots   = self._hp_pot_sum(d)
+            mana_pots = self._mana_pot_sum(d)
             if action == ActionEnum.RestoreHealth.value:
                 if self.prev_hp / max_hp >= 0.9:
                     reward -= 0.1
                     print("Wasteful restore HP, R %.2f" % reward, file=self.log)
-                elif hp > self.prev_hp:
+                elif hp_pots < self.prev_hp_pots:
                     reward += 0.05
                     print("Correct restore HP, R %.2f" % reward, file=self.log)
                 else:
@@ -1314,7 +1336,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 if self.prev_mana / max_mana >= 0.9:
                     reward -= 0.1
                     print("Wasteful restore mana, R %.2f" % reward, file=self.log)
-                elif mana > self.prev_mana:
+                elif mana_pots < self.prev_mana_pots:
                     reward += 0.05
                     print("Correct restore mana, R %.2f" % reward, file=self.log)
                 else:
@@ -1371,6 +1393,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp          = hp
         self.prev_mana        = mana
         self.prev_mana_shield = bool(d.player.pManaShield)
+        self.prev_hp_pots     = self._hp_pot_sum(d)
+        self.prev_mana_pots   = self._mana_pot_sum(d)
 
         was_exploring = (type(reward) != int)
 
