@@ -1208,6 +1208,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     def reset(self, *, seed=None, options=None):
         obs, info = super().reset(seed=seed, options=options)
         self.prev_mana = int(self.game.state.player._pMana)
+        self.prev_mana_shield = bool(self.game.state.player.pManaShield)
         self.v2_spells_used = set()
         return obs, info
 
@@ -1323,14 +1324,11 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                   <= ActionEnum.CastFireball.value):
                 spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
-                    # Spell isn't learned / available -- engine drops the cast.
-                    # Small penalty to create a gradient: spell_avail[i]=0 in
-                    # the observation should predict "this action is bad".
-                    # Previously this was 0.0 because ManaShield was randomly
-                    # unavailable ~75% of episodes, making a penalty suppress
-                    # all spell use. Now ManaShield is always guaranteed so
-                    # unavailable events are only for the 5 spells not in kit.
-                    reward -= 0.01
+                    # Spell not in kit -- engine drops the cast.
+                    # Penalty provides gradient: spell_avail[i]=0 -> bad action.
+                    # At -0.05 spamming 1500 times/episode costs -75, well
+                    # outside the reward range (sigma~25), so it's unprofitable.
+                    reward -= 0.05
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
                 elif mana < self.prev_mana:
                     # Mana actually spent -> spell really fired.
@@ -1342,11 +1340,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             reward += 0.05
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
-                    elif ae != ActionEnum.CastManaShield:
-                        # Exclude ManaShield, which is self-buff
-                        # rewarded implicitly - the damage-taken
-                        # penalty shrinks when the shield absorbs
-                        # hits, so no explicit signal is needed here.
+                    elif ae == ActionEnum.CastManaShield:
+                        # ManaShield is a buff: casting it when already active
+                        # wastes mana with no benefit.
+                        if self.prev_mana_shield:
+                            reward -= 0.05
+                            print("Redundant ManaShield, R %.2f" % reward, file=self.log)
+                    else:
                         if diablo_state.count_visible_monsters(env) == 0:
                             reward -= 0.05
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
@@ -1368,8 +1368,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         # intentionally stays on the "only-on-decrease" pattern so that
         # monster regen / new-monster spawns don't get double-credited as
         # damage.
-        self.prev_hp   = hp
-        self.prev_mana = mana
+        self.prev_hp          = hp
+        self.prev_mana        = mana
+        self.prev_mana_shield = bool(d.player.pManaShield)
 
         was_exploring = (type(reward) != int)
 
