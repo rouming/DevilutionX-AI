@@ -1161,8 +1161,9 @@ def _spell_name(p):
     lvl = int(p._pSplLvl[sid]) if 0 <= sid < len(p._pSplLvl) else 0
     return name, lvl
 
-def _spell_summary(p):
+def _spell_summary(d):
     """Available episode spells with levels; active spell prefixed with '*'."""
+    import diablo_state as _ds
     episode_spells = [
         (dx.SpellID.Firebolt,    'Fbt'),
         (dx.SpellID.ChargedBolt, 'Cbt'),
@@ -1172,8 +1173,8 @@ def _spell_summary(p):
         (dx.SpellID.Phasing,     'Phz'),
         (dx.SpellID.Fireball,    'Fbl'),
     ]
-    spell_bits = (int(p._pMemSpells) | int(p._pAblSpells)
-                  | int(p._pISpells) | int(p._pScrlSpells))
+    spell_bits = _ds.player_spell_bits(d)
+    p = d.player
     active = int(p._pRSpell)
     parts = []
     for sid, abbrev in episode_spells:
@@ -1263,7 +1264,7 @@ def display_chars_window(d, stdscr):
         f" To Hit:   {int(p._pIBonusToHit)}%",
         f" Resist:   Fire {int(p._pFireResist)}%  "
         f"Lgth {int(p._pLghtResist)}%  Mag {int(p._pMagResist)}%",
-        f" Spells:   {_spell_summary(p)}",
+        f" Spells:   {_spell_summary(d)}",
         f" Atk spd:  {atk_spd}",
         f" Rec spd:  {rec_spd}",
     ]
@@ -1444,7 +1445,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     hp_pct = _pct(int(p._pHitPoints), int(p._pMaxHP))
     mp_pct = _pct(int(p._pMana), int(p._pMaxMana))
-    spell_sum = _spell_summary(p)
+    spell_sum = _spell_summary(d)
     active_flags = _active_flags(p)
 
     msg = "Ticks: %4d  Kills: %3d  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s  State: %s%s" % (

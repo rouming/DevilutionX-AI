@@ -357,9 +357,12 @@ def count_active_monsters(d):
 
 @njit(cache=True)
 def player_spell_bits(d):
-    """OR of the four spell-source masks. Bit i set iff SpellID(i) is castable."""
+    """Bit SpellID(i) set iff SpellID(i) is castable.
+    The engine's GetSpellBitmask stores spell id N at bit N-1 (1-indexed).
+    Shift left by 1 so callers can check with (1 << SpellID.value)."""
     p = d.player
-    return p._pMemSpells | p._pAblSpells | p._pISpells | p._pScrlSpells
+    raw = p._pMemSpells | p._pAblSpells | p._pISpells | p._pScrlSpells
+    return raw << np.uint64(1)
 
 @njit(cache=True)
 def count_active_monsters_total_hp(d):
