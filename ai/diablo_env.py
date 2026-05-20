@@ -81,6 +81,8 @@ _ACTION_TO_SPELL = {
     ActionEnum.CastPhasing:     dx.SpellID.Phasing,
     ActionEnum.CastFireball:    dx.SpellID.Fireball,
 }
+# SpellID int value -> ActionEnum (reverse of _ACTION_TO_SPELL)
+_SPELL_TO_ACTION = {int(v.value): k for k, v in _ACTION_TO_SPELL.items()}
 
 class ActionMask(enum.Enum):
     MASK_TRIGGERS      = 1<<0
@@ -1238,6 +1240,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         d = self.game.state
         self.prev_mana = int(d.player._pMana)
         self.prev_mana_shield = bool(d.player.pManaShield)
+        self.prev_pmode = int(d.player._pmode)
         self.prev_hp_pots = self._hp_pot_sum(d)
         self.prev_mana_pots = self._mana_pot_sum(d)
         self.v2_spells_used = set()
@@ -1253,6 +1256,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         player_pos       = diablo_state.player_position(d)
         hp               = d.player._pHitPoints
         mana             = int(d.player._pMana)
+        curr_pmode       = int(d.player._pmode)
         max_hp           = max(int(d.player._pMaxHP),   1)
         max_mana         = max(int(d.player._pMaxMana), 1)
 
@@ -1357,18 +1361,23 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 else:
                     reward -= 0.1
                     print("No-potion restore mana, R %.2f" % reward, file=self.log)
-            # v2: cast spells
+            # v2: cast spells - unavailable penalty is action-tied
             elif (ActionEnum.CastFirebolt.value <= action
                   <= ActionEnum.CastFireball.value):
                 spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
-                    # Spell not in kit -- engine drops the cast.
+                    # Spell not in kit - engine drops the cast.
                     # Penalty provides gradient: spell_avail[i]=0 -> bad action.
                     reward -= 0.05
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
-                elif mana < self.prev_mana:
-                    # Mana actually spent -> spell really fired.
-                    ae = ActionEnum(action)
+
+            # v2: spell cast reward - spell animation is skipped so PM_SPELL
+            # lasts exactly 1 tick; fires once per cast, chained casts each
+            # get their own PM_SPELL tick. May fire later than the action was
+            # submitted (e.g. player mid-attack).
+            if curr_pmode == dx.PLR_MODE.PM_SPELL.value:
+                ae = _SPELL_TO_ACTION.get(int(d.player.executedSpell['spellId']))
+                if ae is not None:
                     if ae == ActionEnum.CastPhasing:
                         # Escape spell: reward when monsters are visible, no
                         # penalty without (repositioning is also a valid use).
@@ -1390,8 +1399,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             reward += 0.30
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
-                    if action not in self.v2_spells_used:
-                        self.v2_spells_used.add(action)
+                    if ae.value not in self.v2_spells_used:
+                        self.v2_spells_used.add(ae.value)
                         reward += 0.1
                         print("First spell use, R %.2f" % reward, file=self.log)
 
@@ -1407,6 +1416,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp          = hp
         self.prev_mana        = mana
         self.prev_mana_shield = bool(d.player.pManaShield)
+        self.prev_pmode       = curr_pmode
         self.prev_hp_pots     = self._hp_pot_sum(d)
         self.prev_mana_pots   = self._mana_pot_sum(d)
 
