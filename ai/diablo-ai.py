@@ -1651,6 +1651,18 @@ def train_ai(args, gameconfig):
     import tensorboardX
     import torch
 
+    # Load training status; fail fast if already at the frame limit so we
+    # do not spawn runners or create a sprout snapshot needlessly.
+    model_dir = utils.get_run_dir(args.model)
+    try:
+        status = utils.get_status(model_dir)
+    except OSError:
+        status = {"num_frames": 0, "update": 0}
+    if status["num_frames"] >= args.frames_int:
+        print(f"Already at {status['num_frames']} frames, "
+              f"limit is {args.frames_int}. Increase --frames and retry.")
+        sys.exit(1)
+
     # Prepare model dir
     spr, model_dir = prepare_directory_for_run(args, args.model)
 
@@ -1705,12 +1717,6 @@ def train_ai(args, gameconfig):
     eval_penv_pool = ParallelEnvPool(eval_envs)
 
     txt_logger.info("Environments loaded\n")
-
-    # Load training status
-    try:
-        status = utils.get_status(model_dir)
-    except OSError:
-        status = {"num_frames": 0, "update": 0}
 
     # Load best training status if exists
     best_success_rate = 0.0
