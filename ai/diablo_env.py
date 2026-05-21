@@ -1244,12 +1244,15 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp_pots = self._hp_pot_sum(d)
         self.prev_mana_pots = self._mana_pot_sum(d)
         self.v2_spells_used = set()
+        # Per-monster HP snapshot for hit-count reward: counts how many
+        # distinct monsters took damage this step regardless of damage amount.
+        self.prev_mon_hp = np.full(len(d.Monsters), -1, dtype=np.int32)
+        diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
         return obs, info
 
     def evaluate_step(self, d, env, action):
         action           = int(action)
         monsters_cnt     = diablo_state.count_active_monsters(d)
-        total_hp         = diablo_state.count_active_monsters_total_hp(d)
         obj_cnt          = diablo_state.count_active_objects(d)
         closed_doors_ids = diablo_state.get_closed_doors_ids(d)
         items_cnt        = diablo_state.count_active_items(d)
@@ -1289,7 +1292,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             self.episode_success = True
             print("Goal, R %.2f" % reward, file=self.log)
         else:
-            monster_damaged = total_hp < self.prev_total_hp
+            # Count distinct monsters that took damage this step.
+            monsters_hit = diablo_state.count_monsters_hit(d, self.prev_mon_hp)
+            monster_damaged = monsters_hit > 0
 
             if hp < self.prev_hp:
                 # Player took damage. prev_hp is updated unconditionally
@@ -1299,12 +1304,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
                 print("Damage taken, R %.2f" % reward, file=self.log)
             if monster_damaged:
-                # Monster took damage - scale by HP drop / player max HP so
-                # multi-target spells produce proportionally stronger signal.
-                hp_drop = self.prev_total_hp - total_hp
-                reward += max(0.02, hp_drop / d.player._pMaxHP * 0.5)
+                reward += monsters_hit * 0.02
                 made_progress = True
-                print("Attack monster, R %.2f" % reward, file=self.log)
+                print("Attack %d monster(s), R %.2f" % (monsters_hit, reward), file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
                 reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
@@ -1408,15 +1410,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         reward += 0.10
                         print("First spell use, R %.2f" % reward, file=self.log)
 
-            if monster_damaged:
-                self.prev_total_hp = total_hp
+        # Update per-monster HP snapshot every step so new spawns and
+        # regeneration are baselined correctly.
+        diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
 
         # prev_hp and prev_mana update every step so that v2 branches see
         # the pre-step value, and damage signal is not silently suppressed
-        # after a heal (RestoreHealth or natural regen). prev_total_hp
-        # intentionally stays on the "only-on-decrease" pattern so that
-        # monster regen / new-monster spawns don't get double-credited as
-        # damage.
+        # after a heal (RestoreHealth or natural regen).
         self.prev_hp          = hp
         self.prev_mana        = mana
         self.prev_mana_shield = bool(d.player.pManaShield)

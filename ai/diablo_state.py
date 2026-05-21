@@ -374,11 +374,32 @@ def player_spell_bits(d):
     return raw << np.uint64(1)
 
 @njit(cache=True)
+def count_active_monsters(d):
+    return len(d.ActiveMonsters)
+
+@njit(cache=True)
 def count_active_monsters_total_hp(d):
     total = 0
     for mid in d.ActiveMonsters:
         total += d.Monsters[mid].hitPoints
     return total
+
+@njit(cache=True)
+def snapshot_monster_hp(d, out):
+    """Fill out[mid] = current hitPoints for each active monster; -1 elsewhere."""
+    for i in range(len(out)):
+        out[i] = -1
+    for mid in d.ActiveMonsters:
+        out[mid] = d.Monsters[mid].hitPoints
+
+@njit(cache=True)
+def count_monsters_hit(d, prev_hp):
+    """Count active monsters whose hitPoints dropped since prev_hp snapshot."""
+    count = 0
+    for mid in d.ActiveMonsters:
+        if prev_hp[mid] >= 0 and d.Monsters[mid].hitPoints < prev_hp[mid]:
+            count += 1
+    return count
 
 @njit(cache=True)
 def count_visible_monsters(env):

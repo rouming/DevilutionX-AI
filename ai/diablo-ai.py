@@ -1461,11 +1461,11 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     obj_cnt = diablo_state.count_active_objects(d)
     items_cnt = diablo_state.count_active_items(d)
-    mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
+    mon_cnt = diablo_state.count_active_monsters(d)
     events_str, events_progress = get_events_as_string(game, events)
 
-    msg = "Mons HP: %d  Items: %d  Objs: %d  Lvl: %d  %c %s" % (
-        mon_total_hp, items_cnt, obj_cnt, d.player.plrlevel,
+    msg = "Mons: %d  Items: %d  Objs: %d  Lvl: %d  %c %s" % (
+        mon_cnt, items_cnt, obj_cnt, d.player.plrlevel,
         events_progress, events_str)
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 1, width // 2 - len(msg) // 2, msg)
