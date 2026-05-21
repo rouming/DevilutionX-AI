@@ -1347,6 +1347,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     print("Wasteful restore HP, R %.2f" % reward, file=self.log)
                 elif hp_pots < self.prev_hp_pots:
                     reward += 0.05
+                    made_progress = True
                     print("Correct restore HP, R %.2f" % reward, file=self.log)
                 else:
                     reward -= 0.1
@@ -1357,6 +1358,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     print("Wasteful restore mana, R %.2f" % reward, file=self.log)
                 elif mana_pots < self.prev_mana_pots:
                     reward += 0.05
+                    made_progress = True
                     print("Correct restore mana, R %.2f" % reward, file=self.log)
                 else:
                     reward -= 0.1
@@ -1368,7 +1370,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
                     # Spell not in kit - engine drops the cast.
                     # Penalty provides gradient: spell_avail[i]=0 -> bad action.
-                    reward -= 0.05
+                    reward -= 0.10
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
 
             # v2: spell cast reward - spell animation is skipped so PM_SPELL
@@ -1382,26 +1384,26 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         # Escape spell: reward when monsters are visible, no
                         # penalty without (repositioning is also a valid use).
                         if diablo_state.count_visible_monsters(env) > 0:
-                            reward += 0.05
+                            reward += 0.15
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae == ActionEnum.CastManaShield:
                         # ManaShield is a buff: casting it when already active
                         # wastes mana with no benefit.
                         if self.prev_mana_shield:
-                            reward -= 0.05
+                            reward -= 0.10
                             print("Redundant ManaShield, R %.2f" % reward, file=self.log)
                     else:
                         if diablo_state.count_visible_monsters(env) == 0:
-                            reward -= 0.05
+                            reward -= 0.10
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
                         else:
-                            reward += 0.30
+                            reward += 0.15
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
-                    if ae.value not in self.v2_spells_used:
+                    if ae.value not in self.v2_spells_used and made_progress:
                         self.v2_spells_used.add(ae.value)
-                        reward += 0.1
+                        reward += 0.10
                         print("First spell use, R %.2f" % reward, file=self.log)
 
             if monster_damaged:
