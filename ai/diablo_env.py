@@ -1302,7 +1302,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 # Monster took damage - scale by HP drop / player max HP so
                 # multi-target spells produce proportionally stronger signal.
                 hp_drop = self.prev_total_hp - total_hp
-                reward += hp_drop / d.player._pMaxHP * 0.2
+                reward += max(0.02, hp_drop / d.player._pMaxHP * 0.5)
                 made_progress = True
                 print("Attack monster, R %.2f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
