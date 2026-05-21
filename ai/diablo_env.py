@@ -496,7 +496,7 @@ class DiabloEnv(gym.Env):
         closed_doors_ids = diablo_state.get_closed_doors_ids(d)
         items_cnt = diablo_state.count_active_items(d)
         monsters_cnt = diablo_state.count_active_monsters(d)
-        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
         explored_cnt = diablo_state.count_explored_tiles(d)
         hp = d.player._pHitPoints
         pos = diablo_state.player_position(d)
@@ -506,7 +506,7 @@ class DiabloEnv(gym.Env):
         self.opened_doors_ids = []
         self.prev_items_cnt = items_cnt
         self.prev_monsters_cnt = monsters_cnt
-        self.prev_total_hp = total_hp
+        self.prev_mon_total_hp = mon_total_hp
         self.prev_explored_cnt = explored_cnt
         self.prev_hp = hp
         self.total_reward = 0.0
@@ -595,7 +595,7 @@ class DiabloEnv(gym.Env):
         closed_doors_ids = diablo_state.get_closed_doors_ids(d)
         items_cnt = diablo_state.count_active_items(d)
         monsters_cnt = diablo_state.count_active_monsters(d)
-        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
         explored_cnt = diablo_state.count_explored_tiles(d)
         hp = d.player._pHitPoints
         player_pos = diablo_state.player_position(d)
@@ -720,10 +720,10 @@ class DiabloEnv(gym.Env):
                     reward += 5.0
                     print("Collect item, R %.1f" % reward, file=self.log)
                 self.prev_items_cnt = items_cnt
-            if total_hp < self.prev_total_hp:
+            if mon_total_hp < self.prev_mon_total_hp:
                 # Monster took damage
                 reward += 10.0
-                self.prev_total_hp = total_hp
+                self.prev_mon_total_hp = mon_total_hp
                 print("Attack monster, R %.1f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
@@ -966,7 +966,7 @@ class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
 
     def evaluate_step(self, d, env, action):
         monsters_cnt = diablo_state.count_active_monsters(d)
-        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
         hp = d.player._pHitPoints
 
@@ -1003,10 +1003,10 @@ class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
                 reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
                 self.prev_hp = hp
                 print("Damage taken, R %.2f" % reward, file=self.log)
-            if total_hp < self.prev_total_hp:
+            if mon_total_hp < self.prev_mon_total_hp:
                 # Monster took damage
                 reward += 0.02
-                self.prev_total_hp = total_hp
+                self.prev_mon_total_hp = mon_total_hp
                 print("Attack monster, R %.2f" % reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
@@ -1071,7 +1071,7 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
         worker_action = int(action[0])
         manager_option = int(action[1])
         monsters_cnt = diablo_state.count_active_monsters(d)
-        total_hp = diablo_state.count_active_monsters_total_hp(d)
+        mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
         player_pos = diablo_state.player_position(d)
         hp = d.player._pHitPoints
 
@@ -1107,7 +1107,7 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
             # Explorer selected: keep state in sync so no stale delta
             # fires when manager later switches to combat.
             self.prev_hp = hp
-            self.prev_total_hp = total_hp
+            self.prev_mon_total_hp = mon_total_hp
             self.prev_monsters_cnt = monsters_cnt
         elif manager_option == 1:
             # Combat selected
@@ -1121,10 +1121,10 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
                 worker_reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
                 self.prev_hp = hp
                 print("Damage taken, R %.2f" % worker_reward, file=self.log)
-            if total_hp < self.prev_total_hp:
+            if mon_total_hp < self.prev_mon_total_hp:
                 # Monster took damage
                 worker_reward += 0.02
-                self.prev_total_hp = total_hp
+                self.prev_mon_total_hp = mon_total_hp
                 print("Attack monster, R %.2f" % worker_reward, file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
