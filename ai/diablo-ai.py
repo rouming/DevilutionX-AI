@@ -1581,8 +1581,9 @@ def prepare_directory_for_run(args, dir_name):
         # Create model state
         spr.create(group=args.env, head=dir_name, params_str=params_str)
     elif not args.cont:
-        # Create a snapshot of a model state
-        spr.create(from_head=dir_name, params_str=params_str)
+        # Create a snapshot of a model state (no alias/description inherited)
+        spr.create(from_head=dir_name, params_str=params_str,
+                   alias_str="", description_str="")
     else:
         # Continue in the current head, but be careful; firstly, check
         # if the environment has changed
