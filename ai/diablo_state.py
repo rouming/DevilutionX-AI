@@ -1375,6 +1375,7 @@ class DiabloGame:
                          no_monsters=1 if config["no-monsters"] else 0,
                          blind_monsters=1 if config["blind-monsters"] else 0,
                          harmless_barrels=1 if config["harmless-barrels"] else 0,
+                         spell_potency=int(config.get("spell-potency", 0.0) * 100),
                          no_auto_walk_on_seconday_action=
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
                          )

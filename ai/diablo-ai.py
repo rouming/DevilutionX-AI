@@ -155,6 +155,9 @@ def make_diablo_parser():
         "--harmless-barrels", action="store_true",
         help="Disable explosive barrels, urns, or pods")
     common_parser.add_argument(
+        "--spell-potency", type=float, default=0.0, metavar="PROB",
+        help="Spell potency multiplier [0.0, 1.0]: 0=normal engine rules, 1=spells one-shot any monster (default: 0.0)")
+    common_parser.add_argument(
         "--seed", type=int, default=0,
         help="Initial global experiment seed (controls PyTorch, numpy, RNGs, etc) (default: 0)")
     # See also `incompatible_options`
@@ -2346,6 +2349,7 @@ def main():
         "no-monsters": args.no_monsters,
         "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
+        "spell-potency": args.spell_potency,
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "view-radius": args.view_radius,
         "game-ticks-per-step": args.game_ticks_per_step,
