@@ -932,6 +932,7 @@ GameplayOptions::GameplayOptions()
     , noAutowalkOnSecondaryAction("Disable auto-walk when pressing the secondary action", OptionEntryFlags::Invisible, "", "", false)
     , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
     , blindMonsters("Blind monsters", OptionEntryFlags::Invisible, "", "", false)
+    , spellPotency("Spell potency", OptionEntryFlags::Invisible, "", "", 0)
 {
 }
 
@@ -991,6 +992,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noAutowalkOnSecondaryAction,
 		&invinciblePlayer,
 		&blindMonsters,
+		&spellPotency,
 	};
 }
 

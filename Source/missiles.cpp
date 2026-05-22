@@ -263,6 +263,12 @@ bool MonsterMHit(const Player &player, int monsterId, int mindam, int maxdam, in
 	if (resist)
 		dam >>= 2;
 
+	if (!missileData.isArrow()) {
+		int potencyPct = *GetOptions().Gameplay.spellPotency;
+		if (potencyPct > 0)
+			dam += static_cast<int>(potencyPct * static_cast<float>(monster.maxHitPoints) / 100.0f);
+	}
+
 	if (&player == MyPlayer)
 		ApplyMonsterDamage(damageType, monster, dam);
 

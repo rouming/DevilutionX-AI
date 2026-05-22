@@ -678,6 +678,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean invinciblePlayer;
 	/** @brief Enable blind monsters */
 	OptionEntryBoolean blindMonsters;
+	/** @brief Spell potency percentage for curriculum learning (0=normal, 100=one-shot anything) */
+	OptionEntryInt<int> spellPotency;
 };
 
 struct ControllerOptions : OptionCategoryBase {
