@@ -1466,6 +1466,97 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         return [reward], done, truncated
 
 
+class DiabloEnv_ClearAllLevels_v1(DiabloEnv_ClearAllLevels_v0):
+    """Sparse-reward variant of ClearAllLevels-v0.
+
+    Reward: +20 for goal (Diablo killed or level cleared), -10 for all
+    other episode endings (death, escape, stuck, timeout). All intermediate
+    shaping terms are removed. Progress tracking for the stuck counter is
+    preserved unchanged from v0."""
+
+    def evaluate_step(self, d, env, action):
+        action           = int(action)
+        monsters_cnt     = diablo_state.count_active_monsters(d)
+        obj_cnt          = diablo_state.count_active_objects(d)
+        closed_doors_ids = diablo_state.get_closed_doors_ids(d)
+        items_cnt        = diablo_state.count_active_items(d)
+        player_pos       = diablo_state.player_position(d)
+        hp               = d.player._pHitPoints
+        mana             = int(d.player._pMana)
+        curr_pmode       = int(d.player._pmode)
+
+        truncated = False
+        done = False
+        reward = int(0)
+        made_progress = False
+
+        if diablo_state.is_player_dead(d):
+            reward = -10.0
+            done = True
+            print("Death, R %.2f" % reward, file=self.log)
+        elif d.player._pmode == dx.PLR_MODE.PM_QUIT.value:
+            reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Diablo killed, R %.2f" % reward, file=self.log)
+        elif d.player.plrlevel < self.start_dungeon_level or \
+             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
+            reward = -10.0
+            done = True
+            print("Escape, R %.2f" % reward, file=self.log)
+        elif player_pos == self.goal_pos or \
+             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
+            reward = 20.0
+            done = True
+            self.episode_success = True
+            print("Goal, R %.2f" % reward, file=self.log)
+        else:
+            # Track progress for the stuck counter - no rewards emitted.
+            monsters_hit = diablo_state.count_monsters_hit(d, self.prev_mon_hp)
+            if monsters_hit > 0:
+                made_progress = True
+            if monsters_cnt < self.prev_monsters_cnt:
+                self.prev_monsters_cnt = monsters_cnt
+                made_progress = True
+            if obj_cnt < self.prev_obj_cnt:
+                self.prev_obj_cnt = obj_cnt
+                made_progress = True
+            if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
+                if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
+                    opened = list(set(self.prev_closed_doors_ids) - set(closed_doors_ids))
+                    opened = [o for o in opened if o not in self.opened_doors_ids]
+                    self.opened_doors_ids.extend(opened)
+                    if opened:
+                        made_progress = True
+                self.prev_closed_doors_ids = closed_doors_ids
+            if items_cnt != self.prev_items_cnt:
+                if items_cnt < self.prev_items_cnt:
+                    made_progress = True
+                self.prev_items_cnt = items_cnt
+
+        # Per-monster HP snapshot updated every step so new spawns and
+        # regeneration are baselined correctly.
+        diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
+
+        # State snapshots used by parent class infrastructure.
+        self.prev_hp          = hp
+        self.prev_mana        = mana
+        self.prev_mana_shield = bool(d.player.pManaShield)
+        self.prev_pmode       = curr_pmode
+        self.prev_hp_pots     = self._hp_pot_sum(d)
+        self.prev_mana_pots   = self._mana_pot_sum(d)
+
+        if not done and self.is_agent_stuck(d, made_progress):
+            truncated = True
+            reward = -10.0
+            if self.is_agent_timedout():
+                print("Timedout, R %.2f" % reward, file=self.log)
+            else:
+                print("Stuck, R %.2f" % reward, file=self.log)
+
+        return [reward], done, truncated
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1480,6 +1571,8 @@ DIABLO_ENVS = [
 
     { 'id': 'Diablo-ClearAllLevels-v0',
       'entry_point': DiabloEnv_ClearAllLevels_v0 },
+    { 'id': 'Diablo-ClearAllLevels-v1',
+      'entry_point': DiabloEnv_ClearAllLevels_v1 },
 
     # HRL Environment Classes
 
