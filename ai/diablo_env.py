@@ -1202,30 +1202,88 @@ class DiabloEnvV2Mixin:
         return diablo_state.compute_scalars(d)
 
 
+class RewardEvent(enum.Enum):
+    """Keys for the REWARDS dict used by DiabloEnv_ClearAllLevels."""
+    # Terminal outcomes
+    Death              = enum.auto()
+    DiabloKilled       = enum.auto()
+    Escape             = enum.auto()
+    Goal               = enum.auto()
+    # Episode end by inactivity
+    Stuck              = enum.auto()
+    Timedout           = enum.auto()
+    # Per-step shaping (flat unless noted)
+    DamageTaken        = enum.auto()  # coeff: reward -= (delta_hp/max_hp)*coeff
+    AttackMonster      = enum.auto()  # per distinct monster hit
+    KillMonster        = enum.auto()  # per kill
+    ActivateObject     = enum.auto()  # per object activated
+    OpenDoor           = enum.auto()  # per first-time door open
+    CollectItem        = enum.auto()  # per item picked up
+    RestoreHpCorrect   = enum.auto()
+    RestoreHpWasteful  = enum.auto()
+    RestoreHpNoPot     = enum.auto()
+    RestoreManaCorrect   = enum.auto()
+    RestoreManaWasteful  = enum.auto()
+    RestoreManaNoPot     = enum.auto()
+    SpellUnavailable   = enum.auto()
+    SpellSuccessful    = enum.auto()
+    SpellWasteful      = enum.auto()
+    SpellRedundantShield = enum.auto()
+    SpellFirstUse      = enum.auto()
+    MovementPenalty    = enum.auto()
+    WastedPrimary      = enum.auto()
+    WastedSecondary    = enum.auto()
+
+
 class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     """Combat + exploration across all dungeon levels with the v2 action and
-    observation set. The reward extends ClearTheLevel's structure with five
-    spell-and-restore-aware terms in the non-terminal branch."""
+    observation set. Reward magnitudes live in the REWARDS class dict;
+    subclasses tune shaping by overriding individual entries."""
+
+    REWARDS = {
+        RewardEvent.Death:               -10.0,
+        RewardEvent.DiabloKilled:        +20.0,
+        RewardEvent.Escape:              -10.0,
+        RewardEvent.Goal:                +20.0,
+        RewardEvent.Stuck:               -10.0,
+        RewardEvent.Timedout:            -10.0,
+        RewardEvent.DamageTaken:         +5.0,
+        RewardEvent.AttackMonster:       +0.02,
+        RewardEvent.KillMonster:         +0.1,
+        RewardEvent.ActivateObject:      +0.05,
+        RewardEvent.OpenDoor:            +0.02,
+        RewardEvent.CollectItem:         +0.02,
+        RewardEvent.RestoreHpCorrect:    +0.05,
+        RewardEvent.RestoreHpWasteful:   -0.10,
+        RewardEvent.RestoreHpNoPot:      -0.10,
+        RewardEvent.RestoreManaCorrect:  +0.05,
+        RewardEvent.RestoreManaWasteful: -0.10,
+        RewardEvent.RestoreManaNoPot:    -0.10,
+        RewardEvent.SpellUnavailable:    -0.10,
+        RewardEvent.SpellSuccessful:     +0.15,
+        RewardEvent.SpellWasteful:       -0.10,
+        RewardEvent.SpellRedundantShield:-0.10,
+        RewardEvent.SpellFirstUse:       +0.10,
+        RewardEvent.MovementPenalty:     -0.01,
+        RewardEvent.WastedPrimary:       -0.05,
+        RewardEvent.WastedSecondary:     -0.05,
+    }
 
     @staticmethod
     def _hp_pot_sum(d):
-        """Normalised sum of all HP-restoring pots (heal + scroll + fullheal + rejuv + fullrejuv).
-        Decreases by >0 iff at least one HP-restore pot was consumed this step."""
+        """Sum of all HP-restoring pots; decreases iff one was consumed this step."""
         pots = diablo_state.player_pot_counts(d.player)
         return pots[0] + pots[1] + pots[2] + pots[5] + pots[6]
 
     @staticmethod
     def _mana_pot_sum(d):
-        """Normalised sum of all mana-restoring pots (mana + fullmana + rejuv + fullrejuv).
-        Decreases by >0 iff at least one mana-restore pot was consumed this step."""
+        """Sum of all mana-restoring pots; decreases iff one was consumed this step."""
         pots = diablo_state.player_pot_counts(d.player)
         return pots[3] + pots[4] + pots[5] + pots[6]
 
     def is_agent_stuck(self, d, made_progress):
         """Override: drop the position-based counter reset.
-        The base class resets the stuck counter whenever the player moves >10
-        tiles, which lets a wandering agent dodge it indefinitely. For this env
-        the counter resets only on real combat/item progress (made_progress).
+        Counter resets only on real combat/item progress (made_progress).
         Threshold stays at 300 (same as the base class)."""
         if self.is_agent_timedout():
             return True
@@ -1244,13 +1302,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp_pots = self._hp_pot_sum(d)
         self.prev_mana_pots = self._mana_pot_sum(d)
         self.v2_spells_used = set()
-        # Per-monster HP snapshot for hit-count reward: counts how many
-        # distinct monsters took damage this step regardless of damage amount.
+        # Per-monster HP snapshot: counts distinct monsters hit per step.
         self.prev_mon_hp = np.full(len(d.Monsters), -1, dtype=np.int32)
         diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
         return obs, info
 
     def evaluate_step(self, d, env, action):
+        R                = self.REWARDS
         action           = int(action)
         monsters_cnt     = diablo_state.count_active_monsters(d)
         obj_cnt          = diablo_state.count_active_objects(d)
@@ -1265,29 +1323,29 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
 
         truncated = False
         done = False
+        # int(0) sentinel: becomes float only when a reward fires.
+        # was_exploring below uses type(reward) != int to detect activity.
         reward = int(0)
         made_progress = False
 
         if diablo_state.is_player_dead(d):
-            reward = -10.0
+            reward = R[RewardEvent.Death]
             done = True
             print("Death, R %.2f" % reward, file=self.log)
         elif d.player._pmode == dx.PLR_MODE.PM_QUIT.value:
             # PrepDoEnding() fired: Diablo (final boss) was killed.
-            # The game loop stays alive in HeadlessMode; reset() will
-            # send RING_ENTRY_KEY_NEW to start the next episode.
-            reward = 20.0
+            reward = R[RewardEvent.DiabloKilled]
             done = True
             self.episode_success = True
             print("Diablo killed, R %.2f" % reward, file=self.log)
         elif d.player.plrlevel < self.start_dungeon_level or \
              (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
-            reward = -10.0
+            reward = R[RewardEvent.Escape]
             done = True
             print("Escape, R %.2f" % reward, file=self.log)
         elif player_pos == self.goal_pos or \
              (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
-            reward = 20.0
+            reward = R[RewardEvent.Goal]
             done = True
             self.episode_success = True
             print("Goal, R %.2f" % reward, file=self.log)
@@ -1297,25 +1355,33 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             monster_damaged = monsters_hit > 0
 
             if hp < self.prev_hp:
-                # Player took damage. prev_hp is updated unconditionally
-                # at end of step (same pattern as prev_mana) so v2 branches
-                # reading self.prev_hp see the pre-step value, and a damage
-                # event right after a heal still credits the full drop.
-                reward -= (self.prev_hp - hp) / d.player._pMaxHP * 5.0
+                # Player took damage. prev_hp updated unconditionally
+                # at end of step so damage right after a heal still
+                # credits the full drop.
+                r = R[RewardEvent.DamageTaken]
+                if r:
+                    reward -= (self.prev_hp - hp) / d.player._pMaxHP * r
                 print("Damage taken, R %.2f" % reward, file=self.log)
             if monster_damaged:
-                reward += monsters_hit * 0.02
+                # Monsters took damage
+                r = R[RewardEvent.AttackMonster]
+                if r:
+                    reward += monsters_hit * r
                 made_progress = True
                 print("Attack %d monster(s), R %.2f" % (monsters_hit, reward), file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
-                reward += (self.prev_monsters_cnt - monsters_cnt) * 0.1
+                r = R[RewardEvent.KillMonster]
+                if r:
+                    reward += (self.prev_monsters_cnt - monsters_cnt) * r
                 self.prev_monsters_cnt = monsters_cnt
                 made_progress = True
                 print("Kill monster, R %.2f" % reward, file=self.log)
             if obj_cnt < self.prev_obj_cnt:
-                # Chests, sarcophagi, barrels, crucifixes etc.
-                reward += (self.prev_obj_cnt - obj_cnt) * 0.05
+                # Chests, sarcophagi, barrels, crucifixes, doors etc.
+                r = R[RewardEvent.ActivateObject]
+                if r:
+                    reward += (self.prev_obj_cnt - obj_cnt) * r
                 self.prev_obj_cnt = obj_cnt
                 made_progress = True
                 print("Activate object, R %.2f" % reward, file=self.log)
@@ -1326,97 +1392,115 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     opened = [o for o in opened if o not in self.opened_doors_ids]
                     self.opened_doors_ids.extend(opened)
                     if opened:
-                        reward += len(opened) * 0.02
+                        r = R[RewardEvent.OpenDoor]
+                        if r:
+                            reward += len(opened) * r
                         made_progress = True
                         print("Open door, R %.2f" % reward, file=self.log)
                 self.prev_closed_doors_ids = closed_doors_ids
             if items_cnt != self.prev_items_cnt:
                 if items_cnt < self.prev_items_cnt:
-                    # Items can also appear (chest spill), so only the
-                    # decrease branch credits a pickup.
-                    reward += (self.prev_items_cnt - items_cnt) * 0.02
+                    # Items can also appear (chest spill); only decrease credits a pickup.
+                    r = R[RewardEvent.CollectItem]
+                    if r:
+                        reward += (self.prev_items_cnt - items_cnt) * r
                     made_progress = True
                     print("Collect item, R %.2f" % reward, file=self.log)
                 self.prev_items_cnt = items_cnt
 
-            # v2: restore actions
-            # Use pot-count change to detect actual consumption: net HP can drop
-            # even after healing when the player takes damage in the same step,
-            # so hp > prev_hp would falsely deny the reward in that case.
+            # Restore actions: pot-count change detects actual consumption
+            # (net HP can drop even after healing when taking damage same step).
             hp_pots   = self._hp_pot_sum(d)
             mana_pots = self._mana_pot_sum(d)
             if action == ActionEnum.RestoreHealth.value:
                 if self.prev_hp / max_hp >= 0.9:
-                    reward -= 0.1
+                    r = R[RewardEvent.RestoreHpWasteful]
+                    if r:
+                        reward += r
                     print("Wasteful restore HP, R %.2f" % reward, file=self.log)
                 elif hp_pots < self.prev_hp_pots:
-                    reward += 0.05
+                    r = R[RewardEvent.RestoreHpCorrect]
+                    if r:
+                        reward += r
                     made_progress = True
                     print("Correct restore HP, R %.2f" % reward, file=self.log)
                 else:
-                    reward -= 0.1
+                    r = R[RewardEvent.RestoreHpNoPot]
+                    if r:
+                        reward += r
                     print("No-potion restore HP, R %.2f" % reward, file=self.log)
             elif action == ActionEnum.RestoreMana.value:
                 if self.prev_mana / max_mana >= 0.9:
-                    reward -= 0.1
+                    r = R[RewardEvent.RestoreManaWasteful]
+                    if r:
+                        reward += r
                     print("Wasteful restore mana, R %.2f" % reward, file=self.log)
                 elif mana_pots < self.prev_mana_pots:
-                    reward += 0.05
+                    r = R[RewardEvent.RestoreManaCorrect]
+                    if r:
+                        reward += r
                     made_progress = True
                     print("Correct restore mana, R %.2f" % reward, file=self.log)
                 else:
-                    reward -= 0.1
+                    r = R[RewardEvent.RestoreManaNoPot]
+                    if r:
+                        reward += r
                     print("No-potion restore mana, R %.2f" % reward, file=self.log)
-            # v2: cast spells - unavailable penalty is action-tied
+            # Cast spells: unavailable penalty is action-tied.
             elif (ActionEnum.CastFirebolt.value <= action
                   <= ActionEnum.CastFireball.value):
                 spell_id = _ACTION_TO_SPELL[ActionEnum(action)]
                 if not (diablo_state.player_spell_bits(d) & (1 << int(spell_id.value))):
-                    # Spell not in kit - engine drops the cast.
-                    # Penalty provides gradient: spell_avail[i]=0 -> bad action.
-                    reward -= 0.10
+                    r = R[RewardEvent.SpellUnavailable]
+                    if r:
+                        reward += r
                     print("Unavailable spell, R %.2f" % reward, file=self.log)
 
-            # v2: spell cast reward - spell animation is skipped so PM_SPELL
-            # lasts exactly 1 tick; fires once per cast, chained casts each
-            # get their own PM_SPELL tick. May fire later than the action was
-            # submitted (e.g. player mid-attack).
+            # Spell cast reward: animation skipped so PM_SPELL lasts 1 tick;
+            # may fire later than the action was submitted.
             if curr_pmode == dx.PLR_MODE.PM_SPELL.value:
                 ae = _SPELL_TO_ACTION.get(int(d.player.executedSpell['spellId']))
                 if ae is not None:
                     if ae == ActionEnum.CastPhasing:
-                        # Escape spell: reward when monsters are visible, no
-                        # penalty without (repositioning is also a valid use).
+                        # Escape spell: reward when monsters are visible.
                         if diablo_state.count_visible_monsters(env) > 0:
-                            reward += 0.15
+                            r = R[RewardEvent.SpellSuccessful]
+                            if r:
+                                reward += r
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     elif ae == ActionEnum.CastManaShield:
-                        # ManaShield is a buff: casting it when already active
-                        # wastes mana with no benefit.
+                        # Casting when already active wastes mana with no benefit.
                         if self.prev_mana_shield:
-                            reward -= 0.10
+                            r = R[RewardEvent.SpellRedundantShield]
+                            if r:
+                                reward += r
                             print("Redundant ManaShield, R %.2f" % reward, file=self.log)
                     else:
                         if diablo_state.count_visible_monsters(env) == 0:
-                            reward -= 0.10
+                            r = R[RewardEvent.SpellWasteful]
+                            if r:
+                                reward += r
                             print("Wasteful spell, R %.2f" % reward, file=self.log)
                         else:
-                            reward += 0.15
+                            r = R[RewardEvent.SpellSuccessful]
+                            if r:
+                                reward += r
                             made_progress = True
                             print("Successful spell, R %.2f" % reward, file=self.log)
                     if ae.value not in self.v2_spells_used and made_progress:
                         self.v2_spells_used.add(ae.value)
-                        reward += 0.10
+                        r = R[RewardEvent.SpellFirstUse]
+                        if r:
+                            reward += r
                         print("First spell use, R %.2f" % reward, file=self.log)
 
         # Update per-monster HP snapshot every step so new spawns and
         # regeneration are baselined correctly.
         diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
 
-        # prev_hp and prev_mana update every step so that v2 branches see
-        # the pre-step value, and damage signal is not silently suppressed
-        # after a heal (RestoreHealth or natural regen).
+        # prev_hp and prev_mana updated unconditionally so the pre-step value
+        # is visible to shaping branches and damage after a heal is credited.
         self.prev_hp          = hp
         self.prev_mana        = mana
         self.prev_mana_shield = bool(d.player.pManaShield)
@@ -1424,137 +1508,73 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp_pots     = self._hp_pot_sum(d)
         self.prev_mana_pots   = self._mana_pot_sum(d)
 
+        # made_progress gates the stuck counter; was_exploring (reward became
+        # float) gates the idle penalty. Damage alone must not reset the stuck
+        # counter - otherwise corner-dancing under monster fire loops until the
+        # 3000-step hard timeout.
         was_exploring = (type(reward) != int)
 
-        # made_progress gates the stuck counter; was_exploring (which includes
-        # damage taken) gates the idle penalty. Damage alone must not reset the
-        # stuck counter - otherwise corner-dancing under monster fire loops
-        # indefinitely until the 3000-step hard timeout.
         if not done and self.is_agent_stuck(d, made_progress):
             truncated = True
-            reward = -10.0
             if self.is_agent_timedout():
+                reward = R[RewardEvent.Timedout]
                 print("Timedout, R %.2f" % reward, file=self.log)
             else:
+                reward = R[RewardEvent.Stuck]
                 print("Stuck, R %.2f" % reward, file=self.log)
         elif not was_exploring:
             if action <= ActionEnum.Stand.value:
-                # Penalize movement and stand that didn't accomplish anything.
-                reward -= 0.01
+                r = R[RewardEvent.MovementPenalty]
+                if r:
+                    reward += r
             elif self.view_radius is not None:
                 EF = diablo_state.EnvironmentFlag
                 if action == ActionEnum.PrimaryAction.value:
-                    # Penalize attack with no adjacent monster (melee assumed,
-                    # enforced by the assert in _submit_action).
+                    # Penalize attack with no adjacent monster (melee assumed).
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
                             EF.Monster.value, 0):
-                        reward -= 0.05
+                        r = R[RewardEvent.WastedPrimary]
+                        if r:
+                            reward += r
                         print("Wasted primary, R %.2f" % reward, file=self.log)
                 elif action == ActionEnum.SecondaryAction.value:
-                    # Penalize interact with nothing adjacent to pick up or
-                    # activate. Door is intentionally excluded: a first-time
-                    # door open fires a reward (was_exploring=True) so the
-                    # idle block is never reached; re-open/close of an already-
-                    # opened door produces no reward and must be penalized.
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
                             EF.Item.value | EF.Interactable.value, 0):
-                        reward -= 0.05
+                        r = R[RewardEvent.WastedSecondary]
+                        if r:
+                            reward += r
                         print("Wasted secondary, R %.2f" % reward, file=self.log)
 
         return [reward], done, truncated
 
 
 class DiabloEnv_ClearAllLevels_v1(DiabloEnv_ClearAllLevels_v0):
-    """Sparse-reward variant of ClearAllLevels-v0.
+    """Sparse-reward variant: only terminal and stuck/timeout rewards fire;
+    all intermediate shaping terms are zeroed."""
+    ZEROED_EVENTS = frozenset(RewardEvent) - {
+        RewardEvent.Death,
+        RewardEvent.DiabloKilled,
+        RewardEvent.Escape,
+        RewardEvent.Goal,
+        RewardEvent.Stuck,
+        RewardEvent.Timedout,
+    }
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v0.REWARDS,
+        **{e: 0.0 for e in ZEROED_EVENTS},
+    }
 
-    Reward: +20 for goal (Diablo killed or level cleared), -10 for all
-    other episode endings (death, escape, stuck, timeout). All intermediate
-    shaping terms are removed. Progress tracking for the stuck counter is
-    preserved unchanged from v0."""
 
-    def evaluate_step(self, d, env, action):
-        action           = int(action)
-        monsters_cnt     = diablo_state.count_active_monsters(d)
-        obj_cnt          = diablo_state.count_active_objects(d)
-        closed_doors_ids = diablo_state.get_closed_doors_ids(d)
-        items_cnt        = diablo_state.count_active_items(d)
-        player_pos       = diablo_state.player_position(d)
-        hp               = d.player._pHitPoints
-        mana             = int(d.player._pMana)
-        curr_pmode       = int(d.player._pmode)
-
-        truncated = False
-        done = False
-        reward = int(0)
-        made_progress = False
-
-        if diablo_state.is_player_dead(d):
-            reward = -10.0
-            done = True
-            print("Death, R %.2f" % reward, file=self.log)
-        elif d.player._pmode == dx.PLR_MODE.PM_QUIT.value:
-            reward = 20.0
-            done = True
-            self.episode_success = True
-            print("Diablo killed, R %.2f" % reward, file=self.log)
-        elif d.player.plrlevel < self.start_dungeon_level or \
-             (self.used_goal == "random" and d.player.plrlevel != self.start_dungeon_level):
-            reward = -10.0
-            done = True
-            print("Escape, R %.2f" % reward, file=self.log)
-        elif player_pos == self.goal_pos or \
-             (self.used_goal == "next-level" and d.player.plrlevel > self.start_dungeon_level):
-            reward = 20.0
-            done = True
-            self.episode_success = True
-            print("Goal, R %.2f" % reward, file=self.log)
-        else:
-            # Track progress for the stuck counter - no rewards emitted.
-            monsters_hit = diablo_state.count_monsters_hit(d, self.prev_mon_hp)
-            if monsters_hit > 0:
-                made_progress = True
-            if monsters_cnt < self.prev_monsters_cnt:
-                self.prev_monsters_cnt = monsters_cnt
-                made_progress = True
-            if obj_cnt < self.prev_obj_cnt:
-                self.prev_obj_cnt = obj_cnt
-                made_progress = True
-            if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
-                if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
-                    opened = list(set(self.prev_closed_doors_ids) - set(closed_doors_ids))
-                    opened = [o for o in opened if o not in self.opened_doors_ids]
-                    self.opened_doors_ids.extend(opened)
-                    if opened:
-                        made_progress = True
-                self.prev_closed_doors_ids = closed_doors_ids
-            if items_cnt != self.prev_items_cnt:
-                if items_cnt < self.prev_items_cnt:
-                    made_progress = True
-                self.prev_items_cnt = items_cnt
-
-        # Per-monster HP snapshot updated every step so new spawns and
-        # regeneration are baselined correctly.
-        diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
-
-        # State snapshots used by parent class infrastructure.
-        self.prev_hp          = hp
-        self.prev_mana        = mana
-        self.prev_mana_shield = bool(d.player.pManaShield)
-        self.prev_pmode       = curr_pmode
-        self.prev_hp_pots     = self._hp_pot_sum(d)
-        self.prev_mana_pots   = self._mana_pot_sum(d)
-
-        if not done and self.is_agent_stuck(d, made_progress):
-            truncated = True
-            reward = -10.0
-            if self.is_agent_timedout():
-                print("Timedout, R %.2f" % reward, file=self.log)
-            else:
-                print("Stuck, R %.2f" % reward, file=self.log)
-
-        return [reward], done, truncated
+class DiabloEnv_ClearAllLevels_v2(DiabloEnv_ClearAllLevels_v0):
+    """Like v1 (sparse) but object-activation and item-pickup rewards are
+    restored to their v0 values."""
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v1.REWARDS,
+        RewardEvent.ActivateObject: +0.15,
+        RewardEvent.CollectItem:    +0.15,
+    }
 
 
 from gymnasium.envs.registration import register
@@ -1573,6 +1593,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v0 },
     { 'id': 'Diablo-ClearAllLevels-v1',
       'entry_point': DiabloEnv_ClearAllLevels_v1 },
+    { 'id': 'Diablo-ClearAllLevels-v2',
+      'entry_point': DiabloEnv_ClearAllLevels_v2 },
 
     # HRL Environment Classes
 
