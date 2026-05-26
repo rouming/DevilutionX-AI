@@ -789,8 +789,10 @@ class DiabloEnv(gym.Env):
         rewards, done, truncated = self.evaluate_step(d, env, action)
         self.total_reward += rewards[0]
 
-        if done:
-            print("EPISODE DONE, total R %.1f" % self.total_reward, file=self.log)
+        if done or truncated:
+            print("EPISODE DONE=%s steps=%d total R %.1f" % (
+                "true" if self.episode_success else "false",
+                self.steps_cnt, self.total_reward), file=self.log)
 
         obss = self._build_obs(d, env)
         info = {"hierarchy/opt-changed": self._opt_changed(action),

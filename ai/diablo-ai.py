@@ -717,49 +717,131 @@ def dump_self_to_file(dt, begin, end, file_path):
         f.write("\n")
 
 def log_stats(args):
-    import glob
-    import re
-    counts = {}
-    sums   = {}
-    files  = glob.glob(args.pattern)
+    import glob, re, math
+    from collections import defaultdict
+
+    TERMINAL = {'Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout'}
+
+    RE_LEVEL = re.compile(r'dungeon_level=(\d+)')
+    RE_DONE  = re.compile(r'EPISODE DONE=(true|false) steps=(\d+)')
+    RE_EVENT = re.compile(r'^(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)\s*$')
+
+    counts    = {}
+    sums      = {}
+    lvl_out   = defaultdict(lambda: defaultdict(int))
+    lvl_steps = defaultdict(lambda: {'succ': [], 'fail': []})
+
+    files = glob.glob(args.pattern)
     if not files:
         print("No files matched: %s" % args.pattern)
         return 1
-    for path in files:
+
+    cur_level = None
+    for path in sorted(files):
         try:
             with open(path) as f:
                 for line in f:
                     line = line.rstrip()
-                    m = re.match(r'^(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)$', line)
+                    m = RE_LEVEL.search(line)
+                    if m:
+                        cur_level = int(m.group(1))
+                        continue
+                    m = RE_DONE.search(line)
+                    if m:
+                        if cur_level is not None:
+                            key = 'succ' if m.group(1) == 'true' else 'fail'
+                            lvl_steps[cur_level][key].append(int(m.group(2)))
+                        continue
+                    m = RE_EVENT.match(line)
                     if not m:
                         continue
-                    label   = m.group(1).strip()
-                    val_str = m.group(2)
-                    if val_str.startswith('['):
-                        val = sum(float(x) for x in val_str.strip('[]').split(','))
-                    else:
-                        val = float(val_str)
+                    label = m.group(1).strip()
+                    vs    = m.group(2)
+                    val   = sum(float(x) for x in vs.strip('[]').split(',')) \
+                            if vs.startswith('[') else float(vs)
                     counts[label] = counts.get(label, 0) + 1
                     sums[label]   = sums.get(label, 0.0) + val
+                    if label in TERMINAL and cur_level is not None:
+                        lvl_out[cur_level][label] += 1
         except OSError:
             pass
+
     if not counts:
         print("No events found.")
         return 0
-    if args.sort == "count":
+
+    # Table 1: event frequency sorted by chosen key
+    total_ev = sum(counts.values())
+    if args.sort == 'count':
         order = sorted(counts, key=lambda k: counts[k], reverse=True)
-    elif args.sort == "sum":
+    elif args.sort == 'sum':
         order = sorted(counts, key=lambda k: abs(sums[k]), reverse=True)
     else:
         order = sorted(counts)
-    w_cnt = max(len(str(counts[k])) for k in order)
-    w_sum = max(len("%.1f" % sums[k]) for k in order)
-    w_sum = max(w_sum, len("sum_R"))
-    print("%*s  %*s  label" % (w_cnt, "count", w_sum, "sum_R"))
-    print("%s  %s  %s" % ("-" * w_cnt, "-" * w_sum, "-" * 20))
+
+    freq_s = {k: "%.1f%%(%d)" % (100.0 * counts[k] / total_ev, counts[k]) for k in order}
+    w_freq = max(max(len(s) for s in freq_s.values()), len("freq"))
+    w_sum  = max(max(len("%.1f" % sums[k]) for k in order), len("sum_R"))
+
+    print("Event frequency (%d total events, %d files):" % (total_ev, len(files)))
+    print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
+    print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
     for k in order:
-        print("%*d  %*.1f  %s" % (w_cnt, counts[k], w_sum, sums[k], k))
-    print("(%d files)" % len(files))
+        print("%-*s  %*.1f  %s" % (w_freq, freq_s[k], w_sum, sums[k], k))
+
+    if not lvl_out:
+        return 0
+
+    # Table 2: per-dungeon-level outcomes + steps stats
+    OUTCOME_COLS = ['Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout']
+    COL_ABBREV   = {
+        'Goal': 'Goal', 'Diablo killed': 'Diablo', 'Death': 'Death',
+        'Escape': 'Escape', 'Stuck': 'Stuck', 'Timedout': 'Timeout',
+    }
+    cols = [c for c in OUTCOME_COLS if any(lvl_out[lvl].get(c) for lvl in lvl_out)]
+
+    def outcome_fmt(cnt, tot):
+        return "%.1f%%(%d)" % (100.0 * cnt / tot, cnt) if tot else "-"
+
+    def steps_fmt(lst):
+        if not lst:
+            return "-"
+        n    = len(lst)
+        mean = sum(lst) / n
+        std  = math.sqrt(sum((x - mean) ** 2 for x in lst) / n)
+        return "μ=%d σ=%d [%d..%d]" % (mean, std, min(lst), max(lst))
+
+    # Compute column widths from data
+    all_levels = sorted(lvl_out)
+    col_w = {c: max(len(COL_ABBREV[c]),
+                    max(len(outcome_fmt(lvl_out[l].get(c, 0), sum(lvl_out[l].values())))
+                        for l in all_levels))
+             for c in cols}
+    step_w = max(
+        len("steps(succ)"),
+        max((len(steps_fmt(lvl_steps[l]['succ'])) for l in all_levels), default=1),
+        max((len(steps_fmt(lvl_steps[l]['fail'])) for l in all_levels), default=1),
+    )
+
+    hdr = "  ".join(
+        ["%6s" % "Level"] +
+        ["%*s" % (col_w[c], COL_ABBREV[c]) for c in cols] +
+        ["%*s" % (step_w, "steps(succ)"), "%*s" % (step_w, "steps(fail)")]
+    )
+    print()
+    print("Per-level outcomes:")
+    print(hdr)
+    print("-" * len(hdr))
+    for level in all_levels:
+        tot = sum(lvl_out[level].values())
+        row = "  ".join(
+            ["%6d" % level] +
+            ["%*s" % (col_w[c], outcome_fmt(lvl_out[level].get(c, 0), tot)) for c in cols] +
+            ["%*s" % (step_w, steps_fmt(lvl_steps[level]['succ'])),
+             "%*s" % (step_w, steps_fmt(lvl_steps[level]['fail']))]
+        )
+        print(row)
+
     return 0
 
 def list_devilution_processes(binary_path, mshared_filename):
