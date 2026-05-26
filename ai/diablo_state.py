@@ -375,30 +375,34 @@ def player_spell_bits(d):
     return raw << np.uint64(1)
 
 @njit(cache=True)
-def count_active_monsters(d):
-    return len(d.ActiveMonsters)
-
-@njit(cache=True)
 def count_active_monsters_total_hp(d):
     total = 0
-    for mid in d.ActiveMonsters:
-        total += d.Monsters[mid].hitPoints
+    for i in range(d.ActiveMonsterCount.value):
+        total += d.Monsters[d.ActiveMonsters[i]].hitPoints
     return total
+
+def alloc_monster_hp(d):
+    """Allocate a MaxMonsters-sized int32 buffer for HP snapshots."""
+    return np.full(len(d.Monsters), -1, dtype=np.int32)
 
 @njit(cache=True)
 def snapshot_monster_hp(d, out):
     """Fill out[mid] = current hitPoints for each active monster; -1 elsewhere."""
     for i in range(len(out)):
         out[i] = -1
-    for mid in d.ActiveMonsters:
+    for i in range(d.ActiveMonsterCount.value):
+        mid = d.ActiveMonsters[i]
         out[mid] = d.Monsters[mid].hitPoints
 
 @njit(cache=True)
 def count_monsters_hit(d, prev_hp):
-    """Count active monsters whose hitPoints dropped since prev_hp snapshot."""
+    """Count monsters whose hitPoints dropped since prev_hp snapshot.
+    Iterates all MaxMonsters slots directly so monsters that died this step
+    (swapped past ActiveMonsterCount) are still counted.
+    prev_hp[i] >= 0 limits to monsters that were active at the last snapshot."""
     count = 0
-    for mid in d.ActiveMonsters:
-        if prev_hp[mid] >= 0 and d.Monsters[mid].hitPoints < prev_hp[mid]:
+    for i in range(len(d.Monsters)):
+        if prev_hp[i] >= 0 and d.Monsters[i].hitPoints < prev_hp[i]:
             count += 1
     return count
 

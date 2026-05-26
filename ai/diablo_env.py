@@ -1304,8 +1304,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_hp_pots = self._hp_pot_sum(d)
         self.prev_mana_pots = self._mana_pot_sum(d)
         self.v2_spells_used = set()
-        # Per-monster HP snapshot: counts distinct monsters hit per step.
-        self.prev_mon_hp = np.full(len(d.Monsters), -1, dtype=np.int32)
+        self.prev_mon_hp = diablo_state.alloc_monster_hp(d)
         diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
         return obs, info
 
