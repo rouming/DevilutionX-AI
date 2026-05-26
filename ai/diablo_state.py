@@ -54,10 +54,14 @@ def belt_slot(belt_index):
     return dx.inv_item.INVITEM_BELT_FIRST.value + belt_index
 
 def find_inv_item(player, misc_id, spell_id=None):
-    """Return item slot of first matching item in belt then inventory, or -1."""
+    """Return item slot of first matching item in inventory then belt, or -1."""
     misc_val  = misc_id.value  if hasattr(misc_id,  'value') else misc_id
     spell_val = spell_id.value if hasattr(spell_id, 'value') else spell_id
     itype_none = dx.ItemType.None_.value
+    for i in range(int(player._pNumInv)):
+        item = player.InvList[i]
+        if item._iMiscId == misc_val and (spell_val is None or item._iSpell == spell_val):
+            return inv_slot(i)
     for i in range(8):
         item = player.SpdList[i]
         # RemoveSpdBarItem only clears _itype; skip ghost slots.
@@ -65,10 +69,7 @@ def find_inv_item(player, misc_id, spell_id=None):
             continue
         if item._iMiscId == misc_val and (spell_val is None or item._iSpell == spell_val):
             return belt_slot(i)
-    for i in range(int(player._pNumInv)):
-        item = player.InvList[i]
-        if item._iMiscId == misc_val and (spell_val is None or item._iSpell == spell_val):
-            return inv_slot(i)
+
     return -1
 
 # Cap for potion-count observation scalars. Matches the starting-potion
