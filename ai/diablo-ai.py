@@ -414,6 +414,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--eval-env-runners", type=int, default=64,
         help="Number of environment runners dedicated to evaluation (default: 64)")
+    train_ai_parser.add_argument(
+        "--eval-dungeon-level", type=parse_dungeon_level, default=None,
+        help="Dungeon level spec for eval environments; overrides --dungeon-level if set")
 
     #
     # demos-il
@@ -1880,8 +1883,11 @@ def train_ai(args, gameconfig):
 
     eval_envs = []
     ts = 0
+    eval_gameconfig = copy.deepcopy(gameconfig)
+    if args.eval_dungeon_level is not None:
+        eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
     for i in range(args.eval_env_runners):
-        env_config = copy.deepcopy(gameconfig)
+        env_config = copy.deepcopy(eval_gameconfig)
         env_config['index'] = args.env_runners + i
         env_config['eval'] = True
         EnvClass = utils.get_env_class(args.env)
