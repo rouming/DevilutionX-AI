@@ -1635,17 +1635,23 @@ def cli_tree(args, sprout: Sprout) -> int:
                     return f"   │ {ch} "
                 return f"     {ch} "
 
+            term_w = shutil.get_terminal_size((80, 20)).columns if sys.stdout.isatty() else 80
+            # prefix starts with '\n'; subtract indentation and ~10 chars for tree decoration
+            maxlen = max(20, term_w - (len(prefix) - 1) - 10)
+            def _trunc(s):
+                return s if len(s) <= maxlen else s[:maxlen] + "..."
+
             diffs = []
             out_str = "[all params]"
             if parent_r:
                 params = parent_r["params"]
                 for k, v in r["params"].items():
                     if k not in params:
-                        diffs.append(f"{k}: {v}")
+                        diffs.append(_trunc(f"{k}: {v}"))
                     else:
                         old = params[k]
                         if old != v:
-                            diffs.append(f"{k}: {old} -> {v}")
+                            diffs.append(_trunc(f"{k}: {old} -> {v}"))
                 if not r["params"]:
                     out_str = "∅"
                 elif not diffs:
