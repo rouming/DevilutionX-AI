@@ -835,11 +835,21 @@ def log_stats(args):
     w_freq = max(max(len(s) for s in freq_s.values()), len("freq"))
     w_sum  = max(max(len("%.1f" % sums[k]) for k in order), len("sum_R"))
 
+    MIN_COUNT = 4
+    shown = [k for k in order if counts[k] >= MIN_COUNT]
+    hidden = [k for k in order if counts[k] < MIN_COUNT]
+
     print("Event frequency (%d total events, %d files):" % (total_ev, len(files)))
     print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
     print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
-    for k in order:
+    for k in shown:
         print("%-*s  %*.1f  %s" % (w_freq, freq_s[k], w_sum, sums[k], k))
+    if hidden:
+        hid_cnt = sum(counts[k] for k in hidden)
+        hid_sum = sum(sums[k] for k in hidden)
+        hid_freq = "%.1f%%(%d)" % (100.0 * hid_cnt / total_ev, hid_cnt)
+        print("%-*s  %*.1f  ... %d labels skipped (count < %d)" % (
+            w_freq, hid_freq, w_sum, hid_sum, len(hidden), MIN_COUNT))
 
     if not lvl_out:
         return 0
