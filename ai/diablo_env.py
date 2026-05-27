@@ -460,7 +460,7 @@ class DiabloEnv(gym.Env):
             self.pause_game(False)
 
         dungeon_level = diablo_state.sample_dungeon_level(
-            self.config.get('dungeon-level', (1, 1)), episode_seed)
+            self.config.get('dungeon-level', [(1, 1)]), episode_seed)
 
         if seed is not None:
             print(f"RESET seed={episode_seed} dungeon_level={dungeon_level}", file=self.log)

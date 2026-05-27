@@ -45,17 +45,67 @@ def set_rlimits():
     new_soft = min(65535, hard)
     resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
 
+class DungeonLevelSpec:
+    """Dungeon level sampling spec; __str__ returns canonical level-sorted spec string."""
+    def __init__(self, levels):
+        self._levels = levels
+        self._spec = self._make_spec(levels)
+    @staticmethod
+    def _make_spec(levels):
+        parts = []
+        i = 0
+        while i < len(levels):
+            level, weight = levels[i]
+            j = i + 1
+            while (j < len(levels)
+                   and levels[j][0] == levels[j-1][0] + 1
+                   and levels[j][1] == weight):
+                j += 1
+            part = str(level) if j - i == 1 else "%d-%d" % (level, levels[j-1][0])
+            if weight != 1:
+                part += "=%d" % weight
+            parts.append(part)
+            i = j
+        return ",".join(parts)
+    def __str__(self):
+        return self._spec
+    def __repr__(self):
+        return repr(self._spec)
+    def __iter__(self):
+        return iter(self._levels)
+    def __getitem__(self, idx):
+        return self._levels[idx]
+    def __len__(self):
+        return len(self._levels)
+
 def parse_dungeon_level(s):
-    """Parse dungeon level as a single int or lo-hi range, e.g. '8' or '1-8'."""
-    if '-' in s:
-        parts = s.split('-', 1)
-        lo, hi = int(parts[0]), int(parts[1])
-    else:
-        lo = hi = int(s)
-    if not (1 <= lo <= hi <= 16):
-        raise argparse.ArgumentTypeError(
-            f"dungeon level must be within 1-16, got {s!r}")
-    return (lo, hi)
+    """Parse dungeon level spec into DungeonLevelSpec with [(level, weight), ...].
+
+    '8'                -> level 8 only
+    '1-8'              -> levels 1-8 uniform weight 1
+    '1=5,2=15,3-16=80' -> weighted
+    """
+    result = []
+    for entry in s.split(','):
+        if '=' in entry:
+            lvl_part, w_part = entry.split('=', 1)
+            weight = int(w_part)
+        else:
+            lvl_part = entry
+            weight = 1
+        if '-' in lvl_part:
+            lo_s, hi_s = lvl_part.split('-', 1)
+            lo, hi = int(lo_s), int(hi_s)
+        else:
+            lo = hi = int(lvl_part)
+        if not (1 <= lo <= hi <= 16):
+            raise argparse.ArgumentTypeError(
+                "dungeon level must be within 1-16, got %r" % entry)
+        for lvl in range(lo, hi + 1):
+            result.append((lvl, weight))
+    if not result:
+        raise argparse.ArgumentTypeError("empty dungeon level spec: %r" % s)
+    return DungeonLevelSpec(sorted(result))
 
 def parse_int_with_suffix(value: str) -> int:
     """Parse integer with optional k, M, G suffix or scientific notation."""
@@ -165,8 +215,10 @@ def make_diablo_parser():
         "--seed-base", type=int, default=0,
         help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
     common_parser.add_argument(
-        "--dungeon-level", type=parse_dungeon_level, default=(1, 1),
-        help="Starting dungeon level or range, e.g. 8 or 1-8 (default: 1)")
+        "--dungeon-level", type=parse_dungeon_level, default=DungeonLevelSpec([(1, 1)]),
+        help="Starting dungeon level: '8', '1-8' (uniform range), or "
+             "'1=5,2=15,3-16=80' (weighted; weight proportional to frequency). "
+             "Default: 1")
 
     #
     # sprout: reuse sprout's parser
@@ -1594,7 +1646,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 def new_game_data(gameconfig, n_counter):
     seed = diablo_state.make_episode_seed(gameconfig['seed'], 0, n_counter)
     dungeon_level = diablo_state.sample_dungeon_level(
-        gameconfig.get('dungeon-level', (1, 1)), seed)
+        gameconfig.get('dungeon-level', [(1, 1)]), seed)
     return (dungeon_level << 1) | 1, seed
 
 def run_tui(stdscr, args, gameconfig):

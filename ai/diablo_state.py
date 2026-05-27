@@ -186,11 +186,15 @@ def make_episode_seed(base_seed, index, counter):
     initial = fmix32(base_seed + index)
     return fmix32(initial + counter)
 
-def sample_dungeon_level(dungeon_level_range, seed):
-    lo, hi = dungeon_level_range
-    if lo == hi:
-        return lo
-    return lo + (seed % (hi - lo + 1))
+def sample_dungeon_level(dungeon_level_config, seed):
+    total = sum(w for _, w in dungeon_level_config)
+    r = seed % total
+    cumul = 0
+    for level, weight in dungeon_level_config:
+        cumul += weight
+        if r < cumul:
+            return level
+    return dungeon_level_config[-1][0]
 
 @njit(cache=True)
 def round_up_int(i, d):
@@ -1368,7 +1372,7 @@ class DiabloGame:
 
         cfg = cfg.format(seed=config["seed"],
                          fixed_seed=1 if config["fixed-seed"] else 0,
-                         dungeon_level=config.get("dungeon-level", (1, 1))[0],
+                         dungeon_level=config.get("dungeon-level", [(1, 1)])[0][0],
                          automap_active=1 if config["gui"] else 0,
                          skip_progress=1 if config["gui"] else 0,
                          skip_animation=0 if config["gui"] else 1,

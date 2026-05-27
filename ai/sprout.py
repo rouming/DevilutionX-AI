@@ -174,8 +174,8 @@ def parse_params_string(params_str: Optional[str]) -> Optional[Dict[str, str]]:
     if s == "":
         return {}
     parts = shlex.split(s)
-    # Split on possible `=`
-    parts = [e for p in parts for e in p.split('=')]
+    # Split on first '=' only; values may contain '=' (e.g. dungeon_level=1=5,2-3=48,...)
+    parts = [e for p in parts for e in p.split('=', 1)]
     if len(parts) % 2 != 0:
         raise SproutError("params string must be key value pairs")
     out = {}
