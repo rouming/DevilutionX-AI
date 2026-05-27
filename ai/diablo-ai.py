@@ -894,6 +894,35 @@ def log_stats(args):
         )
         print(row)
 
+    # Suggested --dungeon-level cmdline: weight = 100 - success%
+    WEIGHT_STEP = 5
+    sugg = {}
+    for level in all_levels:
+        tot = sum(lvl_out[level].values())
+        if not tot:
+            continue
+        succ = lvl_out[level].get('Goal', 0) + lvl_out[level].get('Diablo killed', 0)
+        sugg[level] = max(1, round(100.0 * (tot - succ) / tot / WEIGHT_STEP) * WEIGHT_STEP)
+
+    if sugg:
+        # compress consecutive levels with identical weight into ranges
+        parts = []
+        lvls = sorted(sugg)
+        i = 0
+        while i < len(lvls):
+            w = sugg[lvls[i]]
+            j = i + 1
+            while j < len(lvls) and lvls[j] == lvls[j-1] + 1 and sugg[lvls[j]] == w:
+                j += 1
+            if j - i == 1:
+                parts.append("%d=%d" % (lvls[i], w))
+            else:
+                parts.append("%d-%d=%d" % (lvls[i], lvls[j-1], w))
+            i = j
+        print()
+        print("# Suggested (weight = 100 - success%, use with --dungeon-level):")
+        print("# --dungeon-level %s" % ",".join(parts))
+
     return 0
 
 def list_devilution_processes(binary_path, mshared_filename):
