@@ -1610,110 +1610,162 @@ def cli_rename(args, sprout: Sprout) -> int:
     return 0
 
 
+def _graph_dfs_order(roots, tree, runs):
+    """DFS from roots, oldest child first - keeps chains contiguous."""
+    order = []
+    visited = set()
+    stack = sorted(roots, key=lambda r: runs[r]["created_at"], reverse=True)
+    while stack:
+        rid = stack.pop()
+        if rid in visited:
+            continue
+        visited.add(rid)
+        order.append(rid)
+        children = sorted(tree.get(rid, []), key=lambda c: runs[c]["created_at"], reverse=True)
+        stack.extend(children)
+    return order
+
+def _graph_row(slots, node_col):
+    """'*' at node_col, '|' at other active slots, ' ' at empty."""
+    parts = []
+    for i, s in enumerate(slots):
+        parts.append('*' if i == node_col else ('|' if s is not None else ' '))
+    return ' '.join(parts)
+
+def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_children=True):
+    """Return list of lines for this node (first line = node, rest = param diffs)."""
+    r = runs[rid]
+    parent_r = runs.get(r["parent"]) if r.get("parent") else None
+    headnames = sorted(run_to_heads.get(rid, []))
+    alias = f" ({r['alias']})" if r.get("alias") else ""
+
+    if headnames:
+        dot = color("●", rgb=(0, 255, 0), bold=True)
+        ident = dot + " " + " ".join(color(h, bold=True) for h in headnames)
+    else:
+        ident = color(rid[:8])
+
+    term_w = shutil.get_terminal_size((80, 20)).columns if sys.stdout.isatty() else 80
+    # cont lines: '| |   ' = (2*slots-1) + 3 spaces; use that as the binding constraint
+    gutter = max(5, 2 * len(slots) + 2)
+    maxlen = max(20, term_w - gutter)
+    def _trunc(s):
+        return s if len(s) <= maxlen else s[:maxlen - 3] + "..."
+
+    if args.verbose:
+        info_lines = [f"{ident}{alias} " + json.dumps(r.get("params", {})),
+                      "  " + to_iso(r["created_at"])]
+    else:
+        diffs = []
+        if parent_r is None:
+            diffs = ["[all params]"]
+        else:
+            parent_params = parent_r.get("params") or {}
+            for k, v in (r.get("params") or {}).items():
+                if k not in parent_params:
+                    diffs.append(_trunc(f"⇾ {k}: {v}"))
+                elif parent_params[k] != v:
+                    diffs.append(_trunc(f"⇾ {k}: {parent_params[k]} -> {v}"))
+            if not (r.get("params") or {}):
+                diffs = ["∅"]
+            elif not diffs:
+                diffs = ["Δ ∅"]
+
+        custom_dict = r.get("custom") or {}
+        custom_lines = [_trunc(f"≡ {item}")
+                        for item in flatten(custom_dict, fmt_custom_value)] if custom_dict else []
+
+        info_lines = [f"{ident}{alias}"] + diffs + custom_lines
+
+    # continuation prefix: '|' at active slots; leaf node uses ' ' at its own col
+    cont_parts = []
+    for i, s in enumerate(slots):
+        if i == node_col and not has_children:
+            cont_parts.append(' ')
+        else:
+            cont_parts.append('|' if s is not None else ' ')
+    cont = ' '.join(cont_parts)
+
+    pfx = _graph_row(slots, node_col)
+    lines = [f"{pfx} {info_lines[0]}"]
+    for extra in info_lines[1:]:
+        lines.append(f"{cont}   {extra}")
+    return lines
+
 def cli_tree(args, sprout: Sprout) -> int:
     try:
         runs, heads, tree = sprout.get_tree(group=args.group)
 
-        # compute roots
-        all_children = {c for children in tree.values() for c in children}
-        roots = [rid for rid in runs.keys() if rid not in all_children]
+        all_children = {c for cs in tree.values() for c in cs}
+        roots = [rid for rid in runs if rid not in all_children]
 
-        # reverse mapping run_id -> [heads...]
         run_to_heads = defaultdict(list)
         for h, rid in heads.items():
             run_to_heads[rid].append(h)
 
-        def diff_params_and_custom_dict(r: dict, parent_r: dict, prefix: str,
-                                        has_children: bool, has_siblings: bool):
-            prefix = "\n" + prefix
-            def tree_prefix(ch):
-                if has_siblings and not has_children:
-                    return f"│    {ch} "
-                if has_siblings and has_children:
-                    return f"│  │ {ch} "
-                if not has_siblings and has_children:
-                    return f"   │ {ch} "
-                return f"     {ch} "
-
-            term_w = shutil.get_terminal_size((80, 20)).columns if sys.stdout.isatty() else 80
-            # prefix starts with '\n'; subtract indentation and ~10 chars for tree decoration
-            maxlen = max(20, term_w - (len(prefix) - 1) - 10)
-            def _trunc(s):
-                return s if len(s) <= maxlen else s[:maxlen] + "..."
-
-            diffs = []
-            out_str = "[all params]"
-            if parent_r:
-                params = parent_r["params"]
-                for k, v in r["params"].items():
-                    if k not in params:
-                        diffs.append(_trunc(f"{k}: {v}"))
-                    else:
-                        old = params[k]
-                        if old != v:
-                            diffs.append(_trunc(f"{k}: {old} -> {v}"))
-                if not r["params"]:
-                    out_str = "∅"
-                elif not diffs:
-                    out_str = "Δ ∅"
-                else:
-                    params_prefix = prefix + tree_prefix("⇾")
-                    params_str = params_prefix + params_prefix.join(diffs)
-                    out_str = params_str
-
-            custom_dict = r.get("custom", {}) or {}
-            if custom_dict:
-                custom_list = list(flatten(custom_dict, fmt_custom_value))
-                custom_prefix = prefix + tree_prefix("≡")
-                custom_str = custom_prefix + custom_prefix.join(custom_list)
-                out_str += custom_str
-
-            return out_str
-
-        def print_node(rid: str, prefix: str, is_last: bool) -> None:
-            r = runs[rid]
-            children = tree.get(rid, [])
-            parent_r = runs[r["parent"]] if r["parent"] else None
-            headnames = run_to_heads.get(rid, [])
-            alias = f" ({r.get('alias')})" if r.get("alias") else ""
-            if args.verbose:
-                params_str = json.dumps(r.get("params", {}))
-                ts = " " + to_iso(r["created_at"])
-            else:
-                params_str = diff_params_and_custom_dict(r, parent_r, prefix,
-                                                         bool(children), not is_last)
-                ts = ""
-
-            branch = "└─" if is_last else "├─"
-
-            if headnames:
-                # light green
-                dot = color("●", rgb=(0, 255, 0), bold=True)
-                heads_display = " ".join([color(h, bold=True) for h in headnames])
-                line = f"{prefix}{branch} {dot} {heads_display}{alias} {params_str}{ts}"
-            else:
-                rid_display = color(rid)
-                line = f"{prefix}{branch} {rid_display}{alias} {params_str}{ts}"
-
-            print(line)
-
-            new_prefix = prefix + ("   " if is_last else "│  ")
-            for i, c in enumerate(children):
-                is_last = i == (len(children) - 1)
-                print_node(c, new_prefix, is_last)
-
-        # group by group and print
         groups = sorted({r["group"] for r in runs.values()},
-                        key=lambda g: min(r["created_at"] for r in runs.values() if r["group"] == g))
+                        key=lambda g: min(r["created_at"] for r in runs.values()
+                                          if r["group"] == g))
+
         for ig, g in enumerate(groups):
             if ig:
                 print()
-            group_display = color(f"▶ {g}", bold=True)
-            print(group_display)
-            roots_for_group = [rid for rid in roots if runs[rid]["group"] == g]
-            for i, root in enumerate(roots_for_group):
-                is_last = i == (len(roots_for_group) - 1)
-                print_node(root, "", is_last)
+            print(color(f"▶ {g}", bold=True))
+
+            group_roots = sorted(
+                [rid for rid in roots if runs[rid]["group"] == g],
+                key=lambda r: runs[r]["created_at"])
+            order = _graph_dfs_order(group_roots, tree, runs)
+
+            slots: List[Optional[str]] = []
+
+            def col_of(rid):
+                try: return slots.index(rid)
+                except ValueError: return -1
+
+            def alloc(rid, after=-1):
+                for i in range(after + 1, len(slots)):
+                    if slots[i] is None:
+                        slots[i] = rid; return i
+                slots.append(rid); return len(slots) - 1
+
+            def free(i):
+                slots[i] = None
+                while slots and slots[-1] is None:
+                    slots.pop()
+
+            for rid in order:
+                children = sorted(tree.get(rid, []),
+                                   key=lambda c: runs[c]["created_at"])
+                col = col_of(rid)
+                if col == -1:
+                    col = alloc(rid)
+
+                for line in _graph_node_lines(rid, runs, run_to_heads, slots, col, args,
+                                              has_children=bool(children)):
+                    print(line)
+
+                if not children:
+                    free(col)
+                    connector = ' '.join('|' if s is not None else ' ' for s in slots)
+                    print(connector)
+                elif len(children) == 1:
+                    slots[col] = children[0]
+                    print(' '.join('|' if s is not None else ' ' for s in slots))
+                else:
+                    slots[col] = children[0]
+                    new_cols = [alloc(c, after=col) for c in children[1:]]
+                    parts = []
+                    for i, s in enumerate(slots):
+                        if i == col:
+                            parts.append('|')
+                        elif i in new_cols:
+                            parts.append('\\')
+                        elif s is not None:
+                            parts.append('|')
+                        else:
+                            parts.append(' ')
+                    print(' '.join(parts))
 
         return 0
     except Exception as e:
