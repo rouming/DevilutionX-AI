@@ -1578,6 +1578,22 @@ class DiabloEnv_ClearAllLevels_v2(DiabloEnv_ClearAllLevels_v0):
     }
 
 
+class DiabloEnv_ClearAllLevels_v3(DiabloEnv_ClearAllLevels_v0):
+    """Like v2 but with rebalanced rewards: higher goal/penalty magnitudes and
+    reduced item-shaping to discourage farming over level completion."""
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v1.REWARDS,
+        RewardEvent.Goal:           +40.0,
+        RewardEvent.DiabloKilled:   +40.0,
+        RewardEvent.Death:          -20.0,
+        RewardEvent.Escape:         -25.0,
+        RewardEvent.Stuck:          -25.0,
+        RewardEvent.Timedout:       -25.0,
+        RewardEvent.ActivateObject: +0.08,
+        RewardEvent.CollectItem:    +0.08,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1596,6 +1612,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v1 },
     { 'id': 'Diablo-ClearAllLevels-v2',
       'entry_point': DiabloEnv_ClearAllLevels_v2 },
+    { 'id': 'Diablo-ClearAllLevels-v3',
+      'entry_point': DiabloEnv_ClearAllLevels_v3 },
 
     # HRL Environment Classes
 
