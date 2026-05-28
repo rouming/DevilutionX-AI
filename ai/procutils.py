@@ -47,9 +47,11 @@ def get_mapped_file_and_offset_of_pid(pid, path_or_filename):
     return None, None
 
 def procs_natural_sort(p, _nsre=re.compile(r'(\d+)')):
-    return [p['ppid']] + \
+    path = p['mshared_path']
+    kind_order = 0 if '/diablo-run-' in path else 1
+    return [p['ppid'], kind_order] + \
            [int(text) if text.isdigit() else text.lower()
-            for text in _nsre.split(p['mshared_path'])]
+            for text in _nsre.split(path)]
 
 def get_processes_by_binary(binary_path):
     """Find all processes matching the specified command binary name."""

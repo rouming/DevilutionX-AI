@@ -1883,6 +1883,7 @@ def train_ai(args, gameconfig):
     for i in range(args.eval_env_runners):
         env_config = copy.deepcopy(gameconfig)
         env_config['index'] = args.env_runners + i
+        env_config['eval'] = True
         EnvClass = utils.get_env_class(args.env)
         EnvClass.tune_config(env_config)
         game = diablo_state.DiabloGame.run_or_attach(env_config)
