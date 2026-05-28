@@ -1455,12 +1455,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     r = R[RewardEvent.SpellUnavailable]
                     if r:
                         reward += r
-                    print("Unavailable spell, R %.2f" % reward, file=self.log)
+                    print("Unavailable %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
 
             # Spell cast reward: animation skipped so PM_SPELL lasts 1 tick;
             # may fire later than the action was submitted.
             if curr_pmode == dx.PLR_MODE.PM_SPELL.value:
-                ae = _SPELL_TO_ACTION.get(int(d.player.executedSpell['spellId']))
+                spell_id = dx.SpellID(int(d.player.executedSpell['spellId']))
+                ae = _SPELL_TO_ACTION.get(int(spell_id.value))
                 if ae is not None:
                     if ae == ActionEnum.CastPhasing:
                         # Escape spell: reward when monsters are visible.
@@ -1469,32 +1470,32 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             if r:
                                 reward += r
                             made_progress = True
-                            print("Successful spell, R %.2f" % reward, file=self.log)
+                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
                     elif ae == ActionEnum.CastManaShield:
                         # Casting when already active wastes mana with no benefit.
                         if self.prev_mana_shield:
                             r = R[RewardEvent.SpellRedundantShield]
                             if r:
                                 reward += r
-                            print("Redundant ManaShield, R %.2f" % reward, file=self.log)
+                            print("Redundant %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
                     else:
                         if diablo_state.count_visible_monsters(env) == 0:
                             r = R[RewardEvent.SpellWasteful]
                             if r:
                                 reward += r
-                            print("Wasteful spell, R %.2f" % reward, file=self.log)
+                            print("Wasteful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
                         else:
                             r = R[RewardEvent.SpellSuccessful]
                             if r:
                                 reward += r
                             made_progress = True
-                            print("Successful spell, R %.2f" % reward, file=self.log)
+                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
                     if ae.value not in self.v2_spells_used and made_progress:
                         self.v2_spells_used.add(ae.value)
                         r = R[RewardEvent.SpellFirstUse]
                         if r:
                             reward += r
-                        print("First spell use, R %.2f" % reward, file=self.log)
+                        print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
 
         # Update per-monster HP snapshot every step so new spawns and
         # regeneration are baselined correctly.
