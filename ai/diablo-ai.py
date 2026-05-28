@@ -345,6 +345,9 @@ def make_diablo_parser():
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
     train_ai_parser.add_argument(
+        "--no-drop-best", action="store_true", dest="no_drop_best",
+        help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
+    train_ai_parser.add_argument(
         "--log-interval", type=int, default=1,
         help="Number of updates between two logs; 0 means no logs (default: 1)")
     train_ai_parser.add_argument(
@@ -460,6 +463,9 @@ def make_diablo_parser():
     demos_il_parser.add_argument(
         "--save-interval", type=int, default=1,
         help="Interval between demonstrations saving; 0 means no saving (default: 1)")
+    demos_il_parser.add_argument(
+        "--no-drop-best", action="store_true", dest="no_drop_best",
+        help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
 
 
     #
@@ -523,6 +529,9 @@ def make_diablo_parser():
     train_il_parser.add_argument(
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
+    train_il_parser.add_argument(
+        "--no-drop-best", action="store_true", dest="no_drop_best",
+        help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
     train_il_parser.add_argument(
         "--log-interval", type=int, default=1,
         help="Number of updates between two logs; 0 means no logs (default: 1)")
@@ -1841,7 +1850,7 @@ def prepare_directory_for_run(args, dir_name):
     # you open a snapshot in Sprout. Therefore, skip the model to
     # avoid long diffs in Sprout's output. Also `continue` flag
     # just controls model states, so should be skipped.
-    skip_keys = ["model", "demos", "cont"]
+    skip_keys = ["model", "demos", "cont", "no_drop_best"]
     run_dir = utils.get_run_dir(dir_name)
     # shlex.quote() the value so tuples / strings containing spaces (e.g.
     # dungeon_level=(1, 16)) round-trip through sprout's shlex-based
@@ -1875,6 +1884,9 @@ def prepare_directory_for_run(args, dir_name):
         # Change parameters for the existing model and continue
         # training without creating a snapshot
         spr.edit(head=dir_name, params_str=params_str)
+
+    if not args.no_drop_best and not args.cont:
+        model_drop_best(args)
 
     return spr, run_dir
 
