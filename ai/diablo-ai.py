@@ -588,11 +588,17 @@ def make_diablo_parser():
         help="Aggregate event statistics from /tmp/diablo-*/env.log files.",
         formatter_class=IndentedHelpFormatter)
     log_stats_parser.add_argument(
-        "--pattern", default="/tmp/diablo-*/env.log",
-        help="Glob pattern for env.log files (default: /tmp/diablo-*/env.log)")
-    log_stats_parser.add_argument(
         "--sort", choices=["count", "sum", "label"], default="count",
         help="Sort output by count, sum_R, or label (default: count)")
+    log_stats_parser.add_argument(
+        "--last-episodes", type=int, default=50000,
+        help="Process only the last N episodes; 0 = all (default: 50000)")
+    log_stats_parser.add_argument(
+        "--eval-runners", action="store_true", default=False,
+        help="Process eval runner logs (diablo-eval-*) instead of training runner logs (diablo-run-*)")
+    log_stats_parser.add_argument(
+        "--dungeon-level", default=None, dest="level_filter",
+        help="Show per-level stats only for these levels: '1', '1,10', '1-10,16'")
 
     return incompatible_options, parser
 
@@ -771,6 +777,24 @@ def dump_self_to_file(dt, begin, end, file_path):
         f.write("\n".join(collected) + "\n")
         f.write("\n")
 
+def _reversed_lines(path, chunk=65536):
+    """Yield lines of a file in reverse order without loading it fully."""
+    with open(path, 'rb') as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        buf = b''
+        while pos > 0:
+            read_size = min(chunk, pos)
+            pos -= read_size
+            f.seek(pos)
+            data = f.read(read_size) + buf
+            lines = data.split(b'\n')
+            buf = lines[0]
+            for line in reversed(lines[1:]):
+                yield line.decode('utf-8', errors='replace')
+        if buf:
+            yield buf.decode('utf-8', errors='replace')
+
 def log_stats(args):
     import glob, re, math
     from collections import defaultdict
@@ -786,26 +810,97 @@ def log_stats(args):
     lvl_out   = defaultdict(lambda: defaultdict(int))
     lvl_steps = defaultdict(lambda: {'succ': [], 'fail': []})
 
-    files = glob.glob(args.pattern)
+    pattern = diablo_state.env_log_glob(eval=args.eval_runners)
+    files = sorted(glob.glob(pattern))
     if not files:
-        print("No files matched: %s" % args.pattern)
+        print("No files matched: %s" % pattern)
         return 1
 
-    cur_level = None
-    for path in sorted(files):
-        try:
-            with open(path) as f:
-                for line in f:
+    level_keep = None
+    if args.level_filter:
+        level_keep = set()
+        for part in args.level_filter.split(','):
+            part = part.strip()
+            if '-' in part:
+                lo, hi = part.split('-', 1)
+                level_keep.update(range(int(lo), int(hi) + 1))
+            else:
+                level_keep.add(int(part))
+
+    episodes_scanned = 0
+
+    if args.last_episodes == 0:
+        cur_level = None
+        for path in files:
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.rstrip()
+                        m = RE_LEVEL.search(line)
+                        if m:
+                            cur_level = int(m.group(1))
+                            continue
+                        m = RE_DONE.search(line)
+                        if m:
+                            if cur_level is not None and (level_keep is None or cur_level in level_keep):
+                                episodes_scanned += 1
+                                key = 'succ' if m.group(1) == 'true' else 'fail'
+                                lvl_steps[cur_level][key].append(int(m.group(2)))
+                            continue
+                        m = RE_EVENT.match(line)
+                        if not m:
+                            continue
+                        if level_keep is not None and cur_level not in level_keep:
+                            continue
+                        label = m.group(1).strip()
+                        vs    = m.group(2)
+                        val   = sum(float(x) for x in vs.strip('[]').split(',')) \
+                                if vs.startswith('[') else float(vs)
+                        counts[label] = counts.get(label, 0) + 1
+                        sums[label]   = sums.get(label, 0.0) + val
+                        if label in TERMINAL and cur_level is not None:
+                            lvl_out[cur_level][label] += 1
+            except OSError:
+                pass
+    else:
+        # Reverse scan: read each file from the tail, ceil(N/num_files) episodes per file.
+        # EPISODE DONE opens an episode; dungeon_level=N closes and flushes it.
+        quota = (args.last_episodes + len(files) - 1) // len(files)
+        for path in files:
+            ep_events = []   # (label, val) pairs accumulated for current episode
+            ep_done   = None # (success: bool, steps: int)
+            in_ep     = False
+            ep_count  = 0
+            try:
+                for line in _reversed_lines(path):
                     line = line.rstrip()
                     m = RE_LEVEL.search(line)
                     if m:
-                        cur_level = int(m.group(1))
+                        if in_ep:
+                            level = int(m.group(1))
+                            if level_keep is None or level in level_keep:
+                                episodes_scanned += 1
+                                for label, val in ep_events:
+                                    counts[label] = counts.get(label, 0) + 1
+                                    sums[label]   = sums.get(label, 0.0) + val
+                                    if label in TERMINAL:
+                                        lvl_out[level][label] += 1
+                                if ep_done is not None:
+                                    key = 'succ' if ep_done[0] else 'fail'
+                                    lvl_steps[level][key].append(ep_done[1])
+                            ep_count  += 1
+                            ep_events  = []
+                            ep_done    = None
+                            in_ep      = False
+                            if ep_count >= quota:
+                                break
                         continue
                     m = RE_DONE.search(line)
                     if m:
-                        if cur_level is not None:
-                            key = 'succ' if m.group(1) == 'true' else 'fail'
-                            lvl_steps[cur_level][key].append(int(m.group(2)))
+                        ep_done = (m.group(1) == 'true', int(m.group(2)))
+                        in_ep   = True
+                        continue
+                    if not in_ep:
                         continue
                     m = RE_EVENT.match(line)
                     if not m:
@@ -814,12 +909,9 @@ def log_stats(args):
                     vs    = m.group(2)
                     val   = sum(float(x) for x in vs.strip('[]').split(',')) \
                             if vs.startswith('[') else float(vs)
-                    counts[label] = counts.get(label, 0) + 1
-                    sums[label]   = sums.get(label, 0.0) + val
-                    if label in TERMINAL and cur_level is not None:
-                        lvl_out[cur_level][label] += 1
-        except OSError:
-            pass
+                    ep_events.append((label, val))
+            except OSError:
+                pass
 
     if not counts:
         print("No events found.")
@@ -842,7 +934,8 @@ def log_stats(args):
     shown = [k for k in order if counts[k] >= MIN_COUNT]
     hidden = [k for k in order if counts[k] < MIN_COUNT]
 
-    print("Event frequency (%d total events, %d files):" % (total_ev, len(files)))
+    ep_suffix = ", %d episodes" % episodes_scanned if episodes_scanned else ""
+    print("Event frequency (%d total events, %d files%s):" % (total_ev, len(files), ep_suffix))
     print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
     print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
     for k in shown:
@@ -894,7 +987,7 @@ def log_stats(args):
         ["%*s" % (step_w, "steps(succ)"), "%*s" % (step_w, "steps(fail)")]
     )
     print()
-    print("Per-level outcomes:")
+    print("Per-level outcomes (%d total episodes):" % episodes_scanned)
     print(hdr)
     print("-" * len(hdr))
     for level in all_levels:

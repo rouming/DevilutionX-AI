@@ -1215,6 +1215,11 @@ def movement_to_true_north(keys):
 
     return reskeys
 
+def env_log_glob(eval=False):
+    """Return glob pattern for env.log files of training or eval runners."""
+    kind = "eval" if eval else "run"
+    return os.path.join(tempfile.gettempdir(), "diablo-%s-*" % kind, "env.log")
+
 class DiabloGame:
     def __init__(self, state_path, state, state_dir=None, proc=None,
                  log_file=None, game_ticks_per_step=None, step_mode=None):
