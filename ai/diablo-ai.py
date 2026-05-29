@@ -164,6 +164,17 @@ def parse_int_with_suffix(value: str) -> int:
         return int(float(value[:-1]) * 1_000_000_000)
     return int(float(value))  # handles 50e6, 1e3, etc.
 
+def fmt_int_with_suffix(value: int) -> str:
+    """Format integer with suffix (G/M/K). Exact divisibility wins; otherwise floor to M or K."""
+    for div, sfx in [(1_000_000_000, 'G'), (1_000_000, 'M'), (1_000, 'K')]:
+        if value % div == 0:
+            return f"{value // div}{sfx}"
+    if value >= 1_000_000:
+        return f"{value // 1_000_000}M"
+    if value >= 1_000:
+        return f"{value // 1_000}K"
+    return str(value)
+
 class DiabloParserNamespace(argparse.Namespace):
     @property
     def frames_int(self):
@@ -404,7 +415,7 @@ def make_diablo_parser():
         help="Number of environment runners or processes (default: 1)")
     train_ai_parser.add_argument(
         "--frames", type=str, default='10M',
-        help="Number of frames of training (default: 10M)")
+        help="Number of frames of training; prefix with + to add to current (default: 10M)")
 
     # Parameters for main RL algorithm
     train_ai_parser.add_argument(
@@ -1996,6 +2007,9 @@ def train_ai(args, gameconfig):
         status = utils.get_status(model_dir)
     except OSError:
         status = {"num_frames": 0, "update": 0}
+    if args.frames.startswith('+'):
+        args.frames = fmt_int_with_suffix(
+            status["num_frames"] + parse_int_with_suffix(args.frames[1:]))
     if status["num_frames"] >= args.frames_int:
         print(f"Already at {status['num_frames']} frames, "
               f"limit is {args.frames_int}. Increase --frames and retry.")
