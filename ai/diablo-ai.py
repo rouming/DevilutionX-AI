@@ -837,6 +837,7 @@ def log_stats(args):
                 level_keep.add(int(part))
 
     episodes_scanned = 0
+    succ_scanned = 0
 
     if args.last_episodes == 0:
         cur_level = None
@@ -854,6 +855,8 @@ def log_stats(args):
                             if cur_level is not None and (level_keep is None or cur_level in level_keep):
                                 episodes_scanned += 1
                                 key = 'succ' if m.group(1) == 'true' else 'fail'
+                                if key == 'succ':
+                                    succ_scanned += 1
                                 lvl_steps[cur_level][key].append(int(m.group(2)))
                             continue
                         m = RE_EVENT.match(line)
@@ -896,6 +899,8 @@ def log_stats(args):
                                         lvl_out[level][label] += 1
                                 if ep_done is not None:
                                     key = 'succ' if ep_done[0] else 'fail'
+                                    if key == 'succ':
+                                        succ_scanned += 1
                                     lvl_steps[level][key].append(ep_done[1])
                             ep_count  += 1
                             ep_events  = []
@@ -996,7 +1001,9 @@ def log_stats(args):
         ["%*s" % (step_w, "steps(succ)"), "%*s" % (step_w, "steps(fail)")]
     )
     print()
-    print("Per-level outcomes (%d total episodes):" % episodes_scanned)
+    total_succ_pct = 100.0 * succ_scanned / episodes_scanned if episodes_scanned else 0.0
+    print("Per-level outcomes (%d total episodes, %.1f%% success):" % (
+        episodes_scanned, total_succ_pct))
     print(hdr)
     print("-" * len(hdr))
     for level in all_levels:
