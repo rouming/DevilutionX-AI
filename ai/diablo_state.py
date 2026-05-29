@@ -730,7 +730,9 @@ def compute_scalars(d):
         [10]      weapon_dam_max / max_weapon_dam
 
     Defense:
-        [11]      armor class: max(0, _pArmorClass) / 127, clipped to 1.0.
+        [11]      armor class: max(0, GetArmor()) / 150, clipped to 1.0.
+                  GetArmor() = _pIBonusAC + _pIAC + _pDexterity/5.
+                  Hero injection sets _pIAC; _pArmorClass stays 0.
         [12..14]  elemental resists (fire / lightning / magic):
                   max(0, _pFireResist | _pLghtResist | _pMagResist) /
                   MaxResistance, clipped to 1.0. Engine caps damage reduction
@@ -761,7 +763,7 @@ def compute_scalars(d):
     # applicable, so 1.0 here corresponds to the engine-bound maximum.
     SPELL_LEVEL_CAP   = 15.0   # devilution::MaxSpellLevel (player.h:39)
     RESIST_CAP        = 75.0   # devilution::MaxResistance (player.h:38)
-    ARMOR_CLASS_CAP   = 127.0  # int8_t positive range; AC is _pArmorClass int8
+    ARMOR_CLASS_CAP   = 150.0  # injected max ~114; real gear clips above (Godly Full Plate + helm + shield ~370)
     DUNGEON_LEVEL_CAP = 16.0   # Diablo I has 16 dungeon floors (4 cathedral +
                                # 4 catacombs + 4 caves + 4 hell). NUMLEVELS=25
                                # in the engine includes town and set levels.
@@ -827,7 +829,7 @@ def compute_scalars(d):
     out[10] = v if v < 1.0 else 1.0
 
     # [11..14] defense: armor class + elemental resists
-    ac = p._pArmorClass
+    ac = p._pIBonusAC + p._pIAC + p._pDexterity // 5
     if ac < 0: ac = 0
     v = ac / ARMOR_CLASS_CAP
     out[11] = v if v < 1.0 else 1.0
