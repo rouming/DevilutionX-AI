@@ -1632,7 +1632,8 @@ def _graph_row(slots, node_col):
         parts.append('*' if i == node_col else ('|' if s is not None else ' '))
     return ' '.join(parts)
 
-def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_children=True):
+def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_children=True,
+                      params_diff=None):
     """Return list of lines for this node (first line = node, rest = param diffs)."""
     r = runs[rid]
     parent_r = runs.get(r["parent"]) if r.get("parent") else None
@@ -1662,10 +1663,19 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
         else:
             parent_params = parent_r.get("params") or {}
             for k, v in (r.get("params") or {}).items():
-                if k not in parent_params:
+                in_parent = k in parent_params
+                old_v = parent_params[k] if in_parent else None
+                if in_parent and old_v == v:
+                    continue
+                if params_diff is not None:
+                    lines = params_diff(k, old_v, v)
+                    if lines is not None:
+                        diffs.extend(_trunc(l) for l in lines)
+                        continue
+                if not in_parent:
                     diffs.append(_trunc(f"⇾ {k}: {v}"))
-                elif parent_params[k] != v:
-                    diffs.append(_trunc(f"⇾ {k}: {parent_params[k]} -> {v}"))
+                else:
+                    diffs.append(_trunc(f"⇾ {k}: {old_v} -> {v}"))
             if not (r.get("params") or {}):
                 diffs = ["∅"]
             elif not diffs:
@@ -1692,7 +1702,7 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
         lines.append(f"{cont}   {extra}")
     return lines
 
-def cli_tree(args, sprout: Sprout) -> int:
+def cli_tree(args, sprout: Sprout, params_diff=None) -> int:
     try:
         runs, heads, tree = sprout.get_tree(group=args.group)
 
@@ -1742,7 +1752,8 @@ def cli_tree(args, sprout: Sprout) -> int:
                     col = alloc(rid)
 
                 for line in _graph_node_lines(rid, runs, run_to_heads, slots, col, args,
-                                              has_children=bool(children)):
+                                              has_children=bool(children),
+                                              params_diff=params_diff):
                     print(line)
 
                 if not children:
@@ -2068,7 +2079,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
 # CLI entrypoint
 # -------------------------
 
-def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
+         params_diff=None) -> int:
     parser = build_parser("sprout")
     args = parser.parse_args(argv)
 
@@ -2105,7 +2117,7 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None) ->
         elif args.cmd == "rename":
             ret = cli_rename(args, sprout)
         elif args.cmd == "tree":
-            ret = cli_tree(args, sprout)
+            ret = cli_tree(args, sprout, params_diff=params_diff)
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
         elif args.cmd == "show":

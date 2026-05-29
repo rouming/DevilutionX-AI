@@ -107,6 +107,52 @@ def parse_dungeon_level(s):
         raise argparse.ArgumentTypeError("empty dungeon level spec: %r" % s)
     return DungeonLevelSpec(sorted(result))
 
+def _compress_level_ranges(levels):
+    """Compress sorted list of ints into a single range string: [1,2,3,5] -> '1-3,5'."""
+    if not levels:
+        return ""
+    parts = []
+    start = end = levels[0]
+    for lvl in levels[1:]:
+        if lvl == end + 1:
+            end = lvl
+        else:
+            parts.append(str(start) if start == end else f"{start}-{end}")
+            start = end = lvl
+    parts.append(str(start) if start == end else f"{start}-{end}")
+    return ",".join(parts)
+
+def _sprout_params_diff(key, old_val, new_val):
+    """Diff callback for sprout tree. Returns list of diff lines or None to fall back."""
+    if key not in ('dungeon_level', 'eval_dungeon_level'):
+        return None
+    try:
+        new_weights = dict(parse_dungeon_level(new_val))
+        old_weights = dict(parse_dungeon_level(old_val)) if old_val is not None else {}
+    except Exception:
+        return None
+    change_groups = {}
+    for lvl in range(1, 17):
+        ov = old_weights.get(lvl, 0)
+        nv = new_weights.get(lvl, 0)
+        if ov != nv:
+            change_groups.setdefault((ov, nv), []).append(lvl)
+    if not change_groups:
+        return None
+    entries = []
+    for (ov, nv), lvls in sorted(change_groups.items(), key=lambda x: x[1][0]):
+        rng = _compress_level_ranges(sorted(lvls))
+        entries.append((rng, ov, nv))
+    width = max(len(rng) for rng, _, _ in entries)
+    lines = [f"⇾ {key}:"]
+    for rng, ov, nv in entries:
+        pad = " " * (width - len(rng))
+        if ov == 0:
+            lines.append(f"    {pad}{rng}: {nv}")
+        else:
+            lines.append(f"    {pad}{rng}: {ov} -> {nv}")
+    return lines
+
 def parse_int_with_suffix(value: str) -> int:
     """Parse integer with optional k, M, G suffix or scientific notation."""
     value = value.strip().upper()
@@ -2615,7 +2661,8 @@ def main():
         # re-run through sprout.main(), but pass sys.argv after "sprout"
         sprout_args = ['--working', utils.get_models_dir()]
         sprout_args += sys.argv[sys.argv.index("sprout")+1:]
-        return sprout.main(argv=sprout_args, default_parser=parser)
+        return sprout.main(argv=sprout_args, default_parser=parser,
+                           params_diff=_sprout_params_diff)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
