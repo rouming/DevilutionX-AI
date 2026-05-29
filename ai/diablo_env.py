@@ -1478,6 +1478,12 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             if r:
                                 reward += r
                             print("Redundant %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                        else:
+                            r = R[RewardEvent.SpellSuccessful]
+                            if r:
+                                reward += r
+                            made_progress = True
+                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
                     else:
                         if diablo_state.count_visible_monsters(env) == 0:
                             r = R[RewardEvent.SpellWasteful]
