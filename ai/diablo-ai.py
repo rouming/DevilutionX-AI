@@ -2035,7 +2035,8 @@ def prepare_directory_for_run(args, dir_name):
     if not args.no_drop_best and not args.cont:
         model_drop_best(args)
 
-    return spr, run_dir
+    _, run_id = spr.get_run(head=dir_name)
+    return spr, run_dir, run_id
 
 
 def _fmt_frames(n):
@@ -2099,7 +2100,7 @@ def train_ai(args, gameconfig):
         sys.exit(1)
 
     # Prepare model dir
-    spr, model_dir = prepare_directory_for_run(args, args.model)
+    spr, model_dir, run_id = prepare_directory_for_run(args, args.model)
 
     # Load loggers and Tensorboard writer
     txt_logger = utils.get_txt_logger(model_dir)
@@ -2109,6 +2110,7 @@ def train_ai(args, gameconfig):
     # Log command and all script arguments
     txt_logger.info("{}\n".format(" ".join(sys.argv)))
     txt_logger.info("{}\n".format(args))
+    txt_logger.info(f"Run: {run_id}\n")
 
     # Set device
     txt_logger.info(f"Device: {device}\n")
@@ -2243,7 +2245,7 @@ def train_ai(args, gameconfig):
     start_time = time.time()
     start_time -= min(duration_offset, start_time)
 
-    txt_logger.info(f"Start training from {num_frames} frames\n")
+    txt_logger.info(f"Start training from {_fmt_frames(num_frames)} frames | run {run_id}\n")
 
     while num_frames < args.frames_int:
         # Update model parameters
@@ -2410,7 +2412,7 @@ def demos_il(args, gameconfig):
     bot_constructor = diablo_bot.get_bot_constructor(args.bot)
 
     # Prepare demos dir
-    spr, demos_dir = prepare_directory_for_run(args, args.model)
+    spr, demos_dir, run_id = prepare_directory_for_run(args, args.model)
 
     # Load loggers and Tensorboard writer
     txt_logger = utils.get_txt_logger(demos_dir)
@@ -2419,6 +2421,7 @@ def demos_il(args, gameconfig):
     # Log command and all script arguments
     txt_logger.info("{}\n".format(" ".join(sys.argv)))
     txt_logger.info("{}\n".format(args))
+    txt_logger.info(f"Run: {run_id}\n")
 
     num_envs = min(args.env_runners, args.episodes_int)
 
@@ -2523,7 +2526,7 @@ def train_il(args, gameconfig):
     bot_constructor = diablo_bot.get_bot_constructor(args.bot)
 
     # Prepare model dir
-    spr, model_dir = prepare_directory_for_run(args, args.model)
+    spr, model_dir, run_id = prepare_directory_for_run(args, args.model)
 
     # Load loggers and Tensorboard writer
     txt_logger = utils.get_txt_logger(model_dir)
@@ -2533,6 +2536,7 @@ def train_il(args, gameconfig):
     # Log command and all script arguments
     txt_logger.info("{}\n".format(" ".join(sys.argv)))
     txt_logger.info("{}\n".format(args))
+    txt_logger.info(f"Run: {run_id}\n")
 
     # Used device
     txt_logger.info(f"Device: {device}\n")
