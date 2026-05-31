@@ -1394,6 +1394,12 @@ class DiabloGame:
                          spell_potency=int(config.get("spell-potency", 0.0) * 100),
                          no_auto_walk_on_seconday_action=
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
+                         hero_hp_min_pct=config.get("hero-hp-min-pct", 100),
+                         hero_hp_max_pct=config.get("hero-hp-max-pct", 100),
+                         hero_mana_min_pct=config.get("hero-mana-min-pct", 100),
+                         hero_mana_max_pct=config.get("hero-mana-max-pct", 100),
+                         hero_potions_min=config.get("hero-potions-min", 2),
+                         hero_potions_max=config.get("hero-potions-max", 20),
                          )
 
         kind   = "eval" if config.get("eval") else "run"

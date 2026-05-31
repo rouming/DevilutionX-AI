@@ -108,6 +108,12 @@ Disable explosive barrels, urns, or pods={harmless_barrels}
 Disable auto-walk when pressing the secondary action={no_auto_walk_on_seconday_action}
 Enable invincible player mode={invincible_player}
 Spell potency={spell_potency}
+Hero HP min pct={hero_hp_min_pct}
+Hero HP max pct={hero_hp_max_pct}
+Hero mana min pct={hero_mana_min_pct}
+Hero mana max pct={hero_mana_max_pct}
+Hero potions min={hero_potions_min}
+Hero potions max={hero_potions_max}
 
 [Network]
 Port=6112

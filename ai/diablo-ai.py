@@ -175,6 +175,57 @@ def fmt_int_with_suffix(value: int) -> str:
         return f"{value // 1_000}K"
     return str(value)
 
+class FloatRangeSpec(tuple):
+    """(min_pct, max_pct) int tuple; str() produces a re-parseable 'lo-hi' fraction string."""
+    def __str__(self):
+        lo, hi = self[0], self[1]
+        return f"{lo/100:g}" if lo == hi else f"{lo/100:g}-{hi/100:g}"
+    def __repr__(self):
+        return str(self)
+
+class IntRangeSpec(tuple):
+    """(min, max) int tuple; str() produces a re-parseable 'lo-hi' string."""
+    def __str__(self):
+        lo, hi = self[0], self[1]
+        return f"{lo}" if lo == hi else f"{lo}-{hi}"
+    def __repr__(self):
+        return str(self)
+
+def parse_float_range(s):
+    """Parse 'min-max' or single float as a FloatRangeSpec (0-100 int percentages).
+
+    '0.4-1'  -> FloatRangeSpec((40, 100))
+    '1'      -> FloatRangeSpec((100, 100))
+    '0.5'    -> FloatRangeSpec((50, 50))
+    """
+    parts = s.split('-')
+    if len(parts) == 2:
+        lo, hi = float(parts[0]), float(parts[1])
+    elif len(parts) == 1:
+        lo = hi = float(parts[0])
+    else:
+        raise argparse.ArgumentTypeError(f"invalid range '{s}': expected 'min-max' or single value")
+    if not (0.0 <= lo <= hi <= 1.0):
+        raise argparse.ArgumentTypeError(f"invalid range '{s}': values must be in [0, 1] with min <= max")
+    return FloatRangeSpec((round(lo * 100), round(hi * 100)))
+
+def parse_int_range(s):
+    """Parse 'min-max' or single int as an IntRangeSpec.
+
+    '2-20'  -> IntRangeSpec((2, 20))
+    '10'    -> IntRangeSpec((10, 10))
+    """
+    parts = s.split('-')
+    if len(parts) == 2:
+        lo, hi = int(parts[0]), int(parts[1])
+    elif len(parts) == 1:
+        lo = hi = int(parts[0])
+    else:
+        raise argparse.ArgumentTypeError(f"invalid range '{s}': expected 'min-max' or single value")
+    if lo > hi:
+        raise argparse.ArgumentTypeError(f"invalid range '{s}': min must be <= max")
+    return IntRangeSpec((lo, hi))
+
 class DiabloParserNamespace(argparse.Namespace):
     @property
     def frames_int(self):
@@ -264,6 +315,21 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--spell-potency", type=float, default=0.0, metavar="PROB",
         help="Spell potency multiplier [0.0, 1.0]: 0=normal engine rules, 1=spells one-shot any monster (default: 0.0)")
+    common_parser.add_argument(
+        "--hero-hp-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
+        metavar="MIN-MAX",
+        help="Hero HP fraction at episode start as a range in [0.0, 1.0] "
+             "(e.g. '0.4-1' draws uniformly; single value sets a fixed fraction; default: 1)")
+    common_parser.add_argument(
+        "--hero-mana-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
+        metavar="MIN-MAX",
+        help="Hero mana fraction at episode start as a range in [0.0, 1.0] "
+             "(e.g. '0.4-1' draws uniformly; single value sets a fixed fraction; default: 1)")
+    common_parser.add_argument(
+        "--hero-potions-at-start", type=parse_int_range, default=IntRangeSpec((2, 20)),
+        metavar="MIN-MAX",
+        help="Number of potions at episode start as an integer range "
+             "(e.g. '2-20'; single value sets a fixed count; default: 2-20)")
     common_parser.add_argument(
         "--seed", type=int, default=0,
         help="Initial global experiment seed (controls PyTorch, numpy, RNGs, etc) (default: 0)")
@@ -477,6 +543,18 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--eval-dungeon-level", type=parse_dungeon_level, default=None,
         help="Dungeon level spec for eval environments; overrides --dungeon-level if set")
+    train_ai_parser.add_argument(
+        "--eval-hero-hp-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
+        metavar="MIN-MAX",
+        help="Hero HP fraction for eval environments (default: 1)")
+    train_ai_parser.add_argument(
+        "--eval-hero-mana-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
+        metavar="MIN-MAX",
+        help="Hero mana fraction for eval environments (default: 1)")
+    train_ai_parser.add_argument(
+        "--eval-hero-potions-at-start", type=parse_int_range, default=IntRangeSpec((2, 20)),
+        metavar="MIN-MAX",
+        help="Potion count for eval environments (default: 2-20)")
 
     #
     # demos-il
@@ -2058,6 +2136,12 @@ def train_ai(args, gameconfig):
     eval_gameconfig = copy.deepcopy(gameconfig)
     if args.eval_dungeon_level is not None:
         eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
+    eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
+    eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
+    eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
+    eval_gameconfig['hero-mana-max-pct'] = args.eval_hero_mana_at_start[1]
+    eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
+    eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
     for i in range(args.eval_env_runners):
         env_config = copy.deepcopy(eval_gameconfig)
         env_config['index'] = args.env_runners + i
@@ -2703,6 +2787,12 @@ def main():
         "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
         "spell-potency": args.spell_potency,
+        "hero-hp-min-pct":    args.hero_hp_at_start[0],
+        "hero-hp-max-pct":    args.hero_hp_at_start[1],
+        "hero-mana-min-pct":  args.hero_mana_at_start[0],
+        "hero-mana-max-pct":  args.hero_mana_at_start[1],
+        "hero-potions-min":   args.hero_potions_at_start[0],
+        "hero-potions-max":   args.hero_potions_at_start[1],
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "view-radius": args.view_radius,
         "game-ticks-per-step": args.game_ticks_per_step,
