@@ -541,8 +541,8 @@ def make_diablo_parser():
         "--eval-env-runners", type=int, default=64,
         help="Number of environment runners dedicated to evaluation (default: 64)")
     train_ai_parser.add_argument(
-        "--eval-dungeon-level", type=parse_dungeon_level, default=None,
-        help="Dungeon level spec for eval environments; overrides --dungeon-level if set")
+        "--eval-dungeon-level", type=parse_dungeon_level, default=DungeonLevelSpec([(1, 1)]),
+        help="Dungeon level spec for eval environments (default: 1)")
     train_ai_parser.add_argument(
         "--eval-hero-hp-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
         metavar="MIN-MAX",
@@ -2134,8 +2134,7 @@ def train_ai(args, gameconfig):
     eval_envs = []
     ts = 0
     eval_gameconfig = copy.deepcopy(gameconfig)
-    if args.eval_dungeon_level is not None:
-        eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
+    eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
     eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
     eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
     eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
