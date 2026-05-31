@@ -933,6 +933,12 @@ GameplayOptions::GameplayOptions()
     , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
     , blindMonsters("Blind monsters", OptionEntryFlags::Invisible, "", "", false)
     , spellPotency("Spell potency", OptionEntryFlags::Invisible, "", "", 0)
+    , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
+    , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
+    , heroManaMinPct("Hero mana min pct", OptionEntryFlags::Invisible, "", "", 100)
+    , heroManaMaxPct("Hero mana max pct", OptionEntryFlags::Invisible, "", "", 100)
+    , heroPotionsMin("Hero potions min", OptionEntryFlags::Invisible, "", "", 2)
+    , heroPotionsMax("Hero potions max", OptionEntryFlags::Invisible, "", "", 20)
 {
 }
 
@@ -993,6 +999,12 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&invinciblePlayer,
 		&blindMonsters,
 		&spellPotency,
+		&heroHpMinPct,
+		&heroHpMaxPct,
+		&heroManaMinPct,
+		&heroManaMaxPct,
+		&heroPotionsMin,
+		&heroPotionsMax,
 	};
 }
 

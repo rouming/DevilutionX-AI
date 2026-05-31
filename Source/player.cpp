@@ -2466,7 +2466,7 @@ constexpr int kMaxBonusSpells = 2;
 struct EpisodeHeroConfig {
 	uint8_t  speed_flags;
 	int      level, strength, magic, dexterity, vitality;
-	int      max_hp, max_mana, armor_class;
+	int      max_hp, max_mana, start_hp, start_mana, armor_class;
 	int      min_damage, max_damage, to_hit_bonus;
 	int      resistances;
 	// [kMinBonusSpells, kMaxBonusSpells] distinct learned spells per
@@ -2476,9 +2476,8 @@ struct EpisodeHeroConfig {
 	SpellID  spell_ids[kMaxBonusSpells];
 	int      spell_levels[kMaxBonusSpells];
 	// Starting potion / scroll mix: a multivariate-hypergeometric draw from a
-	// 70-item bag (10 of each of 7 categories). Total `potion_count` is
-	// uniform in [kPotionDrawMin, kPotionDrawMax], so the model trains across
-	// the full resource-scarcity spectrum. Per-category counts emerge from
+	// 70-item bag (10 of each of 7 categories). Total `potion_count` is drawn
+	// from [heroPotionsMin, heroPotionsMax]. Per-category counts emerge from
 	// the bag sampling -- each draw gives every category equal probability
 	// 1/7, so no category is systematically rare or common. The bag shuffle
 	// also doubles as the placement order, removing the per-category bias
@@ -2696,9 +2695,6 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	// Warrior/Rogue class mana is too small to train spell skills: Warrior has
 	// ~1 mana per magic point above 10, so at low depths it cannot cast even
 	// cheap spells (e.g. ManaShield needs 33 mana, Warrior has ~9 at d=4).
-	// At inference the mana fraction scalar shows when mana is low; the model
-	// learns from reward feedback when not to cast, without needing training
-	// episodes where mana is artificially depleted.
 	// Formula: Sorcerer primary stat at depth d gives a depth-scaled pool:
 	//   d=1 -> ~133,  d=8 -> ~499,  d=16 -> ~993
 	int sorc_magic = std::min(250, kSorcerer.mag_base + kSorcerer.mag_slope * d);
@@ -2780,7 +2776,17 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		int j = ri(0, i);
 		std::swap(bag[i], bag[j]);
 	}
-	int potion_count = ri(kPotionDrawMin, kPotionDrawMax);
+	const GameplayOptions &gp = GetOptions().Gameplay;
+	int potion_min   = std::max(0, std::min((int)*gp.heroPotionsMin, kPotionBagSize));
+	int potion_max   = std::max(potion_min, std::min((int)*gp.heroPotionsMax, kPotionBagSize));
+	int potion_count = ri(potion_min, potion_max);
+
+	int hp_min_pct   = std::max(0, std::min((int)*gp.heroHpMinPct,   100));
+	int hp_max_pct   = std::max(hp_min_pct, std::min((int)*gp.heroHpMaxPct, 100));
+	int mana_min_pct = std::max(0, std::min((int)*gp.heroManaMinPct, 100));
+	int mana_max_pct = std::max(mana_min_pct, std::min((int)*gp.heroManaMaxPct, 100));
+	int start_hp     = max_hp   * ri(hp_min_pct,   hp_max_pct)   / 100;
+	int start_mana   = max_mana * ri(mana_min_pct, mana_max_pct) / 100;
 
 	gEpisodeHeroConfig = {
 		.speed_flags    = static_cast<uint8_t>(atk_tier | (rec_tier << 2)),
@@ -2791,6 +2797,8 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		.vitality       = vitality,
 		.max_hp         = max_hp,
 		.max_mana       = max_mana,
+		.start_hp       = start_hp,
+		.start_mana     = start_mana,
 		.armor_class    = ac,
 		.min_damage     = min_dam,
 		.max_damage     = max_dam,
@@ -2862,14 +2870,16 @@ static void ApplyHeroConfig(Player &player)
 	player._pBaseVit  = cfg.vitality;   player._pVitality  = cfg.vitality;
 
 	// HP and Mana (fixed-point: display value << 6).
-	// _pHPBase/_pManaBase must match so CalcPlrLifeMana preserves current HP
-	// instead of snapping it back to the level-1 CreatePlayer value.
-	const int32_t hp   = cfg.max_hp   << 6;
-	const int32_t mana = cfg.max_mana << 6;
-	player._pMaxHPBase   = hp;   player._pMaxHP   = hp;
-	player._pHPBase      = hp;   player._pHitPoints = hp;
-	player._pMaxManaBase = mana; player._pMaxMana = mana;
-	player._pManaBase    = mana; player._pMana    = mana;
+	// _pHPBase/_pManaBase must match the current value so CalcPlrLifeMana
+	// preserves it instead of snapping back to the level-1 CreatePlayer value.
+	const int32_t hp      = cfg.max_hp     << 6;
+	const int32_t mana    = cfg.max_mana   << 6;
+	const int32_t cur_hp  = cfg.start_hp   << 6;
+	const int32_t cur_mana = cfg.start_mana << 6;
+	player._pMaxHPBase   = hp;      player._pMaxHP   = hp;
+	player._pHPBase      = cur_hp;  player._pHitPoints = cur_hp;
+	player._pMaxManaBase = mana;    player._pMaxMana = mana;
+	player._pManaBase    = cur_mana; player._pMana    = cur_mana;
 
 	ApplyHeroConfigCombatStats(player);
 

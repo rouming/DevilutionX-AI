@@ -680,6 +680,18 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean blindMonsters;
 	/** @brief Spell potency percentage for curriculum learning (0=normal, 100=one-shot anything) */
 	OptionEntryInt<int> spellPotency;
+	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
+	OptionEntryInt<int> heroHpMinPct;
+	/** @brief Hero HP at episode start: max percent of max HP (0-100, default 100) */
+	OptionEntryInt<int> heroHpMaxPct;
+	/** @brief Hero mana at episode start: min percent of max mana (0-100, default 100) */
+	OptionEntryInt<int> heroManaMinPct;
+	/** @brief Hero mana at episode start: max percent of max mana (0-100, default 100) */
+	OptionEntryInt<int> heroManaMaxPct;
+	/** @brief Min number of potions at episode start (default 2) */
+	OptionEntryInt<int> heroPotionsMin;
+	/** @brief Max number of potions at episode start (default 20) */
+	OptionEntryInt<int> heroPotionsMax;
 };
 
 struct ControllerOptions : OptionCategoryBase {
