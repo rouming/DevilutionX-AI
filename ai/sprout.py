@@ -1746,7 +1746,8 @@ def cli_tree(args, sprout: Sprout, params_diff=None) -> int:
 
             for rid in order:
                 children = sorted(tree.get(rid, []),
-                                   key=lambda c: runs[c]["created_at"])
+                                  key=lambda c: runs[c]["created_at"],
+                                  reverse=True)
                 col = col_of(rid)
                 if col == -1:
                     col = alloc(rid)
