@@ -1687,7 +1687,7 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
             for k, v in (r.get("params") or {}).items():
                 in_parent = k in parent_params
                 old_v = parent_params[k] if in_parent else None
-                if in_parent and old_v == v:
+                if in_parent and str(old_v) == str(v):
                     continue
                 if params_diff is not None:
                     lines = params_diff(k, old_v, v)
@@ -1836,7 +1836,7 @@ def cli_log(args,
                     diffs[k] = repr(v)
                 else:
                     old = params[k]
-                    if old != v:
+                    if str(old) != str(v):
                         diffs[k] = f"{old} -> {v}"
             params.update(run_params)
             alias = f" ({r['alias']})" if r.get("alias") else ""
@@ -1922,7 +1922,7 @@ def cli_show(args,
                 diffs[k] = repr(v)
             else:
                 old = prev_params[k]
-                if old != v:
+                if str(old) != str(v):
                     diffs[k] = f"{old} -> {v}"
 
         alias = f" ({r['alias']})" if r.get("alias") else ""
