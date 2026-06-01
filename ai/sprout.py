@@ -209,12 +209,22 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
         }
     return arg_defs
 
-def make_cli_opts(parser, params, all_params=False):
-    """Compare new parameters with argparse defaults and required
-    values, and return a list of CLI options.
-    If all_params=True, include params even when they match their default."""
+def make_cli_opts(parser, params, all_params=False, skip_params=None):
+    """Compare parameters with argparse defaults and return (cli_opts, new_params).
+
+    cli_opts  - list of CLI tokens forming a reproducible command line.
+    new_params - dict {name: default_val} for params present in the current
+                 parser but absent from stored params (only populated when
+                 all_params=True; these are params added to the codebase after
+                 the run was created).
+
+    If all_params=True, include stored params even when they match their
+    default, and include new params using their current default value.
+    skip_params: optional set of param names to exclude from new_params."""
     opts = []
     missing = []
+    new_params = {}
+    _skip = skip_params or set()
 
     # First try to find a subparser
     for a in parser._actions:
@@ -256,7 +266,19 @@ def make_cli_opts(parser, params, all_params=False):
             else:
                 opts.append(f"{opt_string} {default_val}")
 
-    return [parser.prog] + opts + missing
+        # Param exists in current code but was not stored: post-run addition.
+        # Skip any caller-specified skip_params.
+        elif all_params and not required \
+                and name not in _skip:
+            new_params[name] = default_val
+            opt_string = meta["option_strings"][0]
+            if isinstance(default_val, bool):
+                if default_val:
+                    opts.append(opt_string)
+            elif default_val is not None:
+                opts.append(f"{opt_string} {default_val}")
+
+    return [parser.prog] + opts + missing, new_params
 
 def format_cli_opts(cli_opts, fit_terminal_width=True, prefix=""):
     if not sys.stdout.isatty():
@@ -1480,7 +1502,7 @@ def cli_edit(args, sprout: Sprout,
             # Prepare CLI opts
             opts_str = ""
             if default_parser:
-                cli_opts = make_cli_opts(default_parser, params)
+                cli_opts, _ = make_cli_opts(default_parser, params)
                 opts_str = format_cli_opts(cli_opts, prefix="# ")
                 opts_str += "\n\n"
 
@@ -1829,7 +1851,7 @@ def cli_log(args,
                 print()
             print(color(title, bold=True))
             if default_parser:
-                cli_opts = make_cli_opts(default_parser, run_params)
+                cli_opts, _ = make_cli_opts(default_parser, run_params)
                 opts = format_cli_opts(cli_opts, fit_terminal_width=False)
                 print(f"{opts}")
                 print()
@@ -1873,7 +1895,8 @@ def cli_log(args,
 
 def cli_show(args,
              sprout: Sprout,
-             default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+             default_parser: Optional[argparse.ArgumentParser] = None,
+             skip_params=None) -> int:
     try:
         _, heads, _ = sprout.get_tree()
         run_id = None
@@ -1910,20 +1933,28 @@ def cli_show(args,
         print(color(title, bold=True))
 
         if default_parser:
-            cli_opts = make_cli_opts(default_parser, run_params, all_params=args.all_params)
+            cli_opts, new_params = make_cli_opts(default_parser, run_params,
+                                                  all_params=args.all_params,
+                                                  skip_params=skip_params)
             opts = format_cli_opts(cli_opts, fit_terminal_width=False)
             print(f"{opts}")
             print()
 
         if args.all_params:
+            fmt = "    %s%s%s"
             if run_params:
-                print("  All params:")
+                print("  Stored params:")
+                max_len = max((len(k) for k in run_params), default=0)
+                for k, v in run_params.items():
+                    print(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
             else:
                 print("  No params")
-            max_len = max((len(k) for k in run_params), default=0)
-            fmt = "    %s%s%s"
-            for k, v in run_params.items():
-                print(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
+            if new_params:
+                print()
+                print("  Post-run defaults:")
+                max_len = max((len(k) for k in new_params), default=0)
+                for k, v in new_params.items():
+                    print(fmt % (k, " " * (max_len - len(k)), " = " + repr(v)))
         else:
             if len(chain) == 1:
                 if diffs:
@@ -2081,7 +2112,7 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
 # -------------------------
 
 def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
-         params_diff=None) -> int:
+         params_diff=None, skip_params=None) -> int:
     parser = build_parser("sprout")
     args = parser.parse_args(argv)
 
@@ -2122,7 +2153,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
         elif args.cmd == "log":
             ret = cli_log(args, sprout, default_parser=default_parser)
         elif args.cmd == "show":
-            ret = cli_show(args, sprout, default_parser=default_parser)
+            ret = cli_show(args, sprout, default_parser=default_parser,
+                           skip_params=skip_params)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
         else:

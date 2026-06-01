@@ -226,6 +226,11 @@ def parse_int_range(s):
         raise argparse.ArgumentTypeError(f"invalid range '{s}': min must be <= max")
     return IntRangeSpec((lo, hi))
 
+# Params excluded from sprout storage and post-run-defaults display.
+# These are operational flags (attach, cont) or internal bookkeeping (model,
+# demos, no_drop_best) that are not training hyperparameters.
+SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "attach", "help"}
+
 class DiabloParserNamespace(argparse.Namespace):
     @property
     def frames_int(self):
@@ -1992,13 +1997,13 @@ def prepare_directory_for_run(args, dir_name):
     # you open a snapshot in Sprout. Therefore, skip the model to
     # avoid long diffs in Sprout's output. Also `continue` flag
     # just controls model states, so should be skipped.
-    skip_keys = ["model", "demos", "cont", "no_drop_best"]
     run_dir = utils.get_run_dir(dir_name)
     # shlex.quote() the value so tuples / strings containing spaces (e.g.
     # dungeon_level=(1, 16)) round-trip through sprout's shlex-based
     # parse_params_string without splitting mid-value.
     params_str = " ".join(f"{k}={shlex.quote(str(v))}"
-                          for k, v in vars(args).items() if k not in skip_keys)
+                          for k, v in vars(args).items()
+                          if k not in SPROUT_SKIP_PARAMS)
 
     if not os.path.isdir(run_dir):
         # Create model state
@@ -2759,7 +2764,8 @@ def main():
         sprout_args = ['--working', utils.get_models_dir()]
         sprout_args += sys.argv[sys.argv.index("sprout")+1:]
         return sprout.main(argv=sprout_args, default_parser=parser,
-                           params_diff=_sprout_params_diff)
+                           params_diff=_sprout_params_diff,
+                           skip_params=SPROUT_SKIP_PARAMS)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
