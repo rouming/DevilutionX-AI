@@ -4,8 +4,8 @@ Sprout - AI training snapshot manager (heads + borg)
 
 Key concepts implemented:
 - Active states are "heads". Heads point to run IDs and are represented by:
-    WORK/.heads/<run_id>                   # active run folder (working copy)
-    WORK/active/<head> -> .heads/<run_id>  # symlink for convenience
+    WORK/active/<head>/                    # real folder (stable, never renamed)
+    WORK/.heads/<run_id>/                  # temp dir used only during borg extract/create
 - Borg archives are named by run_id only: borg create <repo>::<run_id> <path>
 - Metadata: WORK/.metadata.json with keys:
     {
@@ -146,6 +146,12 @@ def cp_r(source: str, dist: str) -> None:
     if DEBUG:
         print(f"- cp -r {source} {dist}")
     shutil.copytree(source, dist, dirs_exist_ok=True)
+
+def cp_rl(source: str, dist: str) -> None:
+    """Copy directory tree using hard links (zero data copy)."""
+    if DEBUG:
+        print(f"- cp -rl {source} {dist}")
+    shutil.copytree(source, dist, copy_function=os.link, dirs_exist_ok=True)
 
 def is_dir(path: str) -> bool:
     return os.path.isdir(path)
@@ -444,14 +450,29 @@ class Sprout:
         write_json(self.meta_file, meta)
 
     def _head_dir(self, run_id: str) -> str:
-        """Path to the folder with active run contents (inside .heads)."""
+        """Path to temp folder inside .heads used during borg extract/create."""
         return os.path.join(self.heads_path, run_id)
 
-    def _symlink_target_rel(self, run_id: str) -> str:
-        """Relative symlink target from WORK/active/<head> to .heads/<run_id>."""
-        # produce relative path from working_path
-        rel = os.path.relpath(self._head_dir(run_id), start=self.active_path)
-        return rel
+    def _active_dir(self, head: str) -> str:
+        """Path to the real working folder for an active head."""
+        return os.path.join(self.active_path, head)
+
+    def _borg_create_from_active(self, head: str, run_id: str) -> None:
+        """Archive active/HEAD as run_id using hard-link copy (zero data copy)."""
+        active_dir = self._active_dir(head)
+        temp_dir = self._head_dir(run_id)
+        mkdir_p(temp_dir)
+        cp_rl(active_dir, temp_dir)
+        self._borg_create(run_id)
+        rmtree(temp_dir)
+
+    def _active_head_for_run(self, run_id: str, meta: dict) -> Optional[str]:
+        """Return head name if run_id is currently active, else None."""
+        heads = meta.get("heads", {})
+        for h, rid in heads.items():
+            if rid == run_id:
+                return h
+        return None
 
     # -------------------------
     # Borg helpers
@@ -537,19 +558,15 @@ class Sprout:
                        description_str: Optional[str] = None,
                        alias_str: Optional[str] = None) -> str:
         """
-        Snapshot the current active head by creating a new immutable run (snap_id)
-        which becomes the parent of the previous active run.
+        Snapshot the current active head.
 
-        Returns snapshot run id (snap_id).
+        Archives active/HEAD as run_id (freezing it), then allocates a new
+        run_id for the active head. The old run_id becomes the parent of the
+        new one.
 
-        The operation:
-          - read run_id for head from meta["heads"]
-          - ensure .heads/<run_id> exists
-          - create a new snap_id
-          - create borg archive for snap_id from .heads/<run_id>
-          - insert metadata: snap.parent <- old_parent, snap.params/alias/desc copied
-          - update old_run.parent = snap_id
-          - save metadata
+        Returns the snapshot id (= old run_id, now frozen in borg).
+
+        params/alias/description go to the new run, not the frozen snapshot.
         """
         heads = meta.get("heads", {})
 
@@ -557,54 +574,35 @@ class Sprout:
             raise SproutError(f"head '{head}' not found")
 
         run_id = heads[head]
-        head_dir = self._head_dir(run_id)
-        if not is_dir(head_dir):
-            raise SproutError(f"active folder for run '{run_id}' not found at {head_dir}")
+        active_dir = self._active_dir(head)
+        if not is_dir(active_dir):
+            raise SproutError(f"active folder for head '{head}' not found at {active_dir}")
 
-        # prepare snapshot id
-        snap_id = self.random_run_id()
-        snap_dir = self._head_dir(snap_id)
-        mkdir_p(snap_dir)
-
-        # copytree into empty newly created snapshot
-        cp_r(head_dir, snap_dir)
-
-        # create borg archive for snapshot from active folder
-        self._borg_create(snap_id)
-
-        # Delete dir of newly created snapshot once archived
-        rmtree(snap_dir)
-
-        # insert metadata snapshot (copy fields)
         runs = meta.setdefault("runs", {})
         old_run = runs.get(run_id)
         if old_run is None:
             raise SproutError(f"run '{run_id}' not present in metadata")
 
-        snap_entry = {
+        # Archive current active content as run_id (it becomes the frozen snapshot)
+        self._borg_create_from_active(head, run_id)
+
+        # Create new run_id for the active head
+        new_run_id = self.random_run_id()
+
+        new_run_entry = {
             "group": old_run.get("group"),
-            "parent": old_run.get("parent"),
-            "params": old_run.get("params", {}),
-            "alias": old_run.get("alias", ""),
-            "description": old_run.get("description", ""),
+            "parent": run_id,
+            "params": params if params is not None else old_run.get("params", {}),
+            "alias": alias_str if alias_str is not None else old_run.get("alias", ""),
+            "description": description_str if description_str is not None else old_run.get("description", ""),
             "custom": old_run.get("custom", {}),
             "created_at": now_iso()
         }
-        runs[snap_id] = snap_entry
+        runs[new_run_id] = new_run_entry
+        heads[head] = new_run_id
 
-        # update old run parent -> snap_id (insert snapshot above the active run)
-        old_run["parent"] = snap_id
-        if params is not None:
-            old_run["params"] = params
-        if description_str is not None:
-            old_run["description"] = description_str
-        if alias_str is not None:
-            old_run["alias"] = alias_str
-
-        # save metadata
         self._save_meta(meta)
-
-        return snap_id
+        return run_id  # snapshot id = old run_id
 
     @locked
     def create(self,
@@ -630,9 +628,8 @@ class Sprout:
               * if neither: None (new root run).
 
             After creating the new run, if head is provided we create
-            an active folder and symlink WORK/active/<head> ->
-            .heads/<run_id>. If head is omitted we persist-only
-            (archive and remove local folder).
+            a real active folder WORK/active/<head>. If head is
+            omitted we persist-only (archive and remove local folder).
 
         Returns newly created run id (or snapshot id if snapshot-only).
 
@@ -697,26 +694,30 @@ class Sprout:
         # allocate new run id
         new_run_id = self.random_run_id()
 
-        # create target head folder (under .heads)
-        target_dir = self._head_dir(new_run_id)
+        if head:
+            # active head: real folder lives at active/<head>
+            target_dir = self._active_dir(head)
+        else:
+            # persist-only: temp folder in .heads
+            target_dir = self._head_dir(new_run_id)
         mkdir_p(target_dir)
 
         # if parent exists, we need to copy its folder content into target_dir
         if parent_for_new:
-            # if parent has an active folder, copy from it
-            parent_active_dir = self._head_dir(parent_for_new)
-            if is_dir(parent_active_dir):
-                # copytree into empty target_dir
-                cp_r(parent_active_dir, target_dir)
+            # check if parent is currently active
+            parent_head = self._active_head_for_run(parent_for_new, meta)
+            if parent_head:
+                # copy from active folder directly
+                cp_r(self._active_dir(parent_head), target_dir)
             else:
-                # parent not active -> extract from borg then copy
-                # extract into working tree (borg extract will create a folder under working_path)
+                # parent is archived in borg -> extract to .heads/parent_for_new then copy
+                parent_temp_dir = self._head_dir(parent_for_new)
                 self._borg_extract(parent_for_new)
                 try:
-                    cp_r(parent_active_dir, target_dir)
+                    cp_r(parent_temp_dir, target_dir)
                 finally:
-                    # remove extracted temporary folder if it exists in .heads
-                    rmtree(parent_active_dir)
+                    if is_dir(parent_temp_dir):
+                        rmtree(parent_temp_dir)
 
             # Inherit a few fields from parent
             parent_run = runs[parent_for_new]
@@ -728,26 +729,14 @@ class Sprout:
                 description = parent_run["description"]
             custom_dict = parent_run.get("custom", {})
 
-        # create borg archive for the new run (archive name is run id)
-        self._borg_create(new_run_id)
-
-        # if no head requested, remove the local folder (persist-only)
-        if not head:
+        if head:
+            # active head: folder stays in place, no borg archive until snapshot/persist
+            heads[head] = new_run_id
+        else:
+            # persist-only: archive then remove temp folder
+            self._borg_create(new_run_id)
             if is_dir(target_dir):
                 rmtree(target_dir)
-        else:
-            # create/update symlink WORK/active/<head> -> .heads/<new_run_id>
-            symlink_path = os.path.join(self.active_path, head)
-            rel_target = self._symlink_target_rel(new_run_id)
-            # remove existing symlink
-            if os.path.islink(symlink_path):
-                try:
-                    unlink(symlink_path)
-                except OSError:
-                    pass
-            os.symlink(rel_target, symlink_path)
-            # update heads mapping
-            heads[head] = new_run_id
 
         # persist metadata for new run (store even if persisted-only)
         runs[new_run_id] = {
@@ -844,14 +833,19 @@ class Sprout:
 
         # allocate new run id
         new_run_id = self.random_run_id()
-        target_dir = self._head_dir(new_run_id)
+
+        if head:
+            target_dir = self._active_dir(head)
+        else:
+            target_dir = self._head_dir(new_run_id)
         mkdir_p(target_dir)
 
         # copy data from source (active folder or borg)
-        src_dir = self._head_dir(src_run)
-        if is_dir(src_dir):
-            cp_r(src_dir, target_dir)
+        src_head = self._active_head_for_run(src_run, meta)
+        if src_head:
+            cp_r(self._active_dir(src_head), target_dir)
         else:
+            src_dir = self._head_dir(src_run)
             self._borg_extract(src_run)
             try:
                 cp_r(src_dir, target_dir)
@@ -859,21 +853,13 @@ class Sprout:
                 if is_dir(src_dir):
                     rmtree(src_dir)
 
-        # archive the new run
-        self._borg_create(new_run_id)
-
-        if not head:
-            rmtree(target_dir)
-        else:
-            symlink_path = os.path.join(self.active_path, head)
-            rel_target = self._symlink_target_rel(new_run_id)
-            if os.path.islink(symlink_path):
-                try:
-                    unlink(symlink_path)
-                except OSError:
-                    pass
-            os.symlink(rel_target, symlink_path)
+        if head:
+            # active head: folder stays in place, no borg archive until snapshot/persist
             heads[head] = new_run_id
+        else:
+            # persist-only: archive then remove temp folder
+            self._borg_create(new_run_id)
+            rmtree(target_dir)
 
         runs[new_run_id] = {
             "group": group,
@@ -894,8 +880,8 @@ class Sprout:
         Persist a single head or all heads.
         Returns list of persisted run ids.
 
-        Persisting recreates borg archive for the active folder and deactivates the head
-        (removes symlink and .heads/<run_id> folder) unless other heads point to same run.
+        Persisting archives the active folder as run_id and deactivates the head
+        (removes active folder and head mapping).
         """
         meta = self._load_meta()
         heads = meta.get("heads", {})
@@ -912,29 +898,18 @@ class Sprout:
 
         for h in to_process:
             run_id = heads[h]
-            head_dir = self._head_dir(run_id)
-            if not is_dir(head_dir):
-                raise SproutError(f"head '{h}' has no active folder at {head_dir}")
+            active_dir = self._active_dir(h)
+            if not is_dir(active_dir):
+                raise SproutError(f"head '{h}' has no active folder at {active_dir}")
 
-            # recreate borg archive from head_dir
-            self._borg_create(run_id)
+            # archive current state as run_id
+            self._borg_create_from_active(h, run_id)
 
-            # remove symlink WORK/active/<head>
-            symlink_path = os.path.join(self.active_path, h)
-            if os.path.islink(symlink_path):
-                try:
-                    unlink(symlink_path)
-                except OSError:
-                    pass
+            # remove active folder
+            rmtree(active_dir)
 
-            # remove the head folder if no other heads point to the same run
+            # remove head mapping
             meta = self._load_meta()  # reload to be safe
-            other_heads = [k for k, v in meta.get("heads", {}).items() if v == run_id and k != h]
-            if not other_heads:
-                if is_dir(head_dir):
-                    rmtree(head_dir)
-
-            # remove the head mapping
             meta.get("heads", {}).pop(h, None)
             self._save_meta(meta)
 
@@ -960,15 +935,12 @@ class Sprout:
                 # reparent children
                 ch["parent"] = parent
 
-        # remove heads mapping and folders pointing to this run
+        # remove heads mapping and active folders pointing to this run
         heads_pointing = [h for h, rid in heads.items() if rid == run_id]
         for h in heads_pointing:
-            symlink_path = os.path.join(self.active_path, h)
-            if os.path.islink(symlink_path):
-                try:
-                    unlink(symlink_path)
-                except OSError:
-                    pass
+            active_dir = self._active_dir(h)
+            if is_dir(active_dir):
+                rmtree(active_dir)
             heads.pop(h, None)
 
         # delete borg archive (ignore errors)
@@ -977,7 +949,7 @@ class Sprout:
         except Exception:
             pass
 
-        # remove head dir if exists
+        # remove temp .heads/run_id dir if it exists (leftover from failed op)
         head_dir = self._head_dir(run_id)
         if is_dir(head_dir):
             rmtree(head_dir)
@@ -1062,22 +1034,21 @@ class Sprout:
         if parent_id not in runs:
             raise SproutError(f"parent run '{parent_id}' not found in metadata")
 
-        head_dir = self._head_dir(run_id)
+        active_dir = self._active_dir(head)
         parent_dir = self._head_dir(parent_id)
 
         if is_dir(parent_dir):
-            raise SproutError(f"parent run '{parent_id}' has an unexpected active folder")
+            raise SproutError(f"parent run '{parent_id}' has an unexpected temp folder in .heads")
 
         if persist:
-            # Archive current run as a permanent branch, then create a new
-            # run from parent content and reassign the head to it.
-            self._borg_create(run_id)
-            rmtree(head_dir)
+            # Archive current active content as run_id (permanent branch), then
+            # restore parent content into active/HEAD as a new run.
+            self._borg_create_from_active(head, run_id)
+            rmtree(active_dir)
 
             new_run_id = self.random_run_id()
             self._borg_extract(parent_id)
-            os.rename(parent_dir, self._head_dir(new_run_id))
-            self._borg_create(new_run_id)
+            os.rename(parent_dir, active_dir)
 
             parent_run = runs[parent_id]
             runs[new_run_id] = {
@@ -1089,16 +1060,12 @@ class Sprout:
                 "custom": parent_run.get("custom", {}),
                 "created_at": now_iso()
             }
-
             heads[head] = new_run_id
-            symlink_path = os.path.join(self.active_path, head)
-            if os.path.islink(symlink_path):
-                unlink(symlink_path)
-            os.symlink(self._symlink_target_rel(new_run_id), symlink_path)
         else:
-            rmtree(head_dir)
+            # Discard current state (no archive), restore parent content in-place.
+            rmtree(active_dir)
             self._borg_extract(parent_id)
-            os.rename(parent_dir, head_dir)
+            os.rename(parent_dir, active_dir)
 
             # Restore all fields from parent, preserving only structural identity fields
             parent_run = runs[parent_id]
@@ -1139,28 +1106,15 @@ class Sprout:
         # If head is already active, handle its deactivation
         current_run_id = heads.get(head)
         if current_run_id:
-            other_heads = [k for k, v in heads.items() if v == current_run_id and k != head]
+            active_dir = self._active_dir(head)
             if persist:
-                self._borg_create(current_run_id)
-                if not other_heads:
-                    head_dir = self._head_dir(current_run_id)
-                    if is_dir(head_dir):
-                        rmtree(head_dir)
-
-                symlink_path = os.path.join(self.active_path, head)
-                if os.path.islink(symlink_path):
-                    unlink(symlink_path)
-                heads.pop(head, None)
-            else:
-                # persist=False: remove the run entirely if it's not used by other heads
-                if not other_heads:
-                    self.remove_run_recursive(current_run_id, runs[current_run_id], meta)
-                else:
-                    symlink_path = os.path.join(self.active_path, head)
-                    if os.path.islink(symlink_path):
-                        unlink(symlink_path)
-                    heads.pop(head, None)
-
+                self._borg_create_from_active(head, current_run_id)
+            if is_dir(active_dir):
+                rmtree(active_dir)
+            if not persist:
+                # discard: remove run entirely (no other heads share in new design)
+                self.remove_run_recursive(current_run_id, runs[current_run_id], meta)
+            heads.pop(head, None)
             self._save_meta(meta)
 
         # Since to_run is persistent, we must create a NEW run as its child to
@@ -1219,19 +1173,17 @@ class Sprout:
         if new_head in heads:
             raise SproutError(f"head '{new_head}' already exists")
 
-        symlinks = {
+        active_dirs = {
             name for name in os.listdir(self.active_path)
-            if os.path.islink(os.path.join(self.active_path, name))
+            if is_dir(os.path.join(self.active_path, name))
         }
-        if old_head not in symlinks:
-            raise SproutError(f"head '{old_head}' not found in symlinks (data inconsistency!)")
-        if new_head in symlinks:
-            raise SproutError(f"head '{new_head}' already exists in symlinks (data inconsistency!)")
+        if old_head not in active_dirs:
+            raise SproutError(f"head '{old_head}' not found in active dirs (data inconsistency!)")
+        if new_head in active_dirs:
+            raise SproutError(f"head '{new_head}' already exists in active dirs (data inconsistency!)")
 
-        # Rename symlink
-        old_symlink_path = os.path.join(self.active_path, old_head)
-        new_symlink_path = os.path.join(self.active_path, new_head)
-        os.rename(old_symlink_path, new_symlink_path)
+        # Rename real directory
+        os.rename(self._active_dir(old_head), self._active_dir(new_head))
 
         # Rename key in heads
         heads[new_head] = heads[old_head]
@@ -1317,61 +1269,44 @@ class Sprout:
         Verify consistency between borg repo, metadata.json, and working directory.
 
         Checks:
-          1. Borg archives match runs in metadata.
-          2. .heads folders correspond to runs and are properly listed as heads.
-          3. Symlinks in working dir point to .heads and match count.
+          1. Borg archives match all runs except currently active ones.
+          2. active/ dirs match heads in metadata.
+          3. .heads/ is empty (no leftover temp dirs).
         Raises RuntimeError on mismatch.
         """
         meta = self._load_meta()
         runs = meta.get("runs", {})
         heads = meta.get("heads", {})
 
-        # Check borg archives
+        # 1. Borg archives should match all runs EXCEPT currently active ones
         out = self._borg_list()
-        borg_ids = {line.split()[0] for line in out.strip().splitlines()}
+        borg_ids = {line.split()[0] for line in out.strip().splitlines()} if out.strip() else set()
         meta_ids = set(runs.keys())
-        if borg_ids != meta_ids:
+        active_run_ids = set(heads.values())
+        expected_borg_ids = meta_ids - active_run_ids
+        if borg_ids != expected_borg_ids:
             raise RuntimeError(
                 f"[verify] mismatch between borg archives and metadata:\n"
-                f"borg-only: {borg_ids - meta_ids}\n"
-                f"meta-only: {meta_ids - borg_ids}"
+                f"borg-only: {borg_ids - expected_borg_ids}\n"
+                f"meta-only: {expected_borg_ids - borg_ids}"
             )
 
-        # Check .heads folders
-        head_dirs = {d for d in os.listdir(self.heads_path) if is_dir(os.path.join(self.heads_path, d))}
-        meta_heads = set(heads.values())
-        if not head_dirs.issubset(meta_ids):
-            raise RuntimeError(f"[verify] unknown run dirs in .heads: {head_dirs - meta_ids}")
-        if head_dirs != meta_heads:
-            raise RuntimeError(
-                f"[verify] mismatch between .heads dirs and heads in metadata:\n"
-                f".heads-only: {head_dirs - meta_heads}\n"
-                f"meta-only: {meta_heads - head_dirs}"
-            )
-
-        # Check symlinks in working_path
-        symlinks = {
-            name: os.readlink(os.path.join(self.active_path, name))
-            for name in os.listdir(self.active_path)
-            if os.path.islink(os.path.join(self.active_path, name))
+        # 2. active/ dirs match heads in metadata
+        active_dirs = {
+            name for name in os.listdir(self.active_path)
+            if is_dir(os.path.join(self.active_path, name))
         }
-
-        for name, target in symlinks.items():
-            if not target.startswith("../.heads/"):
-                raise RuntimeError(f"[verify] symlink {name} points outside .heads: {target}")
-            target_id = os.path.basename(target)
-            if target_id not in head_dirs:
-                raise RuntimeError(f"[verify] symlink {name} points to missing head dir {target_id}")
-
-        if len(symlinks) != len(head_dirs):
+        if active_dirs != set(heads.keys()):
             raise RuntimeError(
-                f"[verify] number of symlinks {len(symlinks)} != number of .heads dirs {len(head_dirs)}"
+                f"[verify] mismatch between active dirs and heads in metadata:\n"
+                f"active-only: {active_dirs - set(heads.keys())}\n"
+                f"meta-only: {set(heads.keys()) - active_dirs}"
             )
 
-        if set(symlinks.keys()) != set(heads.keys()):
-            raise RuntimeError(
-                f"[verify] symlinks {set(symlinks.keys())} != heads {set(heads.keys())}"
-            )
+        # 3. .heads/ should be empty (no leftover temp dirs)
+        head_dirs = [d for d in os.listdir(self.heads_path) if is_dir(os.path.join(self.heads_path, d))]
+        if head_dirs:
+            raise RuntimeError(f"[verify] unexpected dirs in .heads (leftover from failed operation?): {head_dirs}")
 
 
 # -------------------------
@@ -1392,7 +1327,7 @@ def cli_create(args, sprout: Sprout) -> int:
         return 2
     if run_id:
         if args.head:
-            print(f"Created run {run_id} and head '{args.head}' -> .heads/{run_id}")
+            print(f"Created run {run_id} and head '{args.head}'")
         else:
             print(f"Created run {run_id}")
     return 0
@@ -1413,7 +1348,7 @@ def cli_clone(args, sprout: Sprout) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     if args.head:
-        print(f"Cloned run {run_id} and head '{args.head}' -> .heads/{run_id}")
+        print(f"Cloned run {run_id} and head '{args.head}'")
     else:
         print(f"Cloned run {run_id}")
     return 0
@@ -2273,15 +2208,15 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': [], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': []})
-        self.assertEqual(heads, {'A': '4a60cce4', 'B': 'ce6cdcbc'})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': [], 'ce6cdcbc': []})
+        self.assertEqual(heads, {'A': 'fc27ffe9', 'B': 'ce6cdcbc'})
 
         """
         Group: GroupA
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
+        │     └─ 4a60cce4 params=∅
         │        ├─ ● A params=∅
         │        └─ ● B params=∅
         └─ 20c9a09f params=∅
@@ -2299,15 +2234,15 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': [], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': []})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': [], 'ce6cdcbc': []})
         self.assertEqual(heads, {})
 
         # create head A from run
-        rc, out, err = self.run_sprout("create --head A --from-run 4a60cce4")
+        rc, out, err = self.run_sprout("create --head A --from-run fc27ffe9")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['05b93cfe'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': [], '05b93cfe': []})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': ['05b93cfe'], 'ce6cdcbc': [], '05b93cfe': []})
         self.assertEqual(heads, {'A': '05b93cfe'})
 
         """
@@ -2315,8 +2250,8 @@ class SproutCLITests(unittest.TestCase):
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
-        │        ├─ 4a60cce4 params=∅
+        │     └─ 4a60cce4 params=∅
+        │        ├─ fc27ffe9 params=∅
         │        │  └─ ● A params=∅
         │        └─ ce6cdcbc params=∅
         └─ 20c9a09f params=∅
@@ -2327,7 +2262,7 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['05b93cfe'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': []})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': ['05b93cfe'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': []})
         self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0'})
 
         """
@@ -2335,8 +2270,8 @@ class SproutCLITests(unittest.TestCase):
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
-        │        ├─ 4a60cce4 params=∅
+        │     └─ 4a60cce4 params=∅
+        │        ├─ fc27ffe9 params=∅
         │        │  └─ ● A params=∅
         │        └─ ce6cdcbc params=∅
         │           └─ ● B params=∅
@@ -2385,17 +2320,17 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['0ffd83bf'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe']})
-        self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0'})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': ['05b93cfe'], 'ce6cdcbc': ['89bbb8a0'], '89bbb8a0': [], '05b93cfe': ['0ffd83bf'], '0ffd83bf': []})
+        self.assertEqual(heads, {'A': '0ffd83bf', 'B': '89bbb8a0'})
 
         """
         Group: GroupA
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
-        │        ├─ 4a60cce4 params=∅
-        │        │  └─ 0ffd83bf params=∅
+        │     └─ 4a60cce4 params=∅
+        │        ├─ fc27ffe9 params=∅
+        │        │  └─ 05b93cfe params=∅
         │        │     └─ ● A params=∅
         │        └─ ce6cdcbc params=∅
         │           └─ ● B params=∅
@@ -2426,21 +2361,21 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         # create head C from a parent A state
-        rc, out, err = self.run_sprout("create --head C --from-run 0ffd83bf")
+        rc, out, err = self.run_sprout("create --head C --from-run 05b93cfe")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['0ffd83bf'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe', 'abc5beca'], 'abc5beca': []})
-        self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0', 'C': 'abc5beca'})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': ['05b93cfe'], 'ce6cdcbc': ['89bbb8a0'], '89bbb8a0': [], '05b93cfe': ['0ffd83bf', 'abc5beca'], '0ffd83bf': [], 'abc5beca': []})
+        self.assertEqual(heads, {'A': '0ffd83bf', 'B': '89bbb8a0', 'C': 'abc5beca'})
 
         """
         Group: GroupA
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
-        │        ├─ 4a60cce4 params=∅
-        │        │  └─ 0ffd83bf params=∅
+        │     └─ 4a60cce4 params=∅
+        │        ├─ fc27ffe9 params=∅
+        │        │  └─ 05b93cfe params=∅
         │        │     ├─ ● A params=∅
         │        │     └─ ● C params=∅
         │        └─ ce6cdcbc params=∅
@@ -2465,17 +2400,17 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], '4a60cce4': ['0ffd83bf'], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe']})
-        self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0'})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': ['05b93cfe'], 'ce6cdcbc': ['89bbb8a0'], '89bbb8a0': [], '05b93cfe': ['0ffd83bf'], '0ffd83bf': []})
+        self.assertEqual(heads, {'A': '0ffd83bf', 'B': '89bbb8a0'})
 
         """
         Group: GroupA
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
-        │        ├─ 4a60cce4 params=∅
-        │        │  └─ 0ffd83bf params=∅
+        │     └─ 4a60cce4 params=∅
+        │        ├─ fc27ffe9 params=∅
+        │        │  └─ 05b93cfe params=∅
         │        │     └─ ● A params=∅
         │        └─ ce6cdcbc params=∅
         │           └─ ● B params=∅
@@ -2490,28 +2425,28 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(out, "FILE1 FILE3 FILE4\n", msg=err)
 
         # remove node, reparent children
-        rc, out, err = self.run_sprout("remove --run 4a60cce4")
+        rc, out, err = self.run_sprout("remove --run fc27ffe9")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['fc27ffe9'], 'fc27ffe9': ['ce6cdcbc', '0ffd83bf'], 'ce6cdcbc': ['89bbb8a0'], '05b93cfe': [], '89bbb8a0': [], '0ffd83bf': ['05b93cfe']})
-        self.assertEqual(heads, {'A': '05b93cfe', 'B': '89bbb8a0'})
+        self.assertEqual(tree, {'2ca5a9eb': ['5ed00be8', '49049a55'], '20c9a09f': [], '5ed00be8': [], '49049a55': ['4a60cce4'], '4a60cce4': ['ce6cdcbc', '05b93cfe'], 'ce6cdcbc': ['89bbb8a0'], '89bbb8a0': [], '05b93cfe': ['0ffd83bf'], '0ffd83bf': []})
+        self.assertEqual(heads, {'A': '0ffd83bf', 'B': '89bbb8a0'})
 
         """
         Group: GroupA
         ├─ 2ca5a9eb params=∅
         │  ├─ 5ed00be8 params=∅
         │  └─ 49049a55 params=∅
-        │     └─ fc27ffe9 params=∅
+        │     └─ 4a60cce4 params=∅
         │        ├─ ce6cdcbc params=∅
         │        │  └─ ● B params=∅
-        │        └─ 0ffd83bf params=∅
+        │        └─ 05b93cfe params=∅
         │           └─ ● A params=∅
         └─ 20c9a09f params=∅
         """
 
         # remove the whole branch
-        rc, out, err = self.run_sprout("remove --run fc27ffe9 --whole-branch")
+        rc, out, err = self.run_sprout("remove --run 4a60cce4 --whole-branch")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
@@ -2576,21 +2511,21 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['2ca5a9eb']})
-        self.assertEqual(heads, {'A': '2ca5a9eb'})
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': []})
+        self.assertEqual(heads, {'A': '20c9a09f'})
         # previous head
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # updated current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a1': 1})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a1-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ ● A (a-alias) params=a
+        └─ 2ca5a9eb params=∅
+           └─ ● A (a1-alias) params=a1
         """
 
         # move head A forward, but update params, description, alias
@@ -2598,25 +2533,25 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['5ed00be8'], '5ed00be8': ['2ca5a9eb']})
-        self.assertEqual(heads, {'A': '2ca5a9eb'})
-        # previous previos head
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': ['5ed00be8'], '5ed00be8': []})
+        self.assertEqual(heads, {'A': '5ed00be8'})
+        # previous previous head
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # previous head
-        self.assertEqual(runs['5ed00be8']['params'], {'a1': 1})
-        self.assertEqual(runs['5ed00be8']['description'], "a1-desc")
-        self.assertEqual(runs['5ed00be8']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
         # updated current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a2': 2})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a2-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a2-alias")
+        self.assertEqual(runs['5ed00be8']['params'], {'a2': 2})
+        self.assertEqual(runs['5ed00be8']['description'], "a2-desc")
+        self.assertEqual(runs['5ed00be8']['alias'], "a2-alias")
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ 5ed00be8 (a1-alias) params=a1
+        └─ 2ca5a9eb params=∅
+           └─ 20c9a09f (a1-alias) params=a1
               └─ ● A (a2-alias) params=a2
         """
 
@@ -2625,24 +2560,24 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55'], '49049a55': ['2ca5a9eb', '4a60cce4'], '4a60cce4': []})
-        self.assertEqual(heads, {'A': '2ca5a9eb', 'B': '4a60cce4'})
-        # previous previous previos head A
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55', '4a60cce4'], '49049a55': [], '4a60cce4': []})
+        self.assertEqual(heads, {'A': '49049a55', 'B': '4a60cce4'})
+        # previous previous previous head A
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # previous previous head A
-        self.assertEqual(runs['5ed00be8']['params'], {'a1': 1})
-        self.assertEqual(runs['5ed00be8']['description'], "a1-desc")
-        self.assertEqual(runs['5ed00be8']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
         # previous head A
+        self.assertEqual(runs['5ed00be8']['params'], {'a2': 2})
+        self.assertEqual(runs['5ed00be8']['description'], "a2-desc")
+        self.assertEqual(runs['5ed00be8']['alias'], "a2-alias")
+        # current head A
         self.assertEqual(runs['49049a55']['params'], {'a2': 2})
         self.assertEqual(runs['49049a55']['description'], "a2-desc")
         self.assertEqual(runs['49049a55']['alias'], "a2-alias")
-        # current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a2': 2})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a2-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a2-alias")
         # current head B
         self.assertEqual(runs['4a60cce4']['params'], {'b1': 1})
         self.assertEqual(runs['4a60cce4']['description'], "b1-desc")
@@ -2651,9 +2586,9 @@ class SproutCLITests(unittest.TestCase):
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ 5ed00be8 (a1-alias) params=a1
-              └─ 49049a55 (a2-alias) params=a2
+        └─ 2ca5a9eb params=∅
+           └─ 20c9a09f (a1-alias) params=a1
+              └─ 5ed00be8 (a2-alias) params=a2
                  ├─ ● A (a2-alias) params=a2
                  └─ ● B (b1-alias) params=b1
         """
@@ -2663,74 +2598,74 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55'], '49049a55': ['2ca5a9eb', 'fc27ffe9'], '4a60cce4': [], 'fc27ffe9': ['4a60cce4']})
-        self.assertEqual(heads, {'A': '2ca5a9eb', 'B': '4a60cce4'})
-        # previous previous previos head A
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55', '4a60cce4'], '49049a55': [], '4a60cce4': ['fc27ffe9'], 'fc27ffe9': []})
+        self.assertEqual(heads, {'A': '49049a55', 'B': 'fc27ffe9'})
+        # previous previous previous head A
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # previous previous head A
-        self.assertEqual(runs['5ed00be8']['params'], {'a1': 1})
-        self.assertEqual(runs['5ed00be8']['description'], "a1-desc")
-        self.assertEqual(runs['5ed00be8']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
         # previous head A
+        self.assertEqual(runs['5ed00be8']['params'], {'a2': 2})
+        self.assertEqual(runs['5ed00be8']['description'], "a2-desc")
+        self.assertEqual(runs['5ed00be8']['alias'], "a2-alias")
+        # current head A
         self.assertEqual(runs['49049a55']['params'], {'a2': 2})
         self.assertEqual(runs['49049a55']['description'], "a2-desc")
         self.assertEqual(runs['49049a55']['alias'], "a2-alias")
-        # current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a2': 2})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a2-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a2-alias")
         # previous head B
-        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
-        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
-        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
-        # current head B
         self.assertEqual(runs['4a60cce4']['params'], {'b1': 1})
         self.assertEqual(runs['4a60cce4']['description'], "b1-desc")
         self.assertEqual(runs['4a60cce4']['alias'], "b1-alias")
+        # current head B
+        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
+        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
+        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ 5ed00be8 (a1-alias) params=a1
-              └─ 49049a55 (a2-alias) params=a2
+        └─ 2ca5a9eb params=∅
+           └─ 20c9a09f (a1-alias) params=a1
+              └─ 5ed00be8 (a2-alias) params=a2
                  ├─ ● A (a2-alias) params=a2
-                 └─ fc27ffe9 (b1-alias) params=b1
+                 └─ 4a60cce4 (b1-alias) params=b1
                     └─ ● B (b1-alias) params=b1
         """
 
         # create headless snapshot from another run with params
-        rc, out, err = self.run_sprout("create --from-run fc27ffe9 --params 'other 1' --alias other-alias --description other-desc")
+        rc, out, err = self.run_sprout("create --from-run 4a60cce4 --params 'other 1' --alias other-alias --description other-desc")
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55'], '49049a55': ['2ca5a9eb', 'fc27ffe9'], '4a60cce4': [], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': []})
-        self.assertEqual(heads, {'A': '2ca5a9eb', 'B': '4a60cce4'})
-        # previous previous previos head A
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55', '4a60cce4'], '49049a55': [], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'fc27ffe9': [], 'ce6cdcbc': []})
+        self.assertEqual(heads, {'A': '49049a55', 'B': 'fc27ffe9'})
+        # previous previous previous head A
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # previous previous head A
-        self.assertEqual(runs['5ed00be8']['params'], {'a1': 1})
-        self.assertEqual(runs['5ed00be8']['description'], "a1-desc")
-        self.assertEqual(runs['5ed00be8']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
         # previous head A
+        self.assertEqual(runs['5ed00be8']['params'], {'a2': 2})
+        self.assertEqual(runs['5ed00be8']['description'], "a2-desc")
+        self.assertEqual(runs['5ed00be8']['alias'], "a2-alias")
+        # current head A
         self.assertEqual(runs['49049a55']['params'], {'a2': 2})
         self.assertEqual(runs['49049a55']['description'], "a2-desc")
         self.assertEqual(runs['49049a55']['alias'], "a2-alias")
-        # current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a2': 2})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a2-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a2-alias")
         # previous head B
-        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
-        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
-        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
-        # current head B
         self.assertEqual(runs['4a60cce4']['params'], {'b1': 1})
         self.assertEqual(runs['4a60cce4']['description'], "b1-desc")
         self.assertEqual(runs['4a60cce4']['alias'], "b1-alias")
+        # current head B
+        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
+        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
+        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
         # new state
         self.assertEqual(runs['ce6cdcbc']['params'], {'other': 1})
         self.assertEqual(runs['ce6cdcbc']['description'], "other-desc")
@@ -2738,11 +2673,11 @@ class SproutCLITests(unittest.TestCase):
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ 5ed00be8 (a1-alias) params=a1
-              └─ 49049a55 (a2-alias) params=a2
+        └─ 2ca5a9eb params=∅
+           └─ 20c9a09f (a1-alias) params=a1
+              └─ 5ed00be8 (a2-alias) params=a2
                  ├─ ● A (a2-alias) params=a2
-                 └─ fc27ffe9 (b1-alias) params=b1
+                 └─ 4a60cce4 (b1-alias) params=b1
                     ├─ ● B (b1-alias) params=b1
                     └─ ce6cdcbc (other-alias) params=other
         """
@@ -2752,32 +2687,32 @@ class SproutCLITests(unittest.TestCase):
         self.assertEqual(rc, 0, msg=err)
 
         runs, heads, tree = self.sprout.get_tree()
-        self.assertEqual(tree, {'2ca5a9eb': [], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55'], '49049a55': ['2ca5a9eb', 'fc27ffe9'], '4a60cce4': [], 'fc27ffe9': ['4a60cce4', 'ce6cdcbc'], 'ce6cdcbc': ['05b93cfe'], '05b93cfe': []})
-        self.assertEqual(heads, {'A': '2ca5a9eb', 'B': '4a60cce4'})
-        # previous previous previos head A
-        self.assertEqual(runs['20c9a09f']['params'], {})
-        self.assertEqual(runs['20c9a09f']['description'], "")
-        self.assertEqual(runs['20c9a09f']['alias'], "")
+        self.assertEqual(tree, {'2ca5a9eb': ['20c9a09f'], '20c9a09f': ['5ed00be8'], '5ed00be8': ['49049a55', '4a60cce4'], '49049a55': [], '4a60cce4': ['fc27ffe9', 'ce6cdcbc'], 'ce6cdcbc': ['05b93cfe'], 'fc27ffe9': [], '05b93cfe': []})
+        self.assertEqual(heads, {'A': '49049a55', 'B': 'fc27ffe9'})
+        # previous previous previous head A
+        self.assertEqual(runs['2ca5a9eb']['params'], {})
+        self.assertEqual(runs['2ca5a9eb']['description'], "")
+        self.assertEqual(runs['2ca5a9eb']['alias'], "")
         # previous previous head A
-        self.assertEqual(runs['5ed00be8']['params'], {'a1': 1})
-        self.assertEqual(runs['5ed00be8']['description'], "a1-desc")
-        self.assertEqual(runs['5ed00be8']['alias'], "a1-alias")
+        self.assertEqual(runs['20c9a09f']['params'], {'a1': 1})
+        self.assertEqual(runs['20c9a09f']['description'], "a1-desc")
+        self.assertEqual(runs['20c9a09f']['alias'], "a1-alias")
         # previous head A
+        self.assertEqual(runs['5ed00be8']['params'], {'a2': 2})
+        self.assertEqual(runs['5ed00be8']['description'], "a2-desc")
+        self.assertEqual(runs['5ed00be8']['alias'], "a2-alias")
+        # current head A
         self.assertEqual(runs['49049a55']['params'], {'a2': 2})
         self.assertEqual(runs['49049a55']['description'], "a2-desc")
         self.assertEqual(runs['49049a55']['alias'], "a2-alias")
-        # current head A
-        self.assertEqual(runs['2ca5a9eb']['params'], {'a2': 2})
-        self.assertEqual(runs['2ca5a9eb']['description'], "a2-desc")
-        self.assertEqual(runs['2ca5a9eb']['alias'], "a2-alias")
         # previous head B
-        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
-        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
-        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
-        # current head B
         self.assertEqual(runs['4a60cce4']['params'], {'b1': 1})
         self.assertEqual(runs['4a60cce4']['description'], "b1-desc")
         self.assertEqual(runs['4a60cce4']['alias'], "b1-alias")
+        # current head B
+        self.assertEqual(runs['fc27ffe9']['params'], {'b1': 1})
+        self.assertEqual(runs['fc27ffe9']['description'], "b1-desc")
+        self.assertEqual(runs['fc27ffe9']['alias'], "b1-alias")
         # ce6cdcbc state
         self.assertEqual(runs['ce6cdcbc']['params'], {'other': 1})
         self.assertEqual(runs['ce6cdcbc']['description'], "other-desc")
@@ -2789,11 +2724,11 @@ class SproutCLITests(unittest.TestCase):
 
         """
         Group: GroupA
-        └─ 20c9a09f params=∅
-           └─ 5ed00be8 (a1-alias) params=a1
-              └─ 49049a55 (a2-alias) params=a2
+        └─ 2ca5a9eb params=∅
+           └─ 20c9a09f (a1-alias) params=a1
+              └─ 5ed00be8 (a2-alias) params=a2
                  ├─ ● A (a2-alias) params=a2
-                 └─ fc27ffe9 (b1-alias) params=b1
+                 └─ 4a60cce4 (b1-alias) params=b1
                     ├─ ● B (b1-alias) params=b1
                     └─ ce6cdcbc (other-alias) params=other
                        └─ 05b93cfe (other-alias) params=other
@@ -3109,7 +3044,7 @@ class SproutCLITests(unittest.TestCase):
         self.assertNotEqual(run_a_new, run_persisted)
         self.assertEqual(runs4[run_a_new]['parent'], run_persisted)
         self.assertIn(run_a, runs4) # run_a is still in the tree
-        self.assertTrue(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_a_new)))
+        self.assertTrue(os.path.isdir(os.path.join(self.tmpdir, 'active', 'A')))
 
         # switch --persist: write a sentinel, switch away, verify it was saved
         rc, out, err = self.run_sprout("create GroupA --head C")
@@ -3127,7 +3062,8 @@ class SproutCLITests(unittest.TestCase):
         runs6, heads6, _ = self.sprout.get_tree()
         run_c_new = heads6['C']
         self.assertEqual(runs6[run_c_new]['parent'], run_persisted)
-        self.assertFalse(os.path.isdir(os.path.join(self.tmpdir, '.heads', run_c)))
+        self.assertTrue(os.path.isdir(os.path.join(self.tmpdir, 'active', 'C')))
+        self.assertNotIn(run_c, heads6.values())  # old run_c was archived, no longer active
 
         # switch C back to run_c (persistent): this extracts run_c and creates a NEW run_c_child
         rc, out, err = self.run_sprout(f"switch --head C --to-run {run_c}")
