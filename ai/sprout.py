@@ -215,7 +215,7 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
         }
     return arg_defs
 
-def make_cli_opts(parser, params, all_params=False, skip_params=None):
+def make_cli_opts(parser, params, all_params=False, skip_params=None, params_overrides_fn=None):
     """Compare parameters with argparse defaults and return (cli_opts, new_params).
 
     cli_opts  - list of CLI tokens forming a reproducible command line.
@@ -252,7 +252,9 @@ def make_cli_opts(parser, params, all_params=False, skip_params=None):
             if isinstance(default_val, bool):
                 missing.append(f"{opt_string}-REQUIRED")
             else:
-                missing.append(f"{opt_string} ${name.upper()}")
+                override = params_overrides_fn(name) if params_overrides_fn else None
+                value = override if override is not None else f'${name.upper()}'
+                missing.append(f"{opt_string} {value}")
 
         # Include if new param overrides default (or all_params requested)
         elif new_val is not None and (all_params or str(new_val) != str(default_val)):
@@ -1825,7 +1827,8 @@ def cli_log(args,
 def cli_show(args,
              sprout: Sprout,
              default_parser: Optional[argparse.ArgumentParser] = None,
-             skip_params=None) -> int:
+             skip_params=None,
+             params_overrides_fn=None) -> int:
     try:
         _, heads, _ = sprout.get_tree()
         run_id = None
@@ -1843,6 +1846,25 @@ def cli_show(args,
         chain = sprout.history_chain(run_id)
         rid, r = chain[-1]
         run_params = r["params"]
+        active_heads = [h for h, run in heads.items() if run == rid]
+
+        if default_parser:
+            cli_opts, new_params = make_cli_opts(default_parser, run_params,
+                                                  all_params=args.all_params,
+                                                  skip_params=skip_params,
+                                                  params_overrides_fn=params_overrides_fn)
+            opts = format_cli_opts(cli_opts, fit_terminal_width=False)
+            print(opts)
+
+        if not (args.params or args.all_params):
+            return 0
+
+        alias = f" ({r['alias']})" if r.get("alias") else ""
+        ts = to_iso(r["created_at"])
+        rid_or_head = active_heads[0] if active_heads else rid
+        title = f"> {rid_or_head}{alias} at {ts}"
+        print()
+        print(color(title, bold=True))
 
         prev_params = chain[-2][1]["params"] if len(chain) > 1 else {}
         diffs = {}
@@ -1853,21 +1875,6 @@ def cli_show(args,
                 old = prev_params[k]
                 if str(old) != str(v):
                     diffs[k] = f"{old} -> {v}"
-
-        alias = f" ({r['alias']})" if r.get("alias") else ""
-        ts = to_iso(r["created_at"])
-        active_heads = [h for h, run in heads.items() if run == rid]
-        rid_or_head = active_heads[0] if active_heads else rid
-        title = f"> {rid_or_head}{alias} at {ts}"
-        print(color(title, bold=True))
-
-        if default_parser:
-            cli_opts, new_params = make_cli_opts(default_parser, run_params,
-                                                  all_params=args.all_params,
-                                                  skip_params=skip_params)
-            opts = format_cli_opts(cli_opts, fit_terminal_width=False)
-            print(f"{opts}")
-            print()
 
         if args.all_params:
             fmt = "    %s%s%s"
@@ -2027,6 +2034,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     ps = sub.add_parser("show", help="Show details for the last leaf of a run or head")
     ps.add_argument("--run", help="Run id")
     ps.add_argument("--head", help="Head name")
+    ps.add_argument("--params", action="store_true",
+                    help="Also show title, param changes, description, and custom fields")
     ps.add_argument("--all", dest="all_params", action="store_true",
                     help="Show all params and CLI opts, not just those differing from parent/defaults")
 
@@ -2041,7 +2050,7 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
 # -------------------------
 
 def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
-         params_diff=None, skip_params=None) -> int:
+         params_diff=None, skip_params=None, params_overrides_fn=None) -> int:
     parser = build_parser("sprout")
     args = parser.parse_args(argv)
 
@@ -2083,7 +2092,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
             ret = cli_log(args, sprout, default_parser=default_parser)
         elif args.cmd == "show":
             ret = cli_show(args, sprout, default_parser=default_parser,
-                           skip_params=skip_params)
+                           skip_params=skip_params,
+                           params_overrides_fn=params_overrides_fn)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
         else:

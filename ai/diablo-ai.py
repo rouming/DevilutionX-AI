@@ -2767,9 +2767,12 @@ def main():
         # re-run through sprout.main(), but pass sys.argv after "sprout"
         sprout_args = ['--working', utils.get_models_dir()]
         sprout_args += sys.argv[sys.argv.index("sprout")+1:]
+        head_idx = next((i for i, a in enumerate(sprout_args) if a == '--head'), -1)
+        show_head = sprout_args[head_idx + 1] if head_idx >= 0 else None
         return sprout.main(argv=sprout_args, default_parser=parser,
                            params_diff=_sprout_params_diff,
-                           skip_params=SPROUT_SKIP_PARAMS)
+                           skip_params=SPROUT_SKIP_PARAMS,
+                           params_overrides_fn=lambda p: show_head if p == 'model' else None)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
