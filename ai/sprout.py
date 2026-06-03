@@ -518,16 +518,10 @@ class Sprout:
 
     def _borg_create(self, run_id: str) -> None:
         """
-        Create/overwrite borg archive <run_id> from .heads/<run_id> path.
+        Create borg archive <run_id> from .heads/<run_id> path.
         We cd into working_path and use a path relative to working_path to
         keep archive paths predictable.
         """
-        # remove existing archive if any (suppress error)
-        try:
-            sh(f"borg delete {shlex.quote(self.repo_path)}::{shlex.quote(run_id)} --force --error", env=BORG_ENV)
-        except subprocess.CalledProcessError:
-            pass
-
         rel_archive_dir = os.path.join(".heads", run_id)
 
         # cd into working_path so extraction returns paths under working_path
