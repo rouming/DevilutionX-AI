@@ -549,6 +549,12 @@ def make_diablo_parser():
         "--eval-dungeon-level", type=parse_dungeon_level, default=DungeonLevelSpec([(1, 1)]),
         help="Dungeon level spec for eval environments (default: 1)")
     train_ai_parser.add_argument(
+        "--stats-episodes", type=int, default=1000,
+        help="Number of recent training episodes for env-stats file (default: 1000)")
+    train_ai_parser.add_argument(
+        "--eval-stats-episodes", type=int, default=1000,
+        help="Number of recent eval episodes for eval env-stats file (default: 1000)")
+    train_ai_parser.add_argument(
         "--eval-hero-hp-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
         metavar="MIN-MAX",
         help="Hero HP fraction for eval environments (default: 1)")
@@ -1186,6 +1192,23 @@ def log_stats(args):
         print("# --dungeon-level %s" % ",".join(parts))
 
     return 0
+
+def _write_env_stats(path, eval_runners, last_episodes):
+    import io, contextlib, argparse
+    buf = io.StringIO()
+    fake_args = argparse.Namespace(
+        eval_runners=eval_runners,
+        last_episodes=last_episodes,
+        sort="count",
+        level_filter=None,
+    )
+    with contextlib.redirect_stdout(buf):
+        log_stats(fake_args)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(buf.getvalue())
+    os.replace(tmp, path)
+
 
 def list_devilution_processes(binary_path, mshared_filename):
     result = procutils.find_processes_with_mapped_file(binary_path, mshared_filename)
@@ -2401,6 +2424,23 @@ def train_ai(args, gameconfig):
             else:
                 spr.edit(head=args.model, custom_dict=last,
                          custom_update=True)
+
+            txt_logger.info(f"Collecting env-stats (last {args.stats_episodes}/{args.eval_stats_episodes} training/eval episodes)")
+            _write_env_stats(os.path.join(model_dir, "env-stats.txt"),
+                             eval_runners=False,
+                             last_episodes=args.stats_episodes)
+            _write_env_stats(os.path.join(model_dir, "eval-env-stats.txt"),
+                             eval_runners=True,
+                             last_episodes=args.eval_stats_episodes)
+            if num_frames >= args.frames_int:
+                txt_logger.info(f"Collecting env-stats (full training and eval periods)")
+                _write_env_stats(os.path.join(model_dir, "env-stats-all.txt"),
+                                 eval_runners=False,
+                                 last_episodes=0)
+                _write_env_stats(os.path.join(model_dir, "eval-env-stats-all.txt"),
+                                 eval_runners=True,
+                                 last_episodes=0)
+
     return 0
 
 
