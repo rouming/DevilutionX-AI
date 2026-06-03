@@ -175,6 +175,19 @@ def fmt_int_with_suffix(value: int) -> str:
         return f"{value // 1_000}K"
     return str(value)
 
+def resolve_frames(frames_str, current_frames):
+    """Resolve --frames value against current frame count.
+
+    Plain N: absolute target.
+    +N: snap to the next multiple of N above current_frames.
+    Returns the resolved frame count as formatted string.
+    """
+    if frames_str.startswith('+'):
+        n = parse_int_with_suffix(frames_str[1:])
+        return fmt_int_with_suffix((current_frames // n + 1) * n)
+    return frames_str
+
+
 class FloatRangeSpec(tuple):
     """(min_pct, max_pct) int tuple; str() produces a re-parseable 'lo-hi' fraction string."""
     def __str__(self):
@@ -486,7 +499,8 @@ def make_diablo_parser():
         help="Number of environment runners or processes (default: 1)")
     train_ai_parser.add_argument(
         "--frames", type=str, default='10M',
-        help="Number of frames of training; prefix with + to add to current (default: 10M)")
+        help="Number of frames of training; prefix with + to snap to next multiple of N\n"
+             "above current (e.g. +50M from 1178M -> 1200M, re-run stays at 1200M) (default: 10M)")
 
     # Parameters for main RL algorithm
     train_ai_parser.add_argument(
@@ -2114,9 +2128,7 @@ def train_ai(args, gameconfig):
         status = utils.get_status(model_dir)
     except OSError:
         status = {"num_frames": 0, "update": 0}
-    if args.frames.startswith('+'):
-        args.frames = fmt_int_with_suffix(
-            status["num_frames"] + parse_int_with_suffix(args.frames[1:]))
+    args.frames = resolve_frames(args.frames, status["num_frames"])
     if status["num_frames"] >= args.frames_int:
         print(f"Already at {status['num_frames']} frames, "
               f"limit is {args.frames_int}. Increase --frames and retry.")
