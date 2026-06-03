@@ -2003,8 +2003,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
 
     # switch
     psw = sub.add_parser("switch", help="Reattach a head to a different existing run")
-    psw.add_argument("--head", required=True, help="Head name to reattach")
-    psw.add_argument("--to-run", required=True, dest="to_run", help="Target run id")
+    psw.add_argument("head", help="Head name to reattach")
+    psw.add_argument("to_run", help="Target run id")
     psw.add_argument("--persist", action="store_true",
                      help="Archive current active state to borg before switching")
 
@@ -3014,7 +3014,7 @@ class SproutCLITests(unittest.TestCase):
         run_a = heads1['A']
 
         # error: target run does not exist
-        rc, _, err = self.run_sprout("switch --head A --to-run deadbeef")
+        rc, _, err = self.run_sprout("switch A deadbeef")
         self.assertEqual(rc, 2)
         self.assertIn("not found", err)
 
@@ -3025,12 +3025,12 @@ class SproutCLITests(unittest.TestCase):
         run_b = heads2['B']
 
         # error: target run already has a head
-        rc, _, err = self.run_sprout(f"switch --head A --to-run {run_b}")
+        rc, _, err = self.run_sprout(f"switch A {run_b}")
         self.assertEqual(rc, 2)
         self.assertIn("already has head", err)
 
         # basic switch to a persistent run: head A now points to a NEW run, child of run_persisted
-        rc, out, err = self.run_sprout(f"switch --head A --to-run {run_persisted}")
+        rc, out, err = self.run_sprout(f"switch A {run_persisted}")
         self.assertEqual(rc, 0, msg=err)
 
         runs4, heads4, _ = self.sprout.get_tree()
@@ -3051,7 +3051,7 @@ class SproutCLITests(unittest.TestCase):
             f.write('persist_me')
 
         # Switch C to run_persisted (persistent) while persisting current run_c
-        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted} --persist")
+        rc, out, err = self.run_sprout(f"switch C {run_persisted} --persist")
         self.assertEqual(rc, 0, msg=err)
         runs6, heads6, _ = self.sprout.get_tree()
         run_c_new = heads6['C']
@@ -3060,7 +3060,7 @@ class SproutCLITests(unittest.TestCase):
         self.assertNotIn(run_c, heads6.values())  # old run_c was archived, no longer active
 
         # switch C back to run_c (persistent): this extracts run_c and creates a NEW run_c_child
-        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_c}")
+        rc, out, err = self.run_sprout(f"switch C {run_c}")
         self.assertEqual(rc, 0, msg=err)
         runs7, heads7, _ = self.sprout.get_tree()
         run_c_newest = heads7['C']
@@ -3077,9 +3077,9 @@ class SproutCLITests(unittest.TestCase):
         num_runs_before = len(runs_before)
 
         # Switch C to run_persisted twice more
-        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        rc, out, err = self.run_sprout(f"switch C {run_persisted}")
         self.assertEqual(rc, 0, msg=err)
-        rc, out, err = self.run_sprout(f"switch --head C --to-run {run_persisted}")
+        rc, out, err = self.run_sprout(f"switch C {run_persisted}")
         self.assertEqual(rc, 0, msg=err)
 
         runs_after, _, _ = self.sprout.get_tree()

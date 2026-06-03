@@ -31,7 +31,7 @@ __sprout_complete() {
 
     local -a subcmds=(create clone persist remove edit rewind switch rename tree log show fetch)
     local -a value_flags=(
-        --working --head --from-run --from-head --to-run --parent-run --parent-head
+        --working --head --from-run --from-head --parent-run --parent-head
         --run --group --params --description --alias
     )
 
@@ -43,7 +43,7 @@ __sprout_complete() {
         --head|--from-head|--parent-head)
             COMPREPLY=( $(compgen -W "$(__sprout_meta "$meta_file" heads)" -- "$cur") )
             return ;;
-        --run|--from-run|--parent-run|--to-run)
+        --run|--from-run|--parent-run)
             COMPREPLY=( $(compgen -W "$(__sprout_meta "$meta_file" runs)" -- "$cur") )
             return ;;
         --group)
@@ -108,7 +108,7 @@ __sprout_complete() {
             remove)  flags+=" --group --run --head --whole-branch" ;;
             edit)    flags+=" --run --head --params --description --alias" ;;
             rewind)  flags+=" --persist" ;;
-            switch)  flags+=" --head --to-run --persist" ;;
+            switch)  flags+=" --persist" ;;
             tree)    flags+=" --group --verbose" ;;
             log)     flags+=" --run --head" ;;
             show)    flags+=" --run --head --all" ;;
@@ -126,6 +126,12 @@ __sprout_complete() {
         persist|rewind)
             [[ $pos_count -eq 0 ]] && \
                 COMPREPLY=( $(compgen -W "$(__sprout_meta "$meta_file" heads)" -- "$cur") )
+            ;;
+        switch)
+            [[ $pos_count -eq 0 ]] && \
+                COMPREPLY=( $(compgen -W "$(__sprout_meta "$meta_file" heads)" -- "$cur") )
+            [[ $pos_count -eq 1 ]] && \
+                COMPREPLY=( $(compgen -W "$(__sprout_meta "$meta_file" runs)" -- "$cur") )
             ;;
         rename)
             [[ $pos_count -eq 0 ]] && \
