@@ -75,7 +75,7 @@ class PPOAlgo(BaseAlgo):
                 # states.  Mmemory state is detached from the
                 # backpropagation (see the last few lines memory
                 # related in the recurrence loop)
-                if self.acmodel.recurrent:
+                if self.recurrent:
                     # memory shape: (seqs_per_mb, hidden_size)
                     memory = exps.memory[inds]
 
@@ -85,7 +85,7 @@ class PPOAlgo(BaseAlgo):
 
                     # Compute loss
 
-                    if self.acmodel.recurrent:
+                    if self.recurrent:
                         # We detach memory if and only if the option
                         # changed, to prevent interference between
                         # temporally extended skills.
@@ -156,7 +156,7 @@ class PPOAlgo(BaseAlgo):
                     #
                     # This is executed for ALL steps except the last
                     # step in the recurrence window
-                    if self.acmodel.recurrent and i < self.recurrence - 1:
+                    if self.recurrent and i < self.recurrence - 1:
                         exps.memory[inds + i + 1] = memory.detach()
 
                 # Update batch values

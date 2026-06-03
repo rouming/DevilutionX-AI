@@ -54,7 +54,7 @@ class A2CAlgo(BaseAlgo):
 
         # Initialize memory
 
-        if self.acmodel.recurrent:
+        if self.recurrent:
             memory = exps.memory[inds]
 
         for i in range(self.recurrence):
@@ -64,7 +64,7 @@ class A2CAlgo(BaseAlgo):
 
             # Compute loss
 
-            if self.acmodel.recurrent:
+            if self.recurrent:
                 # We detach memory if and only if the option
                 # changed, to prevent interference between
                 # temporally extended skills.

@@ -489,6 +489,9 @@ def make_diablo_parser():
         "--no-drop-best", action="store_true", dest="no_drop_best",
         help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
     train_ai_parser.add_argument(
+        "--gpus", type=int, default=1,
+        help="Number of GPUs to use for DDP training (default: 1, no DDP)")
+    train_ai_parser.add_argument(
         "--log-interval", type=int, default=1,
         help="Number of updates between two logs; 0 means no logs (default: 1)")
     train_ai_parser.add_argument(
@@ -736,6 +739,18 @@ def make_diablo_parser():
     )
 
     #
+    # model-drop-optimizer
+    #
+    model_drop_optimizer_parser = subparsers.add_parser(
+        "model-drop-optimizer",
+        help="Drop the optimizer state from a model's status file. Useful when\n"
+             "switching training context (e.g. single-GPU to DDP) where Adam's\n"
+             "accumulated moments are stale and cause gradient instability.",
+        formatter_class=IndentedHelpFormatter)
+    model_drop_optimizer_parser.add_argument(
+        "--model", required=True,
+        help="Name of the model (REQUIRED)")
+
     # model-drop-best
     #
     model_drop_best_parser = subparsers.add_parser(
@@ -1224,11 +1239,79 @@ def _write_env_stats(path, eval_runners, last_episodes):
     os.replace(tmp, path)
 
 
+def _train_ai_ddp_worker(rank, world_size, args, gameconfig, model_dir, run_id, status):
+    import torch
+    import torch.distributed as dist
+    torch.cuda.set_device(rank)
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", "29500")
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    try:
+        _train_ai_loop(args, gameconfig, model_dir, run_id, status,
+                       rank=rank, world_size=world_size)
+    finally:
+        dist.destroy_process_group()
+
+
 def list_devilution_processes(binary_path, mshared_filename):
     result = procutils.find_processes_with_mapped_file(binary_path, mshared_filename)
     if result:
         for i, proc in enumerate(result):
             print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
+
+def load_optimizer_state(optimizer, status, device, current_ebs, logger=None):
+    import torch
+    """Load optimizer state from status, moving tensors to device.
+
+    Drops the state if effective_batch_size changed since it was saved -
+    stale Adam moments cause gradient instability when the gradient scale shifts.
+    """
+    if "optimizer_state" not in status:
+        return
+    saved_ebs = status.get("effective_batch_size")
+    if saved_ebs is not None and saved_ebs != current_ebs:
+        if logger:
+            logger.info(
+                f"Effective batch size changed ({saved_ebs} -> {current_ebs}): "
+                f"dropping optimizer state to avoid stale Adam moments")
+        return
+    optimizer.load_state_dict(status["optimizer_state"])
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.to(device)
+    if logger:
+        logger.info("Optimizer loaded from the state")
+
+
+def model_drop_optimizer(args):
+    """Drop the optimizer state from a model's status file.
+
+    Loads status.pt, removes 'optimizer_state', saves it back. The model
+    weights and all other fields are preserved. On the next training run
+    the optimizer starts fresh, letting Adam's moments adapt to the current
+    gradient distribution without instability from a stale state.
+    """
+    model_dir = utils.get_run_dir(args.model)
+    if not os.path.isdir(model_dir):
+        print(f"Error: model directory not found: {model_dir}")
+        return 1
+
+    status_path = utils.get_status_path(model_dir, best=False)
+    if not os.path.exists(status_path):
+        print(f"No status.pt at {status_path}")
+        return 1
+
+    status = utils.get_status(model_dir)
+    if "optimizer_state" not in status:
+        print("No optimizer_state in status.pt (nothing to remove)")
+        return 0
+
+    del status["optimizer_state"]
+    utils.save_status(status, model_dir)
+    print(f"Removed optimizer_state from {status_path}")
+    return 0
+
 
 def model_drop_best(args):
     """Drop the 'best' marker for a model:
@@ -2112,13 +2195,6 @@ def _scale_bar(value, good_hi, good_lo=0.0, width=4):
 
 
 def train_ai(args, gameconfig):
-    from rl import torch_ac
-    from rl.evaluate import batch_evaluate
-    from rl.flat_model import FlatACModel
-    from rl.hrl_model import HRLACModel
-    from rl.torch_ac.utils import ParallelEnvPool
-    from rl.utils import device
-    import tensorboardX
     import torch
 
     # Load training status; fail fast if already at the frame limit so we
@@ -2137,25 +2213,55 @@ def train_ai(args, gameconfig):
     # Prepare model dir
     spr, model_dir, run_id = prepare_directory_for_run(args, args.model)
 
-    # Load loggers and Tensorboard writer
-    txt_logger = utils.get_txt_logger(model_dir)
-    csv_file, csv_logger = utils.get_csv_logger(model_dir)
-    tb_writer = tensorboardX.SummaryWriter(model_dir)
+    n_gpus = min(args.gpus, torch.cuda.device_count() if torch.cuda.is_available() else 0)
+    if n_gpus > 1:
+        import torch.multiprocessing as mp
+        mp.spawn(_train_ai_ddp_worker,
+                 args=(n_gpus, args, gameconfig, model_dir, run_id, status),
+                 nprocs=n_gpus, join=True)
+        return 0
+    return _train_ai_loop(args, gameconfig, model_dir, run_id, status)
 
-    # Log command and all script arguments
-    txt_logger.info("{}\n".format(" ".join(sys.argv)))
-    txt_logger.info("{}\n".format(args))
-    txt_logger.info(f"Run: {run_id}\n")
 
-    # Set device
-    txt_logger.info(f"Device: {device}\n")
+def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
+                   rank=None, world_size=1):
+    delayed_import(gameconfig['diablo-bin-path'])
+
+    from rl import torch_ac
+    from rl.evaluate import batch_evaluate
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
+    from rl.torch_ac.utils import ParallelEnvPool
+    from rl.utils import device
+    import tensorboardX
+    import torch
+
+    ddp = rank is not None
+    is_main = not ddp or rank == 0
+    local_device = torch.device(f'cuda:{rank}') if ddp else device
+
+    # Recreate spr in each spawned process - file descriptors from the parent
+    # process are not valid after mp.spawn (uses 'spawn', not 'fork').
+    spr = sprout.Sprout(utils.get_models_dir()) if is_main else None
+
+    # Load loggers and Tensorboard writer (main rank only)
+    if is_main:
+        txt_logger = utils.get_txt_logger(model_dir)
+        csv_file, csv_logger = utils.get_csv_logger(model_dir)
+        tb_writer = tensorboardX.SummaryWriter(model_dir)
+        txt_logger.info("{}\n".format(" ".join(sys.argv)))
+        txt_logger.info("{}\n".format(args))
+        txt_logger.info(f"Run: {run_id}\n")
+        txt_logger.info(f"Device: {local_device}" +
+                        (f" (DDP world_size={world_size})\n" if ddp else "\n"))
 
     # Load environments
+    runner_offset = rank * args.env_runners if ddp else 0
     envs = []
     ts = 0
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
-        env_config['index'] = i
+        env_config['index'] = runner_offset + i
 
         # Some old environments have specific configurations that need
         # to be adjusted before starting a game instance
@@ -2175,47 +2281,54 @@ def train_ai(args, gameconfig):
 
     eval_envs = []
     ts = 0
-    eval_gameconfig = copy.deepcopy(gameconfig)
-    eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
-    eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
-    eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
-    eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
-    eval_gameconfig['hero-mana-max-pct'] = args.eval_hero_mana_at_start[1]
-    eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
-    eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
-    for i in range(args.eval_env_runners):
-        env_config = copy.deepcopy(eval_gameconfig)
-        env_config['index'] = args.env_runners + i
-        env_config['eval'] = True
-        EnvClass = utils.get_env_class(args.env)
-        EnvClass.tune_config(env_config)
-        game = diablo_state.DiabloGame.run_or_attach(env_config)
-        eval_envs.append(utils.make_env(args.env, env_config, game))
+    # Eval runners only on main rank; use offset beyond all training runners
+    eval_penv_pool = None
+    if is_main:
+        eval_envs = []
+        eval_gameconfig = copy.deepcopy(gameconfig)
+        eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
+        eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
+        eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
+        eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
+        eval_gameconfig['hero-mana-max-pct'] = args.eval_hero_mana_at_start[1]
+        eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
+        eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
+        eval_offset = world_size * args.env_runners
+        for i in range(args.eval_env_runners):
+            env_config = copy.deepcopy(eval_gameconfig)
+            env_config['index'] = eval_offset + i
+            env_config['eval'] = True
+            EnvClass = utils.get_env_class(args.env)
+            EnvClass.tune_config(env_config)
+            game = diablo_state.DiabloGame.run_or_attach(env_config)
+            eval_envs.append(utils.make_env(args.env, env_config, game))
 
-        if time.time() - ts >= 3.0 or i == args.eval_env_runners - 1:
-            ts = time.time()
-            print(f"{i+1}/{args.eval_env_runners} eval environment instances are created")
-    eval_penv_pool = ParallelEnvPool(eval_envs)
+            if time.time() - ts >= 3.0 or i == args.eval_env_runners - 1:
+                ts = time.time()
+                print(f"{i+1}/{args.eval_env_runners} eval environment instances are created")
+        eval_penv_pool = ParallelEnvPool(eval_envs)
 
-    txt_logger.info("Environments loaded\n")
+    if is_main:
+        txt_logger.info("Environments loaded\n")
 
     # Load best training status if exists
     best_success_rate = 0.0
-    try:
-        best_status = utils.get_status(model_dir, best=True)
-        best_success_rate = best_status.get("success_rate", 0.0)
-        # Old statuses can contain an array
-        best_success_rate = np.mean(best_success_rate)
-    except OSError:
-        pass
-
-    txt_logger.info("Training status loaded\n")
+    if is_main:
+        try:
+            best_status = utils.get_status(model_dir, best=True)
+            best_success_rate = best_status.get("success_rate", 0.0)
+            # Old statuses can contain an array
+            best_success_rate = np.mean(best_success_rate)
+        except OSError:
+            pass
+        txt_logger.info("Training status loaded\n")
 
     # Load observations preprocessor
     obs_space, preprocess_obss = utils.get_obss_preprocessor(envs[0].observation_space)
     if "vocab" in status:
         preprocess_obss.vocab.load_vocab(status["vocab"])
-    txt_logger.info("Observations preprocessor loaded")
+    if is_main:
+        txt_logger.info("Observations preprocessor loaded")
 
     num_hierarchy_levels = envs[0].unwrapped.num_hierarchy_levels
 
@@ -2230,18 +2343,29 @@ def train_ai(args, gameconfig):
                              use_memory=True, use_text=False)
 
     if "model_state" in status:
-        acmodel.load_from_status(status, txt_logger)
-    acmodel.to(device)
-    txt_logger.info("Model loaded\n")
-    txt_logger.info("{}\n".format(acmodel))
+        acmodel.load_from_status(status, txt_logger if is_main else None)
+    acmodel.to(local_device)
+    acmodel_raw = acmodel  # keep reference for save/load
+    if ddp:
+        # CuDNN's BatchNorm backward modifies its workspace in-place, which
+        # conflicts with DDP's autograd hooks and causes version mismatch errors.
+        # SyncBatchNorm uses a different backward path that avoids this, and also
+        # synchronizes batch statistics across ranks for better training quality.
+        acmodel_raw = torch.nn.SyncBatchNorm.convert_sync_batchnorm(acmodel_raw)
+        from torch.nn.parallel import DistributedDataParallel as DDP_cls
+        acmodel = DDP_cls(acmodel_raw, device_ids=[rank])
+    if is_main:
+        txt_logger.info("Model loaded\n")
+        txt_logger.info("{}\n".format(acmodel_raw))
 
     # Load algo
-    seeds = range(args.seed_base, args.seed_base + len(penv_pool.envs))
+    seeds = range(args.seed_base + runner_offset,
+                  args.seed_base + runner_offset + len(penv_pool.envs))
     reshape_reward = None
 
     if args.algo == "a2c":
         algo = torch_ac.A2CAlgo(penv_pool, args.seed, seeds, acmodel,
-                                device, args.frames_per_env_runner,
+                                local_device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -2250,7 +2374,7 @@ def train_ai(args, gameconfig):
                                 preprocess_obss, reshape_reward)
     elif args.algo == "ppo":
         algo = torch_ac.PPOAlgo(penv_pool, args.seed, seeds, acmodel,
-                                device, args.frames_per_env_runner,
+                                local_device, args.frames_per_env_runner,
                                 args.discount, args.lr,
                                 args.gae_lambda, args.entropy_coef,
                                 args.value_loss_coef,
@@ -2261,9 +2385,9 @@ def train_ai(args, gameconfig):
     else:
         raise ValueError("Incorrect algorithm name: {}".format(args.algo))
 
-    if "optimizer_state" in status:
-        algo.optimizer.load_state_dict(status["optimizer_state"])
-        txt_logger.info("Optimizer loaded from the state")
+    load_optimizer_state(algo.optimizer, status, local_device,
+                         current_ebs=args.batch_size * world_size,
+                         logger=txt_logger if is_main else None)
 
     # Create exponential decay LR scheduler, so every N steps LR
     # reduced by gamma
@@ -2276,16 +2400,23 @@ def train_ai(args, gameconfig):
     num_frames = status["num_frames"]
     update = status["update"]
     duration_offset = status.get("duration", 0) or \
-        _sprout_duration(spr, model_dir)
+        (is_main and _sprout_duration(spr, model_dir) or 0)
     start_time = time.time()
     start_time -= min(duration_offset, start_time)
 
-    txt_logger.info(f"Start training from {_fmt_frames(num_frames)} frames | run {run_id}\n")
+    if is_main:
+        txt_logger.info(f"Start training from {_fmt_frames(num_frames)} frames | run {run_id}\n")
 
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
+        if ddp:
+            # SyncBatchNorm AllReduces during rollout are expensive; eval mode
+            # uses stored running stats instead, eliminating per-step syncs.
+            acmodel_raw.eval()
         exps, logs1 = algo.collect_experiences()
+        if ddp:
+            acmodel_raw.train()
         logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
         logs = {**logs1, **logs2}
         update_end_time = time.time()
@@ -2293,7 +2424,8 @@ def train_ai(args, gameconfig):
         if not args.dry_run:
             scheduler.step()
 
-        num_frames += logs["num_frames"]
+        total_frames = logs["num_frames"] * world_size
+        num_frames += total_frames
         update += 1
 
         success_per_episode = utils.synthesize(
@@ -2301,10 +2433,10 @@ def train_ai(args, gameconfig):
         success_rate = success_per_episode['mean']
         duration = int(time.time() - start_time)
 
-        # Print logs
-        if args.log_interval > 0 and (update % args.log_interval == 0 or
-                                      num_frames >= args.frames_int):
-            fps = logs["num_frames"] / (update_end_time - update_start_time)
+        # Print logs (main rank only)
+        if is_main and args.log_interval > 0 and (update % args.log_interval == 0 or
+                                                   num_frames >= args.frames_int):
+            fps = total_frames / (update_end_time - update_start_time)
             returns_arr = np.array(logs["return_per_episode"])           # (N, L)
             rreturns_arr = np.array(logs["reshaped_return_per_episode"]) # (N, L)
             L = returns_arr.shape[1]
@@ -2376,21 +2508,21 @@ def train_ai(args, gameconfig):
             for field, value in zip(header, data):
                 tb_writer.add_scalar(field, value, num_frames)
 
-        # Save status
-        if args.save_interval > 0 and (update % args.save_interval == 0 or
-                                       num_frames >= args.frames_int):
+        # Save status (main rank only)
+        if is_main and args.save_interval > 0 and (update % args.save_interval == 0 or
+                                                    num_frames >= args.frames_int):
             num_eval_envs = min(len(eval_penv_pool.envs), args.eval_episodes)
             txt_logger.info("Evaluating the model's {} episodes with {} environments".format(
                 args.eval_episodes, num_eval_envs))
 
-            acmodel.eval()
+            acmodel_raw.eval()
             eval_start_time = time.time()
-            vlogs = batch_evaluate(acmodel, preprocess_obss, eval_penv_pool,
+            vlogs = batch_evaluate(acmodel_raw, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
             elapsed_time = time.time() - eval_start_time
-            acmodel.train()
+            acmodel_raw.train()
 
             returns = vlogs['return_per_episode']
             success_rate = np.mean([1 if s else 0 for s in vlogs["success_per_episode"]])
@@ -2406,8 +2538,9 @@ def train_ai(args, gameconfig):
                       "update": update,
                       "duration": duration,
                       "success_rate": success_rate,
+                      "effective_batch_size": args.batch_size * world_size,
                       "optimizer_state": algo.optimizer.state_dict()}
-            acmodel.save_to_status(status)
+            acmodel_raw.save_to_status(status)
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
@@ -2453,6 +2586,13 @@ def train_ai(args, gameconfig):
                                  eval_runners=True,
                                  last_episodes=0)
 
+    if ddp:
+        import torch.distributed as dist
+        # All non-main ranks wait here until rank 0 finishes writing all-episodes
+        # stats so their game instances (temp dirs) stay alive during collection.
+        dist.barrier()
+    if is_main:
+        tb_writer.close()
     return 0
 
 
@@ -2829,6 +2969,8 @@ def main():
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
         return 0
+    if args.command == 'model-drop-optimizer':
+        return model_drop_optimizer(args)
     if args.command == 'model-drop-best':
         return model_drop_best(args)
     if args.command == 'env-stats':
