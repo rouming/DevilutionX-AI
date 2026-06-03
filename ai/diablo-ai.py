@@ -2429,7 +2429,7 @@ def train_ai(args, gameconfig):
                 src_path = utils.get_status_path(model_dir, best=False)
                 dst_path = utils.get_status_path(model_dir, best=True)
                 shutil.copyfile(src_path, dst_path)
-                txt_logger.info("Success rate {: .2f}; best model is saved".format(success_rate))
+                txt_logger.info("Success rate {: .3f}; best model is saved".format(success_rate))
 
                 spr.edit(head=args.model, custom_dict=last | best,
                          custom_update=True)
