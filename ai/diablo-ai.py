@@ -2287,8 +2287,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         # synchronizes batch statistics across ranks for better training quality.
         acmodel_raw = torch.nn.SyncBatchNorm.convert_sync_batchnorm(acmodel_raw)
         from torch.nn.parallel import DistributedDataParallel as DDP_cls
-        acmodel = DDP_cls(acmodel_raw, device_ids=[rank],
-                          gradient_as_bucket_view=True)
+        acmodel = DDP_cls(acmodel_raw, device_ids=[rank])
     if is_main:
         txt_logger.info("Model loaded\n")
         txt_logger.info("{}\n".format(acmodel_raw))
@@ -2350,7 +2349,13 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
+        if ddp:
+            # SyncBatchNorm AllReduces during rollout are expensive; eval mode
+            # uses stored running stats instead, eliminating per-step syncs.
+            acmodel_raw.eval()
         exps, logs1 = algo.collect_experiences()
+        if ddp:
+            acmodel_raw.train()
         logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
         logs = {**logs1, **logs2}
         update_end_time = time.time()
