@@ -2523,6 +2523,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                                  eval_runners=True,
                                  last_episodes=0)
 
+    if is_main:
+        tb_writer.close()
     return 0
 
 
