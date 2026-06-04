@@ -2277,6 +2277,7 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
     acmodel.to(local_device)
     acmodel_raw = acmodel  # keep reference for save/load
     if ddp:
+        acmodel_raw = torch.nn.SyncBatchNorm.convert_sync_batchnorm(acmodel_raw)
         from torch.nn.parallel import DistributedDataParallel as DDP_cls
         acmodel = DDP_cls(acmodel_raw, device_ids=[rank])
     if is_main:

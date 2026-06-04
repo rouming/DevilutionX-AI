@@ -175,8 +175,7 @@ class PPOAlgo(BaseAlgo):
 
                 if apply_update:
                     self.optimizer.zero_grad()
-                    with torch.autograd.set_detect_anomaly(True):
-                        batch_loss_tensor.sum().backward()
+                    batch_loss_tensor.sum().backward()
                     grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(),
                                                                self.max_grad_norm).item()
                     self.optimizer.step()
