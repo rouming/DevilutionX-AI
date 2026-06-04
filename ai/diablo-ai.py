@@ -739,6 +739,18 @@ def make_diablo_parser():
     )
 
     #
+    # model-drop-optimizer
+    #
+    model_drop_optimizer_parser = subparsers.add_parser(
+        "model-drop-optimizer",
+        help="Drop the optimizer state from a model's status file. Useful when\n"
+             "switching training context (e.g. single-GPU to DDP) where Adam's\n"
+             "accumulated moments are stale and cause gradient instability.",
+        formatter_class=IndentedHelpFormatter)
+    model_drop_optimizer_parser.add_argument(
+        "--model", required=True,
+        help="Name of the model (REQUIRED)")
+
     # model-drop-best
     #
     model_drop_best_parser = subparsers.add_parser(
@@ -1246,6 +1258,60 @@ def list_devilution_processes(binary_path, mshared_filename):
     if result:
         for i, proc in enumerate(result):
             print("%2d\t%s\t%s" % (i, proc['pid'], proc['mshared_path']))
+
+def load_optimizer_state(optimizer, status, device, current_ebs, logger=None):
+    import torch
+    """Load optimizer state from status, moving tensors to device.
+
+    Drops the state if effective_batch_size changed since it was saved -
+    stale Adam moments cause gradient instability when the gradient scale shifts.
+    """
+    if "optimizer_state" not in status:
+        return
+    saved_ebs = status.get("effective_batch_size")
+    if saved_ebs is not None and saved_ebs != current_ebs:
+        if logger:
+            logger.info(
+                f"Effective batch size changed ({saved_ebs} -> {current_ebs}): "
+                f"dropping optimizer state to avoid stale Adam moments")
+        return
+    optimizer.load_state_dict(status["optimizer_state"])
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.to(device)
+    if logger:
+        logger.info("Optimizer loaded from the state")
+
+
+def model_drop_optimizer(args):
+    """Drop the optimizer state from a model's status file.
+
+    Loads status.pt, removes 'optimizer_state', saves it back. The model
+    weights and all other fields are preserved. On the next training run
+    the optimizer starts fresh, letting Adam's moments adapt to the current
+    gradient distribution without instability from a stale state.
+    """
+    model_dir = utils.get_run_dir(args.model)
+    if not os.path.isdir(model_dir):
+        print(f"Error: model directory not found: {model_dir}")
+        return 1
+
+    status_path = utils.get_status_path(model_dir, best=False)
+    if not os.path.exists(status_path):
+        print(f"No status.pt at {status_path}")
+        return 1
+
+    status = utils.get_status(model_dir)
+    if "optimizer_state" not in status:
+        print("No optimizer_state in status.pt (nothing to remove)")
+        return 0
+
+    del status["optimizer_state"]
+    utils.save_status(status, model_dir)
+    print(f"Removed optimizer_state from {status_path}")
+    return 0
+
 
 def model_drop_best(args):
     """Drop the 'best' marker for a model:
@@ -2319,14 +2385,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     else:
         raise ValueError("Incorrect algorithm name: {}".format(args.algo))
 
-    if "optimizer_state" in status:
-        algo.optimizer.load_state_dict(status["optimizer_state"])
-        for state in algo.optimizer.state.values():
-            for k, v in state.items():
-                if isinstance(v, torch.Tensor):
-                    state[k] = v.to(local_device)
-        if is_main:
-            txt_logger.info("Optimizer loaded from the state")
+    load_optimizer_state(algo.optimizer, status, local_device,
+                         current_ebs=args.batch_size * world_size,
+                         logger=txt_logger if is_main else None)
 
     # Create exponential decay LR scheduler, so every N steps LR
     # reduced by gamma
@@ -2476,6 +2537,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                       "update": update,
                       "duration": duration,
                       "success_rate": success_rate,
+                      "effective_batch_size": args.batch_size * world_size,
                       "optimizer_state": algo.optimizer.state_dict()}
             acmodel_raw.save_to_status(status)
             if hasattr(preprocess_obss, "vocab"):
@@ -2901,6 +2963,8 @@ def main():
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
         return 0
+    if args.command == 'model-drop-optimizer':
+        return model_drop_optimizer(args)
     if args.command == 'model-drop-best':
         return model_drop_best(args)
     if args.command == 'env-stats':
