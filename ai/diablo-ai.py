@@ -1227,7 +1227,7 @@ def _write_env_stats(path, eval_runners, last_episodes):
     os.replace(tmp, path)
 
 
-def _train_ai_ddp_worker(rank, world_size, args, gameconfig, spr, model_dir, run_id, status):
+def _train_ai_ddp_worker(rank, world_size, args, gameconfig, model_dir, run_id, status):
     import torch
     import torch.distributed as dist
     torch.cuda.set_device(rank)
@@ -1235,7 +1235,7 @@ def _train_ai_ddp_worker(rank, world_size, args, gameconfig, spr, model_dir, run
     os.environ.setdefault("MASTER_PORT", "29500")
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     try:
-        _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
+        _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                        rank=rank, world_size=world_size)
     finally:
         dist.destroy_process_group()
@@ -2151,13 +2151,13 @@ def train_ai(args, gameconfig):
     if n_gpus > 1:
         import torch.multiprocessing as mp
         mp.spawn(_train_ai_ddp_worker,
-                 args=(n_gpus, args, gameconfig, spr, model_dir, run_id, status),
+                 args=(n_gpus, args, gameconfig, model_dir, run_id, status),
                  nprocs=n_gpus, join=True)
         return 0
-    return _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status)
+    return _train_ai_loop(args, gameconfig, model_dir, run_id, status)
 
 
-def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
+def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                    rank=None, world_size=1):
     delayed_import(gameconfig['diablo-bin-path'])
 
@@ -2173,6 +2173,10 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
     ddp = rank is not None
     is_main = not ddp or rank == 0
     local_device = torch.device(f'cuda:{rank}') if ddp else device
+
+    # Recreate spr in each spawned process - file descriptors from the parent
+    # process are not valid after mp.spawn (uses 'spawn', not 'fork').
+    spr = sprout.Sprout(utils.get_models_dir()) if is_main else None
 
     # Load loggers and Tensorboard writer (main rank only)
     if is_main:
@@ -2277,9 +2281,14 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
     acmodel.to(local_device)
     acmodel_raw = acmodel  # keep reference for save/load
     if ddp:
+        # CuDNN's BatchNorm backward modifies its workspace in-place, which
+        # conflicts with DDP's autograd hooks and causes version mismatch errors.
+        # SyncBatchNorm uses a different backward path that avoids this, and also
+        # synchronizes batch statistics across ranks for better training quality.
         acmodel_raw = torch.nn.SyncBatchNorm.convert_sync_batchnorm(acmodel_raw)
         from torch.nn.parallel import DistributedDataParallel as DDP_cls
-        acmodel = DDP_cls(acmodel_raw, device_ids=[rank])
+        acmodel = DDP_cls(acmodel_raw, device_ids=[rank],
+                          gradient_as_bucket_view=True)
     if is_main:
         txt_logger.info("Model loaded\n")
         txt_logger.info("{}\n".format(acmodel_raw))
@@ -2313,6 +2322,10 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
 
     if "optimizer_state" in status:
         algo.optimizer.load_state_dict(status["optimizer_state"])
+        for state in algo.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(local_device)
         if is_main:
             txt_logger.info("Optimizer loaded from the state")
 
