@@ -16,6 +16,13 @@ Author: Roman Penyaev, 2025
 from abc import ABC, abstractmethod
 import numpy
 import torch
+from torch.nn.parallel import DistributedDataParallel
+
+
+def is_ddp(model):
+    # DDP wraps the model and hides custom attributes (num_hierarchy_levels,
+    # recurrent, memory_size) behind .module; use this to unwrap safely.
+    return isinstance(model, DistributedDataParallel)
 
 from rl.torch_ac.format import default_preprocess_obss
 from rl.torch_ac.utils import DictList, ParallelEnv
@@ -73,7 +80,10 @@ class BaseAlgo(ABC):
         self.global_seed = global_seed
         self.acmodel = acmodel
         self.device = device
-        self.num_hierarchy_levels = acmodel.num_hierarchy_levels
+        _m = acmodel.module if is_ddp(acmodel) else acmodel
+        self.num_hierarchy_levels = _m.num_hierarchy_levels
+        self.recurrent = _m.recurrent
+        self.memory_size = _m.memory_size if _m.recurrent else 0
         self.num_frames_per_proc = num_frames_per_proc
         self.discount = discount
         self.lr = lr
@@ -87,7 +97,7 @@ class BaseAlgo(ABC):
 
         # Control parameters
 
-        assert self.acmodel.recurrent or self.recurrence == 1
+        assert self.recurrent or self.recurrence == 1
         assert self.num_frames_per_proc % self.recurrence == 0
 
         # Configure acmodel
@@ -112,9 +122,9 @@ class BaseAlgo(ABC):
         self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
                                          dtype=int, device=self.device)
         self.obss = [None] * (shape[0])
-        if self.acmodel.recurrent:
-            self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
-            self.memories = torch.zeros(*shape[:2], self.acmodel.memory_size, device=self.device)
+        if self.recurrent:
+            self.memory = torch.zeros(shape[1], self.memory_size, device=self.device)
+            self.memories = torch.zeros(*shape[:2], self.memory_size, device=self.device)
         self.mask = torch.ones(shape[1], device=self.device)
         self.masks = torch.zeros(*shape[:2], device=self.device)
         self.opt_mask = torch.ones(shape[1], device=self.device)
@@ -168,7 +178,7 @@ class BaseAlgo(ABC):
                                                       *env_counters,
                                                       dims=self.num_hierarchy_levels)
                 preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
-                if self.acmodel.recurrent:
+                if self.recurrent:
                     dist, value, memory = self.acmodel(
                         preprocessed_obs, self.memory * self.mask.unsqueeze(1),
                         noise=noise)
@@ -196,7 +206,7 @@ class BaseAlgo(ABC):
 
             self.obss[i] = self.obs
             self.obs = obs
-            if self.acmodel.recurrent:
+            if self.recurrent:
                 self.memories[i] = self.memory
                 self.memory = memory
             self.env_counters = torch.tensor([inf["env-counters"] for inf in info],
@@ -247,7 +257,7 @@ class BaseAlgo(ABC):
                                                   *env_counters,
                                                   dims=self.num_hierarchy_levels)
             preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
-            if self.acmodel.recurrent:
+            if self.recurrent:
                 _, next_value, _ = self.acmodel(
                     preprocessed_obs, self.memory * self.mask.unsqueeze(1),
                     noise=noise)
@@ -275,7 +285,7 @@ class BaseAlgo(ABC):
         exps.obs = [self.obss[i][j]
                     for j in range(self.num_procs)
                     for i in range(self.num_frames_per_proc)]
-        if self.acmodel.recurrent:
+        if self.recurrent:
             # T x P x D -> P x T x D -> (P * T) x D
             exps.memory = self.memories.transpose(0, 1).reshape(-1, *self.memories.shape[2:])
             # T x P -> P x T -> (P * T) x 1

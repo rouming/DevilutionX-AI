@@ -1228,7 +1228,9 @@ def _write_env_stats(path, eval_runners, last_episodes):
 
 
 def _train_ai_ddp_worker(rank, world_size, args, gameconfig, spr, model_dir, run_id, status):
+    import torch
     import torch.distributed as dist
+    torch.cuda.set_device(rank)
     os.environ.setdefault("MASTER_ADDR", "localhost")
     os.environ.setdefault("MASTER_PORT", "29500")
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -2273,10 +2275,10 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
     if "model_state" in status:
         acmodel.load_from_status(status, txt_logger if is_main else None)
     acmodel.to(local_device)
-    acmodel_raw = acmodel  # keep reference for save/load before DDP wrapping
+    acmodel_raw = acmodel  # keep reference for save/load
     if ddp:
         from torch.nn.parallel import DistributedDataParallel as DDP_cls
-        acmodel = DDP_cls(acmodel, device_ids=[rank])
+        acmodel = DDP_cls(acmodel_raw, device_ids=[rank])
     if is_main:
         txt_logger.info("Model loaded\n")
         txt_logger.info("{}\n".format(acmodel_raw))
@@ -2432,14 +2434,14 @@ def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
             txt_logger.info("Evaluating the model's {} episodes with {} environments".format(
                 args.eval_episodes, num_eval_envs))
 
-            acmodel.eval()
+            acmodel_raw.eval()
             eval_start_time = time.time()
-            vlogs = batch_evaluate(acmodel, preprocess_obss, eval_penv_pool,
+            vlogs = batch_evaluate(acmodel_raw, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
             elapsed_time = time.time() - eval_start_time
-            acmodel.train()
+            acmodel_raw.train()
 
             returns = vlogs['return_per_episode']
             success_rate = np.mean([1 if s else 0 for s in vlogs["success_per_episode"]])
