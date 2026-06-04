@@ -2157,6 +2157,8 @@ def train_ai(args, gameconfig):
 
 def _train_ai_loop(args, gameconfig, spr, model_dir, run_id, status,
                    rank=None, world_size=1):
+    delayed_import(gameconfig['diablo-bin-path'])
+
     from rl import torch_ac
     from rl.evaluate import batch_evaluate
     from rl.flat_model import FlatACModel
