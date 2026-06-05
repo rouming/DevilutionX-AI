@@ -269,6 +269,7 @@ def make_diablo_parser():
                      '--no-monsters',
                      '--blind-monsters',
                      '--harmless-barrels',
+                     '--no-butcher',
                      '--seed-base',
                      '--fixed-seed']
     }
@@ -330,6 +331,9 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--harmless-barrels", action="store_true",
         help="Disable explosive barrels, urns, or pods")
+    common_parser.add_argument(
+        "--no-butcher", action="store_true",
+        help="Skip placing The Butcher on level 2")
     common_parser.add_argument(
         "--spell-potency", type=float, default=0.0, metavar="PROB",
         help="Spell potency multiplier [0.0, 1.0]: 0=normal engine rules, 1=spells one-shot any monster (default: 0.0)")
@@ -2987,6 +2991,7 @@ def main():
         "no-monsters": args.no_monsters,
         "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
+        "no_butcher": args.no_butcher,
         "spell-potency": args.spell_potency,
         "hero-hp-min-pct":    args.hero_hp_at_start[0],
         "hero-hp-max-pct":    args.hero_hp_at_start[1],
