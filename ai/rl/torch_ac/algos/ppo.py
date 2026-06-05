@@ -77,9 +77,7 @@ class PPOAlgo(BaseAlgo):
                 # related in the recurrence loop)
                 if self.recurrent:
                     # memory shape: (seqs_per_mb, hidden_size)
-                    # clone() detaches from exps.memory storage so the in-place
-                    # write-back later in the loop doesn't cause DDP version mismatch
-                    memory = exps.memory[inds].clone()
+                    memory = exps.memory[inds]
 
                 for i in range(self.recurrence):
                     # Create a sub-batch of experience

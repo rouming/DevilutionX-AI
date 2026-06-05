@@ -26,31 +26,31 @@ class CNN32(nn.Module):
             # Initial convolution
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (64->128) and halves the grid size (stride=2)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (128->256) and halves the grid size (stride=2)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (256->512) and halves the grid size (stride=2)
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Head Part (untouched)
             nn.AdaptiveAvgPool2d((1, 1)),

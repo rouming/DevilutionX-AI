@@ -45,7 +45,7 @@ class ResidualBlock(nn.Module):
         self.main_path = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(out_channels)
         )
@@ -55,7 +55,7 @@ class ResidualBlock(nn.Module):
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(out_channels)
             )
-        self.relu = nn.ReLU(inplace=False)
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         out = self.main_path(x)
@@ -71,7 +71,7 @@ class CNN2(nn.Module):
             # Feature Extraction Part
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             ResidualBlock(64, 128, stride=2),
             ResidualBlock(128, 256, stride=2),
 
@@ -93,23 +93,23 @@ class CNN3(nn.Module):
             # Initial convolution
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (64->128) and halves the grid size (stride=2)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (128->256) and halves the grid size (stride=2)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Head Part (untouched)
             nn.AdaptiveAvgPool2d((1, 1)),
@@ -235,13 +235,13 @@ class CNN32Expert(nn.Module):
         self.trunk_a = nn.Sequential(
             nn.Conv2d(in_channels, 64, 3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(64, 128, 3, stride=2, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, 3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
         )
 
         # Attention blocks operate at 128ch / 11x11 (N=121)
@@ -253,16 +253,16 @@ class CNN32Expert(nn.Module):
         self.trunk_b = nn.Sequential(
             nn.Conv2d(128, 256, 3, stride=2, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, 3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 512, 3, stride=2, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, 3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(512, output_dim),
@@ -308,31 +308,31 @@ class CNN32(nn.Module):
             # Initial convolution
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (64->128) and halves the grid size (stride=2)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (128->256) and halves the grid size (stride=2)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # This layer doubles the channels (256->512) and halves the grid size (stride=2)
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), # Downsamples
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1), # No downsampling
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Head Part (untouched)
             nn.AdaptiveAvgPool2d((1, 1)),
@@ -350,19 +350,19 @@ class CNN35(nn.Module):
         self.network = nn.Sequential(
             # Initial conv
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 1: downsample (64->128)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 2: downsample (128->256)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 3: downsample (256->512)
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Pool to fixed size and flatten
             nn.AdaptiveAvgPool2d((1, 1)),
@@ -381,31 +381,31 @@ class CNN4(nn.Module):
             # Initial convolution
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 1 (64 -> 128 channels)
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 2 (128 -> 256 channels)
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Block 3 (256 -> 512 channels) - This block is widened
             nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
 
             # Head Part - Now an MLP Head
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(512, 1024), # Intermediate layer
-            nn.ReLU(inplace=False),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.5), # Regularization
             nn.Linear(1024, output_dim) # Final layer
         )
