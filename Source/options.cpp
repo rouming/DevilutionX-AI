@@ -932,6 +932,7 @@ GameplayOptions::GameplayOptions()
     , noAutowalkOnSecondaryAction("Disable auto-walk when pressing the secondary action", OptionEntryFlags::Invisible, "", "", false)
     , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
     , blindMonsters("Blind monsters", OptionEntryFlags::Invisible, "", "", false)
+    , noButcher("No butcher", OptionEntryFlags::Invisible, "", "", false)
     , spellPotency("Spell potency", OptionEntryFlags::Invisible, "", "", 0)
     , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
@@ -998,6 +999,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noAutowalkOnSecondaryAction,
 		&invinciblePlayer,
 		&blindMonsters,
+		&noButcher,
 		&spellPotency,
 		&heroHpMinPct,
 		&heroHpMaxPct,

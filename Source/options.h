@@ -678,6 +678,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean invinciblePlayer;
 	/** @brief Enable blind monsters */
 	OptionEntryBoolean blindMonsters;
+	/** @brief Skip placing The Butcher on level 2 */
+	OptionEntryBoolean noButcher;
 	/** @brief Spell potency percentage for curriculum learning (0=normal, 100=one-shot anything) */
 	OptionEntryInt<int> spellPotency;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */

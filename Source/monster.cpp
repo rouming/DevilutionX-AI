@@ -490,7 +490,7 @@ tl::expected<void, std::string> PlaceUniqueMonsters()
 tl::expected<void, std::string> PlaceQuestMonsters()
 {
 	if (!setlevel) {
-		if (Quests[Q_BUTCHER].IsAvailable()) {
+		if (Quests[Q_BUTCHER].IsAvailable() && !*GetOptions().Gameplay.noButcher) {
 			RETURN_IF_ERROR(PlaceUniqueMonst(UniqueMonsterType::Butcher, 0, 0));
 		}
 
