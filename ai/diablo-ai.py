@@ -2213,7 +2213,7 @@ def train_ai(args, gameconfig):
     # Prepare model dir
     spr, model_dir, run_id = prepare_directory_for_run(args, args.model)
 
-    n_gpus = args.gpus
+    n_gpus = min(args.gpus, torch.cuda.device_count() if torch.cuda.is_available() else 0)
     if n_gpus > 1:
         import torch.multiprocessing as mp
         mp.spawn(_train_ai_ddp_worker,
