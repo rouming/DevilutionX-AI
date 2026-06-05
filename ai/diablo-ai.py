@@ -2424,7 +2424,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         if not args.dry_run:
             scheduler.step()
 
-        num_frames += logs["num_frames"] * world_size
+        total_frames = logs["num_frames"] * world_size
+        num_frames += total_frames
         update += 1
 
         success_per_episode = utils.synthesize(
@@ -2435,7 +2436,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         # Print logs (main rank only)
         if is_main and args.log_interval > 0 and (update % args.log_interval == 0 or
                                                    num_frames >= args.frames_int):
-            fps = logs["num_frames"] / (update_end_time - update_start_time)
+            fps = total_frames / (update_end_time - update_start_time)
             returns_arr = np.array(logs["return_per_episode"])           # (N, L)
             rreturns_arr = np.array(logs["reshaped_return_per_episode"]) # (N, L)
             L = returns_arr.shape[1]
