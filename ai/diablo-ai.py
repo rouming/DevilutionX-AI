@@ -1127,7 +1127,10 @@ def log_stats(args):
     shown = [k for k in order if counts[k] >= MIN_COUNT]
     hidden = [k for k in order if counts[k] < MIN_COUNT]
 
-    ep_suffix = ", %d episodes" % episodes_scanned if episodes_scanned else ""
+    kind = "eval" if args.eval_runners else "train"
+    window = "all" if args.last_episodes == 0 else "last"
+    ep_desc = "%d %s %s episodes" % (episodes_scanned, window, kind) if episodes_scanned else ""
+    ep_suffix = ", %s" % ep_desc if ep_desc else ""
     print("Event frequency (%d total events, %d files%s):" % (total_ev, len(files), ep_suffix))
     print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
     print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
@@ -1181,8 +1184,7 @@ def log_stats(args):
     )
     print()
     total_succ_pct = 100.0 * succ_scanned / episodes_scanned if episodes_scanned else 0.0
-    print("Per-level outcomes (%d total episodes, %.1f%% success):" % (
-        episodes_scanned, total_succ_pct))
+    print("Per-level outcomes (%s, %.1f%% success):" % (ep_desc, total_succ_pct))
     print(hdr)
     print("-" * len(hdr))
     for level in all_levels:
