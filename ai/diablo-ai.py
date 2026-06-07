@@ -2259,6 +2259,13 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         txt_logger = utils.get_txt_logger(model_dir)
         csv_file, csv_logger = utils.get_csv_logger(model_dir)
         tb_writer = tensorboardX.SummaryWriter(model_dir)
+        import signal as _signal
+        _orig = _signal.getsignal(_signal.SIGINT)
+        def _sigint(sig, frame):
+            tb_writer.close()
+            _signal.signal(_signal.SIGINT, _orig)
+            _signal.raise_signal(_signal.SIGINT)
+        _signal.signal(_signal.SIGINT, _sigint)
         txt_logger.info("{}\n".format(" ".join(sys.argv)))
         txt_logger.info("{}\n".format(args))
         txt_logger.info(f"Run: {run_id}\n")

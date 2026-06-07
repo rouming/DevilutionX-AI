@@ -1,9 +1,13 @@
 import multiprocessing
 import selectors
+import signal
 import numpy as np
 
 
 def worker(conn, env):
+    # parent handles Ctrl-C; ignore here
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     while True:
         cmd, data = conn.recv()
         if cmd == "step":
