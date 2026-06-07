@@ -758,7 +758,10 @@ def compute_scalars(d):
                   _pScrlSpells (learned + class ability + staff + scroll).
         [39..45]  spell levels: _pSplLvl[spell_id] / MaxSpellLevel (15). 0
                   means "not learned by the player" (still castable via
-                  scroll / class ability / staff with their own levels)."""
+                  scroll / class ability / staff with their own levels).
+
+    ClearAllLevels-v4 appends one more (index 46):
+        [46]  stuck_frac: (steps_cnt - last_steps_cnt) / STUCK_TIMEOUT"""
     # Normalisation caps. Mirrored from the engine (player.h) where
     # applicable, so 1.0 here corresponds to the engine-bound maximum.
     SPELL_LEVEL_CAP   = 15.0   # devilution::MaxSpellLevel (player.h:39)
