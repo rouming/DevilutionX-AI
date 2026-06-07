@@ -242,7 +242,7 @@ def parse_int_range(s):
 # Params excluded from sprout storage and post-run-defaults display.
 # These are operational flags (attach, cont) or internal bookkeeping (model,
 # demos, no_drop_best) that are not training hyperparameters.
-SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "attach", "help"}
+SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "best_drop", "attach", "help"}
 
 class DiabloParserNamespace(argparse.Namespace):
     @property
@@ -489,9 +489,13 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
-    train_ai_parser.add_argument(
-        "--no-drop-best", action="store_true", dest="no_drop_best",
+    best_grp = train_ai_parser.add_mutually_exclusive_group()
+    best_grp.add_argument(
+        "--no-drop-best", "--no-best-drop", action="store_true", dest="no_drop_best",
         help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
+    best_grp.add_argument(
+        "--drop-best", "--best-drop", action="store_true", dest="best_drop",
+        help="Drop the best-status snapshot even when using --continue")
     train_ai_parser.add_argument(
         "--gpus", type=int, default=1,
         help="Number of GPUs to use for DDP training (default: 1, no DDP)")
@@ -631,7 +635,7 @@ def make_diablo_parser():
         "--save-interval", type=int, default=1,
         help="Interval between demonstrations saving; 0 means no saving (default: 1)")
     demos_il_parser.add_argument(
-        "--no-drop-best", action="store_true", dest="no_drop_best",
+        "--no-drop-best", "--no-best-drop", action="store_true", dest="no_drop_best",
         help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
 
 
@@ -697,7 +701,7 @@ def make_diablo_parser():
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
     train_il_parser.add_argument(
-        "--no-drop-best", action="store_true", dest="no_drop_best",
+        "--no-drop-best", "--no-best-drop", action="store_true", dest="no_drop_best",
         help="Keep the best-status snapshot (by default it is dropped on each run that creates a new snapshot, i.e. without --continue)")
     train_il_parser.add_argument(
         "--log-interval", type=int, default=1,
@@ -2158,7 +2162,7 @@ def prepare_directory_for_run(args, dir_name):
         # training without creating a snapshot
         spr.edit(head=dir_name, params_str=params_str)
 
-    if not args.no_drop_best and not args.cont:
+    if args.best_drop or (not args.no_drop_best and not args.cont):
         model_drop_best(args)
 
     _, run_id = spr.get_run(head=dir_name)
