@@ -188,6 +188,283 @@ def make_episode_seed(base_seed, index, counter):
     initial = fmix32(base_seed + index)
     return fmix32(initial + counter)
 
+def _reversed_lines(path, chunk=65536):
+    """Yield lines of a file in reverse order without loading it fully."""
+    with open(path, 'rb') as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        buf = b''
+        while pos > 0:
+            read_size = min(chunk, pos)
+            pos -= read_size
+            f.seek(pos)
+            data = f.read(read_size) + buf
+            lines = data.split(b'\n')
+            buf = lines[0]
+            for line in reversed(lines[1:]):
+                yield line.decode('utf-8', errors='replace')
+        if buf:
+            yield buf.decode('utf-8', errors='replace')
+
+def env_stats(args):
+    import glob, re, math
+    from collections import defaultdict
+
+    TERMINAL = {'Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout'}
+
+    RE_LEVEL = re.compile(r'dungeon_level=(\d+)')
+    RE_DONE  = re.compile(r'EPISODE DONE=(true|false) steps=(\d+)')
+    RE_EVENT = re.compile(r'^(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)\s*$')
+
+    counts    = {}
+    sums      = {}
+    lvl_out   = defaultdict(lambda: defaultdict(int))
+    lvl_steps = defaultdict(lambda: {'succ': [], 'fail': []})
+
+    pattern = env_log_glob(eval=args.eval_runners)
+    files = sorted(glob.glob(pattern))
+    if not files:
+        print("No files matched: %s" % pattern)
+        return 1
+
+    level_keep = None
+    if args.level_filter:
+        level_keep = set()
+        for part in args.level_filter.split(','):
+            part = part.strip()
+            if '-' in part:
+                lo, hi = part.split('-', 1)
+                level_keep.update(range(int(lo), int(hi) + 1))
+            else:
+                level_keep.add(int(part))
+
+    episodes_scanned = 0
+    succ_scanned = 0
+
+    if args.last_episodes == 0:
+        cur_level = None
+        for path in files:
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.rstrip()
+                        m = RE_LEVEL.search(line)
+                        if m:
+                            cur_level = int(m.group(1))
+                            continue
+                        m = RE_DONE.search(line)
+                        if m:
+                            if cur_level is not None and (level_keep is None or cur_level in level_keep):
+                                episodes_scanned += 1
+                                key = 'succ' if m.group(1) == 'true' else 'fail'
+                                if key == 'succ':
+                                    succ_scanned += 1
+                                lvl_steps[cur_level][key].append(int(m.group(2)))
+                            continue
+                        m = RE_EVENT.match(line)
+                        if not m:
+                            continue
+                        if level_keep is not None and cur_level not in level_keep:
+                            continue
+                        label = m.group(1).strip()
+                        vs    = m.group(2)
+                        val   = sum(float(x) for x in vs.strip('[]').split(',')) \
+                                if vs.startswith('[') else float(vs)
+                        counts[label] = counts.get(label, 0) + 1
+                        sums[label]   = sums.get(label, 0.0) + val
+                        if label in TERMINAL and cur_level is not None:
+                            lvl_out[cur_level][label] += 1
+            except OSError:
+                pass
+    else:
+        quota = (args.last_episodes + len(files) - 1) // len(files)
+        for path in files:
+            ep_events = []
+            ep_done   = None
+            in_ep     = False
+            ep_count  = 0
+            try:
+                for line in _reversed_lines(path):
+                    line = line.rstrip()
+                    m = RE_LEVEL.search(line)
+                    if m:
+                        if in_ep:
+                            level = int(m.group(1))
+                            if level_keep is None or level in level_keep:
+                                episodes_scanned += 1
+                                for label, val in ep_events:
+                                    counts[label] = counts.get(label, 0) + 1
+                                    sums[label]   = sums.get(label, 0.0) + val
+                                    if label in TERMINAL:
+                                        lvl_out[level][label] += 1
+                                if ep_done is not None:
+                                    key = 'succ' if ep_done[0] else 'fail'
+                                    if key == 'succ':
+                                        succ_scanned += 1
+                                    lvl_steps[level][key].append(ep_done[1])
+                            ep_count  += 1
+                            ep_events  = []
+                            ep_done    = None
+                            in_ep      = False
+                            if ep_count >= quota:
+                                break
+                        continue
+                    m = RE_DONE.search(line)
+                    if m:
+                        ep_done = (m.group(1) == 'true', int(m.group(2)))
+                        in_ep   = True
+                        continue
+                    if not in_ep:
+                        continue
+                    m = RE_EVENT.match(line)
+                    if not m:
+                        continue
+                    label = m.group(1).strip()
+                    vs    = m.group(2)
+                    val   = sum(float(x) for x in vs.strip('[]').split(',')) \
+                            if vs.startswith('[') else float(vs)
+                    ep_events.append((label, val))
+            except OSError:
+                pass
+
+    if not counts:
+        print("No events found.")
+        return 0
+
+    total_ev = sum(counts.values())
+    if args.sort == 'count':
+        order = sorted(counts, key=lambda k: counts[k], reverse=True)
+    elif args.sort == 'sum':
+        order = sorted(counts, key=lambda k: abs(sums[k]), reverse=True)
+    else:
+        order = sorted(counts)
+
+    freq_s = {k: "%.1f%%(%d)" % (100.0 * counts[k] / total_ev, counts[k]) for k in order}
+    w_freq = max(max(len(s) for s in freq_s.values()), len("freq"))
+    w_sum  = max(max(len("%.1f" % sums[k]) for k in order), len("sum_R"))
+
+    MIN_COUNT = 4
+    shown = [k for k in order if counts[k] >= MIN_COUNT]
+    hidden = [k for k in order if counts[k] < MIN_COUNT]
+
+    kind = "eval" if args.eval_runners else "train"
+    window = "all" if args.last_episodes == 0 else "last"
+    ep_desc = "%d %s %s episodes" % (episodes_scanned, window, kind) if episodes_scanned else ""
+    run_id = getattr(args, 'run_id', None)
+    run_suffix = ", run %s" % run_id[:8] if run_id else ""
+    ep_suffix = ", %s" % ep_desc if ep_desc else ""
+    print("Event frequency (%d total events, %d files%s%s):" % (total_ev, len(files), ep_suffix, run_suffix))
+    print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
+    print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
+    for k in shown:
+        print("%-*s  %*.1f  %s" % (w_freq, freq_s[k], w_sum, sums[k], k))
+    if hidden:
+        hid_cnt = sum(counts[k] for k in hidden)
+        hid_sum = sum(sums[k] for k in hidden)
+        hid_freq = "%.1f%%(%d)" % (100.0 * hid_cnt / total_ev, hid_cnt)
+        print("%-*s  %*.1f  ... %d labels skipped (count < %d)" % (
+            w_freq, hid_freq, w_sum, hid_sum, len(hidden), MIN_COUNT))
+
+    if not lvl_out:
+        return 0
+
+    OUTCOME_COLS = ['Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout']
+    COL_ABBREV   = {
+        'Goal': 'Goal', 'Diablo killed': 'Diablo', 'Death': 'Death',
+        'Escape': 'Escape', 'Stuck': 'Stuck', 'Timedout': 'Timeout',
+    }
+    cols = [c for c in OUTCOME_COLS if any(lvl_out[lvl].get(c) for lvl in lvl_out)]
+
+    def outcome_fmt(cnt, tot):
+        return "%.1f%%(%d)" % (100.0 * cnt / tot, cnt) if tot else "-"
+
+    def steps_fmt(lst):
+        if not lst:
+            return "-"
+        n    = len(lst)
+        mean = sum(lst) / n
+        std  = math.sqrt(sum((x - mean) ** 2 for x in lst) / n)
+        return "μ=%d σ=%d [%d..%d]" % (mean, std, min(lst), max(lst))
+
+    all_levels = sorted(lvl_out)
+    col_w = {c: max(len(COL_ABBREV[c]),
+                    max(len(outcome_fmt(lvl_out[l].get(c, 0), sum(lvl_out[l].values())))
+                        for l in all_levels))
+             for c in cols}
+    step_w = max(
+        len("steps(succ)"),
+        max((len(steps_fmt(lvl_steps[l]['succ'])) for l in all_levels), default=1),
+        max((len(steps_fmt(lvl_steps[l]['fail'])) for l in all_levels), default=1),
+    )
+
+    hdr = "  ".join(
+        ["%6s" % "Level"] +
+        ["%*s" % (col_w[c], COL_ABBREV[c]) for c in cols] +
+        ["%*s" % (step_w, "steps(succ)"), "%*s" % (step_w, "steps(fail)")]
+    )
+    print()
+    total_succ_pct = 100.0 * succ_scanned / episodes_scanned if episodes_scanned else 0.0
+    print("Per-level outcomes (%s, %.1f%% success%s):" % (ep_desc, total_succ_pct, run_suffix))
+    print(hdr)
+    print("-" * len(hdr))
+    for level in all_levels:
+        tot = sum(lvl_out[level].values())
+        row = "  ".join(
+            ["%6d" % level] +
+            ["%*s" % (col_w[c], outcome_fmt(lvl_out[level].get(c, 0), tot)) for c in cols] +
+            ["%*s" % (step_w, steps_fmt(lvl_steps[level]['succ'])),
+             "%*s" % (step_w, steps_fmt(lvl_steps[level]['fail']))]
+        )
+        print(row)
+
+    WEIGHT_STEP = 5
+    sugg = {}
+    for level in all_levels:
+        tot = sum(lvl_out[level].values())
+        if not tot:
+            continue
+        succ = lvl_out[level].get('Goal', 0) + lvl_out[level].get('Diablo killed', 0)
+        sugg[level] = max(1, round(100.0 * (tot - succ) / tot / WEIGHT_STEP) * WEIGHT_STEP)
+
+    if sugg:
+        parts = []
+        lvls = sorted(sugg)
+        i = 0
+        while i < len(lvls):
+            w = sugg[lvls[i]]
+            j = i + 1
+            while j < len(lvls) and lvls[j] == lvls[j-1] + 1 and sugg[lvls[j]] == w:
+                j += 1
+            if j - i == 1:
+                parts.append("%d=%d" % (lvls[i], w))
+            else:
+                parts.append("%d-%d=%d" % (lvls[i], lvls[j-1], w))
+            i = j
+        print()
+        print("# Suggested (weight = 100 - success%, use with --dungeon-level):")
+        print("# --dungeon-level %s" % ",".join(parts))
+
+    return 0
+
+
+def write_env_stats(path, eval_runners, last_episodes, run_id=None):
+    import io, contextlib, argparse, os
+    buf = io.StringIO()
+    fake_args = argparse.Namespace(
+        eval_runners=eval_runners,
+        last_episodes=last_episodes,
+        sort="count",
+        level_filter=None,
+        run_id=run_id,
+    )
+    with contextlib.redirect_stdout(buf):
+        env_stats(fake_args)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(buf.getvalue())
+    os.replace(tmp, path)
+
+
 def sample_dungeon_level(dungeon_level_config, seed):
     total = sum(w for _, w in dungeon_level_config)
     r = seed % total
