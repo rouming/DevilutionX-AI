@@ -2006,9 +2006,11 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
     spell_sum = _spell_summary(d)
     active_flags = _active_flags(p)
 
-    msg = "Ticks: %4d  Kills: %3d  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s  State: %s%s" % (
+    ep, stk = int(game.agent_state.episode_steps), int(game.agent_state.stuck_steps)
+    env_str = "%d/%d" % (stk, ep) if ep or stk else "-/-"
+    msg = "Ticks: %4d  Env: %s  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s  State: %s%s" % (
         game.ticks(d),
-        np.sum(d.MonsterKillCounts),
+        env_str,
         pos[0], pos[1],
         hp_pct, mp_pct,
         spell_sum,

@@ -797,6 +797,9 @@ class DiabloEnv(gym.Env):
                 "true" if self.episode_success else "false",
                 self.steps_cnt, self.total_reward), file=self.log)
 
+        self.game.agent_state.episode_steps = self.steps_cnt
+        self.game.agent_state.stuck_steps   = self.steps_cnt - self.last_steps_cnt
+
         obss = self._build_obs(d, env)
         info = {"hierarchy/opt-changed": self._opt_changed(action),
                 "hierarchy/reward": rewards,

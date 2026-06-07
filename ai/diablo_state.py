@@ -166,7 +166,9 @@ structref.define_proxy(DevilutionState, DevilutionStateType,
 
 
 AgentState = np.dtype([
-	("goal_pos", dx.PointOf_int_),
+	("goal_pos",       dx.PointOf_int_),
+	("episode_steps",  np.int32),
+	("stuck_steps",    np.int32),
 ], align=True)
 
 class DoorState(enum.Enum):
