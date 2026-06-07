@@ -188,6 +188,37 @@ def make_episode_seed(base_seed, index, counter):
     initial = fmix32(base_seed + index)
     return fmix32(initial + counter)
 
+def parse_dungeon_level_spec(spec):
+    """Parse a dungeon level spec string like '1=5,2-4=45,5=35' into
+    a list of (level, weight) pairs as used by sample_dungeon_level."""
+    result = []
+    for part in spec.split(','):
+        part = part.strip()
+        if '=' in part:
+            levels_str, weight_str = part.split('=', 1)
+            weight = int(weight_str)
+        else:
+            levels_str, weight = part, 1
+        if '-' in levels_str:
+            lo, hi = levels_str.split('-', 1)
+            for lvl in range(int(lo), int(hi) + 1):
+                result.append((lvl, weight))
+        else:
+            result.append((int(levels_str), weight))
+    return result
+
+def read_suggested_dungeon_level(env_stats_path):
+    """Parse the suggested --dungeon-level spec from an env-stats file.
+    Returns the spec string or None if not found."""
+    try:
+        with open(env_stats_path) as f:
+            for line in f:
+                if line.startswith('# --dungeon-level '):
+                    return line[len('# --dungeon-level '):].strip()
+    except OSError:
+        pass
+    return None
+
 def _reversed_lines(path, chunk=65536):
     """Yield lines of a file in reverse order without loading it fully."""
     with open(path, 'rb') as f:
