@@ -23,6 +23,9 @@ def get_status_path(model_dir, best=False):
 
 def get_status(model_dir, best=False):
     path = get_status_path(model_dir, best=best)
+    if not os.path.exists(path):
+        label = "best-status.pt" if best else "status.pt"
+        raise FileNotFoundError(f"{label} not found at {path}")
     return torch.load(path, map_location=device, weights_only=False)
 
 

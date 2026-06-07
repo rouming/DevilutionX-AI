@@ -242,7 +242,7 @@ def parse_int_range(s):
 # Params excluded from sprout storage and post-run-defaults display.
 # These are operational flags (attach, cont) or internal bookkeeping (model,
 # demos, no_drop_best) that are not training hyperparameters.
-SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "best_drop", "attach", "help"}
+SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "best_drop", "load_best", "attach", "help"}
 
 class DiabloParserNamespace(argparse.Namespace):
     @property
@@ -489,6 +489,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
+    train_ai_parser.add_argument(
+        "--best", action="store_true", dest="load_best",
+        help="Load best-status.pt (highest eval score) instead of the latest status.pt")
     best_grp = train_ai_parser.add_mutually_exclusive_group()
     best_grp.add_argument(
         "--no-drop-best", "--no-best-drop", action="store_true", dest="no_drop_best",
@@ -2212,8 +2215,14 @@ def train_ai(args, gameconfig):
     # Load training status; fail fast if already at the frame limit so we
     # do not spawn runners or create a sprout snapshot needlessly.
     model_dir = utils.get_run_dir(args.model)
+    load_best = getattr(args, 'load_best', False)
     try:
-        status = utils.get_status(model_dir)
+        status = utils.get_status(model_dir, best=load_best)
+    except FileNotFoundError as e:
+        if load_best:
+            print(f"Error: {e}")
+            sys.exit(1)
+        status = {"num_frames": 0, "update": 0}
     except OSError:
         status = {"num_frames": 0, "update": 0}
     args.frames = resolve_frames(args.frames, status["num_frames"])
