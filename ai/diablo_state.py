@@ -219,6 +219,53 @@ def read_suggested_dungeon_level(env_stats_path):
         pass
     return None
 
+CURRICULUM_WEIGHT_STEP = 5  # granularity for suggested dungeon-level weights
+
+
+class DungeonLevelSpec:
+    """Dungeon level sampling spec; __str__ returns canonical level-sorted spec string.
+
+    Levels with weight == auto use stats-derived weights at runtime; their
+    nominal weight is CURRICULUM_WEIGHT_STEP and __str__ renders them as =auto.
+    """
+    def __init__(self, levels, auto_levels=frozenset(), stats_path=None):
+        self._levels = levels
+        self.auto_levels = frozenset(auto_levels)
+        self.stats_path = stats_path  # set by training loop when model_dir is known
+        self._spec = self._make_spec(levels, self.auto_levels)
+
+    @staticmethod
+    def _make_spec(levels, auto_levels):
+        parts = []
+        i = 0
+        while i < len(levels):
+            level, weight = levels[i]
+            is_auto = level in auto_levels
+            j = i + 1
+            while (j < len(levels)
+                   and levels[j][0] == levels[j-1][0] + 1
+                   and levels[j][1] == weight
+                   and (levels[j][0] in auto_levels) == is_auto):
+                j += 1
+            part = str(level) if j - i == 1 else "%d-%d" % (level, levels[j-1][0])
+            if is_auto:
+                part += "=auto"
+            elif weight != 1:
+                part += "=%d" % weight
+            parts.append(part)
+            i = j
+        return ",".join(parts)
+
+    def __str__(self):   return self._spec
+    def __repr__(self):  return repr(self._spec)
+    def __iter__(self):  return iter(self._levels)
+    def __getitem__(self, idx): return self._levels[idx]
+    def __len__(self):   return len(self._levels)
+
+
+DUNGEON_LEVEL_DEFAULT = DungeonLevelSpec([(1, 1)])
+
+
 def _reversed_lines(path, chunk=65536):
     """Yield lines of a file in reverse order without loading it fully."""
     with open(path, 'rb') as f:
@@ -448,7 +495,7 @@ def env_stats(args):
         )
         print(row)
 
-    WEIGHT_STEP = 5
+    WEIGHT_STEP = CURRICULUM_WEIGHT_STEP
     sugg = {}
     for level in all_levels:
         tot = sum(lvl_out[level].values())
@@ -1692,7 +1739,7 @@ class DiabloGame:
 
         cfg = cfg.format(seed=config["seed"],
                          fixed_seed=1 if config["fixed-seed"] else 0,
-                         dungeon_level=config.get("dungeon-level", [(1, 1)])[0][0],
+                         dungeon_level=config.get("dungeon-level", DUNGEON_LEVEL_DEFAULT)[0][0],
                          automap_active=1 if config["gui"] else 0,
                          skip_progress=1 if config["gui"] else 0,
                          skip_animation=0 if config["gui"] else 1,

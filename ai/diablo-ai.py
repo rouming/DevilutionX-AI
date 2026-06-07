@@ -29,6 +29,7 @@ import procutils
 import sprout
 from rl import utils
 from rl.constants import KL_GOOD_HI, CLIP_FRAC_GOOD_HI, GRAD_NORM_GOOD_HI
+from diablo_state import DungeonLevelSpec, DUNGEON_LEVEL_DEFAULT, CURRICULUM_WEIGHT_STEP
 
 VERSION='Diablo AI Tool v2.0'
 
@@ -45,54 +46,30 @@ def set_rlimits():
     new_soft = min(65535, hard)
     resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
 
-class DungeonLevelSpec:
-    """Dungeon level sampling spec; __str__ returns canonical level-sorted spec string."""
-    def __init__(self, levels):
-        self._levels = levels
-        self._spec = self._make_spec(levels)
-    @staticmethod
-    def _make_spec(levels):
-        parts = []
-        i = 0
-        while i < len(levels):
-            level, weight = levels[i]
-            j = i + 1
-            while (j < len(levels)
-                   and levels[j][0] == levels[j-1][0] + 1
-                   and levels[j][1] == weight):
-                j += 1
-            part = str(level) if j - i == 1 else "%d-%d" % (level, levels[j-1][0])
-            if weight != 1:
-                part += "=%d" % weight
-            parts.append(part)
-            i = j
-        return ",".join(parts)
-    def __str__(self):
-        return self._spec
-    def __repr__(self):
-        return repr(self._spec)
-    def __iter__(self):
-        return iter(self._levels)
-    def __getitem__(self, idx):
-        return self._levels[idx]
-    def __len__(self):
-        return len(self._levels)
-
 def parse_dungeon_level(s):
     """Parse dungeon level spec into DungeonLevelSpec with [(level, weight), ...].
 
-    '8'                -> level 8 only
-    '1-8'              -> levels 1-8 uniform weight 1
-    '1=5,2=15,3-16=80' -> weighted
+    '8'                  -> level 8 only
+    '1-8'                -> levels 1-8 uniform weight 1
+    '1=5,2=15,3-16=80'  -> weighted
+    '1-16=auto'          -> all levels auto-weighted from env-stats at runtime
+    '1-3=auto,4-16=20'  -> L1-3 auto, L4-16 fixed weight 20
     """
     result = []
+    auto_levels = set()
     for entry in s.split(','):
         if '=' in entry:
             lvl_part, w_part = entry.split('=', 1)
-            weight = int(w_part)
+            if w_part == 'auto':
+                weight = CURRICULUM_WEIGHT_STEP
+                is_auto = True
+            else:
+                weight = int(w_part)
+                is_auto = False
         else:
             lvl_part = entry
             weight = 1
+            is_auto = False
         if '-' in lvl_part:
             lo_s, hi_s = lvl_part.split('-', 1)
             lo, hi = int(lo_s), int(hi_s)
@@ -103,9 +80,11 @@ def parse_dungeon_level(s):
                 "dungeon level must be within 1-16, got %r" % entry)
         for lvl in range(lo, hi + 1):
             result.append((lvl, weight))
+            if is_auto:
+                auto_levels.add(lvl)
     if not result:
         raise argparse.ArgumentTypeError("empty dungeon level spec: %r" % s)
-    return DungeonLevelSpec(sorted(result))
+    return DungeonLevelSpec(sorted(result), auto_levels)
 
 def _compress_level_ranges(levels):
     """Compress sorted list of ints into a single range string: [1,2,3,5] -> '1-3,5'."""
@@ -127,14 +106,18 @@ def _sprout_params_diff(key, old_val, new_val):
     if key not in ('dungeon_level', 'eval_dungeon_level'):
         return None
     try:
-        new_weights = dict(parse_dungeon_level(new_val))
-        old_weights = dict(parse_dungeon_level(old_val)) if old_val is not None else {}
+        new_spec = parse_dungeon_level(new_val)
+        old_spec = parse_dungeon_level(old_val) if old_val is not None else DUNGEON_LEVEL_DEFAULT
     except Exception:
         return None
+
+    def _w(lvl, spec):
+        w = dict(spec).get(lvl, 0)
+        return "auto" if lvl in spec.auto_levels else w
+
     change_groups = {}
     for lvl in range(1, 17):
-        ov = old_weights.get(lvl, 0)
-        nv = new_weights.get(lvl, 0)
+        ov, nv = _w(lvl, old_spec), _w(lvl, new_spec)
         if ov != nv:
             change_groups.setdefault((ov, nv), []).append(lvl)
     if not change_groups:
@@ -360,9 +343,11 @@ def make_diablo_parser():
         "--seed-base", type=int, default=0,
         help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
     common_parser.add_argument(
-        "--dungeon-level", type=parse_dungeon_level, default=DungeonLevelSpec([(1, 1)]),
-        help="Starting dungeon level: '8', '1-8' (uniform range), or "
-             "'1=5,2=15,3-16=80' (weighted; weight proportional to frequency). "
+        "--dungeon-level", type=parse_dungeon_level, default=DUNGEON_LEVEL_DEFAULT,
+        help="Starting dungeon level: '8', '1-8' (uniform range), "
+             "'1=5,2=15,3-16=80' (weighted; weight proportional to frequency), "
+             "or '1-16=auto' / '1-3=auto,4-16=20' (auto weights from env-stats.txt "
+             "for marked levels; missing levels floored at CURRICULUM_WEIGHT_STEP). "
              "Default: 1")
 
     #
@@ -574,7 +559,7 @@ def make_diablo_parser():
         "--eval-env-runners", type=int, default=64,
         help="Number of environment runners dedicated to evaluation (default: 64)")
     train_ai_parser.add_argument(
-        "--eval-dungeon-level", type=parse_dungeon_level, default=DungeonLevelSpec([(1, 1)]),
+        "--eval-dungeon-level", type=parse_dungeon_level, default=DUNGEON_LEVEL_DEFAULT,
         help="Dungeon level spec for eval environments (default: 1)")
     train_ai_parser.add_argument(
         "--stats-episodes", type=int, default=1000,
@@ -1792,8 +1777,8 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
 def new_game_data(gameconfig, n_counter):
     seed = diablo_state.make_episode_seed(gameconfig['seed'], 0, n_counter)
-    dungeon_level = diablo_state.sample_dungeon_level(
-        gameconfig.get('dungeon-level', [(1, 1)]), seed)
+    spec = gameconfig.get('dungeon-level', DUNGEON_LEVEL_DEFAULT)
+    dungeon_level = diablo_state.sample_dungeon_level(spec, seed)
     return (dungeon_level << 1) | 1, seed
 
 def run_tui(stdscr, args, gameconfig):
@@ -2008,6 +1993,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     runner_offset = rank * args.env_runners if ddp else 0
     envs = []
     ts = 0
+    auto_levels = args.dungeon_level.auto_levels
+    if auto_levels:
+        gameconfig['dungeon-level'].stats_path = os.path.join(model_dir, "env-stats.txt")
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
         env_config['index'] = runner_offset + i

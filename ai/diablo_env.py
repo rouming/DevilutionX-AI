@@ -459,8 +459,20 @@ class DiabloEnv(gym.Env):
             # Resume first
             self.pause_game(False)
 
-        dungeon_level = diablo_state.sample_dungeon_level(
-            self.config.get('dungeon-level', [(1, 1)]), episode_seed)
+        base_config = self.config.get('dungeon-level', diablo_state.DUNGEON_LEVEL_DEFAULT)
+        auto_levels = base_config.auto_levels
+        stats_path  = base_config.stats_path
+        if auto_levels and stats_path:
+            spec = diablo_state.read_suggested_dungeon_level(stats_path)
+            suggested = dict(diablo_state.parse_dungeon_level_spec(spec)) if spec else {}
+            dungeon_level_config = [
+                (lvl, suggested.get(lvl, diablo_state.CURRICULUM_WEIGHT_STEP)
+                      if lvl in auto_levels else w)
+                for lvl, w in base_config
+            ]
+        else:
+            dungeon_level_config = list(base_config)
+        dungeon_level = diablo_state.sample_dungeon_level(dungeon_level_config, episode_seed)
 
         if seed is not None:
             print(f"RESET seed={episode_seed} dungeon_level={dungeon_level}", file=self.log)
