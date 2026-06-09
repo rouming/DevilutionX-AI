@@ -866,7 +866,8 @@ def display_env_log(stdscr, envlog):
         return
 
     height, width = stdscr.getmaxyx()
-    logwin_h = height // 2
+    # from row 4 down to footer - 2
+    logwin_h = height - 6
     logwin_w = width // 4
 
     h = max(0, logwin_h - 2)
