@@ -1947,6 +1947,53 @@ def cli_fetch(args, sprout: Sprout):
     for out in sh(cmd, stream=True):
         print(out)
 
+def cli_exec(args, sprout: Sprout) -> int:
+    """If a run ID is provided, extract an archived run to a temporary
+    directory, execute the command there, and clean up. If a head name
+    is provided, execute the command from the active head directory."""
+    try:
+        if not args.exec_cmd:
+            print("ERROR: exec requires a command to be passed for execution", file=sys.stderr)
+            return 2
+
+        run_id = None
+        if args.run:
+            run_id = args.run
+        elif args.head:
+            _, heads, _ = sprout.get_tree()
+            if args.head not in heads:
+                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
+                return 2
+            run_id = heads[args.head]
+        else:
+            print("ERROR: exec requires --run or --head", file=sys.stderr)
+            return 2
+
+        meta = sprout._load_meta()
+        runs = meta.get("runs", {})
+        if run_id not in runs:
+            raise SproutError(f"run '{run_id}' not found")
+        active_head = sprout._active_head_for_run(run_id, meta)
+
+        cmd = list(args.exec_cmd)
+        if os.sep in cmd[0]:
+            # Resolve to absolute path if relative is provided
+            cmd[0] = os.path.abspath(cmd[0])
+        if active_head:
+            work_dir = sprout._active_dir(active_head)
+            return subprocess.run(cmd, cwd=work_dir).returncode
+        else:
+            sprout._borg_extract(run_id)
+            work_dir = sprout._head_dir(run_id)
+            try:
+                return subprocess.run(cmd, cwd=work_dir).returncode
+            finally:
+                if is_dir(work_dir):
+                    rmtree(work_dir)
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
 def build_parser(prog, suppress_working_dir=False, add_help=True):
     parser = argparse.ArgumentParser(prog=prog, description="Sprout CLI", add_help=add_help)
     if suppress_working_dir:
@@ -2043,6 +2090,12 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     prs = sub.add_parser("fetch", help="Fetches run states and heads from the remote repo")
     prs.add_argument("src_host", help="The remote source host for copying, can be specified in the user@host:/path format")
 
+    # exec
+    pe = sub.add_parser("exec", help="Execute a command in an archived run's directory")
+    pe.add_argument("--run", help="Run id to extract and execute in")
+    pe.add_argument("--head", help="Head name to execute in")
+    pe.add_argument("exec_cmd", nargs=argparse.REMAINDER, help="Command to run")
+
     return parser
 
 # -------------------------
@@ -2096,6 +2149,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
                            params_overrides_fn=params_overrides_fn)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
+        elif args.cmd == "exec":
+            ret = cli_exec(args, sprout)
         else:
             parser.print_help()
             return 1
