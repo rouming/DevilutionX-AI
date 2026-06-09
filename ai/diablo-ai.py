@@ -816,7 +816,7 @@ class EventsQueue:
     progress = [0x2826, 0x2816, 0x2832, 0x2834]
     progress_cnt = 0
     def __init__(self):
-        self.queue = collections.deque(maxlen=10)
+        self.queue = collections.deque(maxlen=16)
 
 # This is weird, but if you place a character in the last column,
 # curses fills that position, yet still raises an error.
