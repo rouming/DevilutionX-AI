@@ -429,7 +429,7 @@ def env_stats(args):
     window = "all" if args.last_episodes == 0 else "last"
     ep_desc = "%d %s %s episodes" % (episodes_scanned, window, kind) if episodes_scanned else ""
     run_id = getattr(args, 'run_id', None)
-    run_suffix = ", run %s" % run_id[:8] if run_id else ""
+    run_suffix = ", run %s" % run_id if run_id else ""
     ep_suffix = ", %s" % ep_desc if ep_desc else ""
     print("Event frequency (%d total events, %d files%s%s):" % (total_ev, len(files), ep_suffix, run_suffix))
     print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
