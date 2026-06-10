@@ -79,6 +79,7 @@ void InitCorpses()
 	for (size_t i = 0; i < ActiveMonsterCount; i++) {
 		auto &monster = Monsters[ActiveMonsters[i]];
 		if (monster.isUnique()) {
+			if (static_cast<unsigned>(nd) >= MaxCorpses) break;
 			InitDeadAnimationFromMonster(Corpses[nd], monster.type());
 			Corpses[nd].translationPaletteIndex = ActiveMonsters[i] + 1;
 			nd++;
