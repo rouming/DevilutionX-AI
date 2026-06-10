@@ -482,7 +482,14 @@ def env_stats(args):
     )
     print()
     total_succ_pct = 100.0 * succ_scanned / episodes_scanned if episodes_scanned else 0.0
-    print("Per-level outcomes (%s, %.1f%% success%s):" % (ep_desc, total_succ_pct, run_suffix))
+    level_succ_rates = [
+        100.0 * len(lvl_steps[level]['succ']) / sum(lvl_out[level].values())
+        for level in all_levels
+        if sum(lvl_out[level].values())
+    ]
+    uniform_succ_pct = sum(level_succ_rates) / len(level_succ_rates) if level_succ_rates else 0.0
+    succ_line = "success: %.1f%% total / %.1f%% uniform" % (total_succ_pct, uniform_succ_pct)
+    print("Per-level outcomes (%s, %s%s):" % (ep_desc, succ_line, run_suffix))
     print(hdr)
     print("-" * len(hdr))
     for level in all_levels:
