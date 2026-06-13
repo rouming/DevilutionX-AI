@@ -1623,21 +1623,6 @@ class DiabloEnv_ClearAllLevels_v3(DiabloEnv_ClearAllLevels_v0):
     }
 
 
-class DiabloEnv_ClearAllLevels_v4(DiabloEnv_ClearAllLevels_v3):
-    """Like v3 but adds a stuck-urgency scalar to the observation:
-      [46] stuck_frac = (steps_cnt - last_steps_cnt) / STUCK_TIMEOUT
-    Tells the model how close it is to the stuck penalty, incentivising
-    timely exploration. _pad_state_dict handles the 46->47 shape change
-    when loading a pre-trained checkpoint."""
-
-    def _get_scalars(self, d):
-        base = diablo_state.compute_scalars(d)
-        # Fraction of the stuck window elapsed: near 1.0 the agent must
-        # make progress (explore/kill) or face the stuck penalty.
-        stuck_frac = np.float32((self.steps_cnt - self.last_steps_cnt) / self.STUCK_TIMEOUT)
-        return np.append(base, [stuck_frac])
-
-
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1658,8 +1643,6 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v2 },
     { 'id': 'Diablo-ClearAllLevels-v3',
       'entry_point': DiabloEnv_ClearAllLevels_v3 },
-    { 'id': 'Diablo-ClearAllLevels-v4',
-      'entry_point': DiabloEnv_ClearAllLevels_v4 },
 
     # HRL Environment Classes
 
