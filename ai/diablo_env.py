@@ -1382,32 +1382,37 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 # at end of step so damage right after a heal still
                 # credits the full drop.
                 r = R[RewardEvent.DamageTaken]
+                contrib = 0.0
                 if r:
-                    reward -= (self.prev_hp - hp) / d.player._pMaxHP * r
-                print("Damage taken, R %.2f" % reward, file=self.log)
+                    contrib = -(self.prev_hp - hp) / d.player._pMaxHP * r
+                    reward += contrib
+                print("Damage taken, R %.2f" % contrib, file=self.log)
             if monster_damaged:
                 # Monsters took damage
                 r = R[RewardEvent.AttackMonster]
+                contrib = monsters_hit * r if r else 0.0
                 if r:
-                    reward += monsters_hit * r
+                    reward += contrib
                 made_progress = True
-                print("Attack %d monster(s), R %.2f" % (monsters_hit, reward), file=self.log)
+                print("Attack %d monster(s), R %.2f" % (monsters_hit, contrib), file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
                 # Monsters killed
                 r = R[RewardEvent.KillMonster]
+                contrib = (self.prev_monsters_cnt - monsters_cnt) * r if r else 0.0
                 if r:
-                    reward += (self.prev_monsters_cnt - monsters_cnt) * r
+                    reward += contrib
                 self.prev_monsters_cnt = monsters_cnt
                 made_progress = True
-                print("Kill monster, R %.2f" % reward, file=self.log)
+                print("Kill monster, R %.2f" % contrib, file=self.log)
             if obj_cnt < self.prev_obj_cnt:
                 # Chests, sarcophagi, barrels, crucifixes, doors etc.
                 r = R[RewardEvent.ActivateObject]
+                contrib = (self.prev_obj_cnt - obj_cnt) * r if r else 0.0
                 if r:
-                    reward += (self.prev_obj_cnt - obj_cnt) * r
+                    reward += contrib
                 self.prev_obj_cnt = obj_cnt
                 made_progress = True
-                print("Activate object, R %.2f" % reward, file=self.log)
+                print("Activate object, R %.2f" % contrib, file=self.log)
             if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
                 if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
                     opened = list(set(self.prev_closed_doors_ids) - set(closed_doors_ids))
@@ -1416,19 +1421,21 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     self.opened_doors_ids.extend(opened)
                     if opened:
                         r = R[RewardEvent.OpenDoor]
+                        contrib = len(opened) * r if r else 0.0
                         if r:
-                            reward += len(opened) * r
+                            reward += contrib
                         made_progress = True
-                        print("Open door, R %.2f" % reward, file=self.log)
+                        print("Open door, R %.2f" % contrib, file=self.log)
                 self.prev_closed_doors_ids = closed_doors_ids
             if items_cnt != self.prev_items_cnt:
                 if items_cnt < self.prev_items_cnt:
                     # Items can also appear (chest spill); only decrease credits a pickup.
                     r = R[RewardEvent.CollectItem]
+                    contrib = (self.prev_items_cnt - items_cnt) * r if r else 0.0
                     if r:
-                        reward += (self.prev_items_cnt - items_cnt) * r
+                        reward += contrib
                     made_progress = True
-                    print("Collect item, R %.2f" % reward, file=self.log)
+                    print("Collect item, R %.2f" % contrib, file=self.log)
                 self.prev_items_cnt = items_cnt
 
             # Restore actions: pot-count change detects actual consumption
@@ -1440,35 +1447,35 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     r = R[RewardEvent.RestoreHpWasteful]
                     if r:
                         reward += r
-                    print("Wasteful restore HP, R %.2f" % reward, file=self.log)
+                    print("Wasteful restore HP, R %.2f" % r, file=self.log)
                 elif hp_pots < self.prev_hp_pots:
                     r = R[RewardEvent.RestoreHpCorrect]
                     if r:
                         reward += r
                     made_progress = True
-                    print("Correct restore HP, R %.2f" % reward, file=self.log)
+                    print("Correct restore HP, R %.2f" % r, file=self.log)
                 else:
                     r = R[RewardEvent.RestoreHpNoPot]
                     if r:
                         reward += r
-                    print("No-potion restore HP, R %.2f" % reward, file=self.log)
+                    print("No-potion restore HP, R %.2f" % r, file=self.log)
             elif action == ActionEnum.RestoreMana.value:
                 if self.prev_mana / max_mana >= 0.9:
                     r = R[RewardEvent.RestoreManaWasteful]
                     if r:
                         reward += r
-                    print("Wasteful restore mana, R %.2f" % reward, file=self.log)
+                    print("Wasteful restore mana, R %.2f" % r, file=self.log)
                 elif mana_pots < self.prev_mana_pots:
                     r = R[RewardEvent.RestoreManaCorrect]
                     if r:
                         reward += r
                     made_progress = True
-                    print("Correct restore mana, R %.2f" % reward, file=self.log)
+                    print("Correct restore mana, R %.2f" % r, file=self.log)
                 else:
                     r = R[RewardEvent.RestoreManaNoPot]
                     if r:
                         reward += r
-                    print("No-potion restore mana, R %.2f" % reward, file=self.log)
+                    print("No-potion restore mana, R %.2f" % r, file=self.log)
             # Cast spells: unavailable penalty is action-tied.
             elif (ActionEnum.CastFirebolt.value <= action
                   <= ActionEnum.CastFireball.value):
@@ -1477,7 +1484,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     r = R[RewardEvent.SpellUnavailable]
                     if r:
                         reward += r
-                    print("Unavailable %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                    print("Unavailable %s spell, R %.2f" % (spell_id.name, r), file=self.log)
 
             # Spell cast reward: animation skipped so PM_SPELL lasts 1 tick;
             # may fire later than the action was submitted.
@@ -1492,38 +1499,38 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                             if r:
                                 reward += r
                             made_progress = True
-                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                            print("Successful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                     elif ae == ActionEnum.CastManaShield:
                         # Casting when already active wastes mana with no benefit.
                         if self.prev_mana_shield:
                             r = R[RewardEvent.SpellRedundantShield]
                             if r:
                                 reward += r
-                            print("Redundant %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                            print("Redundant %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                         else:
                             r = R[RewardEvent.SpellSuccessful]
                             if r:
                                 reward += r
                             made_progress = True
-                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                            print("Successful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                     else:
                         if diablo_state.count_visible_monsters(env) == 0:
                             r = R[RewardEvent.SpellWasteful]
                             if r:
                                 reward += r
-                            print("Wasteful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                            print("Wasteful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                         else:
                             r = R[RewardEvent.SpellSuccessful]
                             if r:
                                 reward += r
                             made_progress = True
-                            print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                            print("Successful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                     if ae.value not in self.v2_spells_used and made_progress:
                         self.v2_spells_used.add(ae.value)
                         r = R[RewardEvent.SpellFirstUse]
                         if r:
                             reward += r
-                        print("Successful %s spell, R %.2f" % (spell_id.name, reward), file=self.log)
+                        print("Successful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
 
         # Update per-monster HP snapshot every step so new spawns and
         # regeneration are baselined correctly.
@@ -1567,7 +1574,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         r = R[RewardEvent.WastedPrimary]
                         if r:
                             reward += r
-                        print("Wasted primary, R %.2f" % reward, file=self.log)
+                        print("Wasted primary, R %.2f" % r, file=self.log)
                 elif action == ActionEnum.SecondaryAction.value:
                     if not diablo_state.player_has_adjacent(
                             env, self.view_radius,
@@ -1575,7 +1582,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         r = R[RewardEvent.WastedSecondary]
                         if r:
                             reward += r
-                        print("Wasted secondary, R %.2f" % reward, file=self.log)
+                        print("Wasted secondary, R %.2f" % r, file=self.log)
 
         return [reward], done, truncated
 
