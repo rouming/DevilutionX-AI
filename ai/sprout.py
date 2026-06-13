@@ -42,6 +42,9 @@ import yaml
 
 DEBUG = False
 
+# Bitset flags for create_or_edit()
+SNAP_CHECK_PARAMS = 0x1  # skip snapshot if head params match parent params
+
 ## Once Sprout is used for the first time, Borg complains with the
 ## following: "Warning: Attempting to access a previously unknown
 ## unencrypted repository!". Suppress that.
@@ -1156,6 +1159,32 @@ class Sprout:
 
         self._save_meta(meta)
         return run_id
+
+    @locked
+    def create_or_edit(self,
+                       from_head: str,
+                       params_str: Optional[str] = None,
+                       alias_str: Optional[str] = None,
+                       description_str: Optional[str] = None,
+                       check: int = 0) -> bool:
+        """Create a snapshot or edit the current head in place.
+
+        If check & SNAP_CHECK_PARAMS and the head is a pristine copy
+        of its parent (their params are identical), skip the snapshot
+        and edit the head's params instead.  Returns True if a
+        snapshot was created, False if the head was edited in place.
+        """
+        if check & SNAP_CHECK_PARAMS:
+            run, _ = self.get_run(head=from_head)
+            parent_id = run.get("parent")
+            if parent_id:
+                parent_run, _ = self.get_run(run=parent_id)
+                if run.get("params", {}) == parent_run.get("params", {}):
+                    self.edit(head=from_head, params_str=params_str)
+                    return False
+        self.create(from_head=from_head, params_str=params_str,
+                    alias_str=alias_str, description_str=description_str)
+        return True
 
     @locked
     def rename(self, old_head: str, new_head: str):
