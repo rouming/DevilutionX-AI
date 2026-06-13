@@ -348,6 +348,13 @@ def fmt_custom_value(path, v):
         return f"{v:.3f}"
     return str(v)
 
+def _deep_update(dst, src):
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_update(dst[k], v)
+        else:
+            dst[k] = v
+
 def flatten(d, format_value, prefix=""):
     for k in sorted(d.keys(), key=str):
         v = d[k]
@@ -1153,7 +1160,7 @@ class Sprout:
 
         if custom_dict is not None:
             if custom_update:
-                run["custom"].update(custom_dict)
+                _deep_update(run["custom"], custom_dict)
             else:
                 run["custom"] = custom_dict
 
