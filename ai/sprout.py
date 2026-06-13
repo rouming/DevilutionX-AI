@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import re
 import time
 import unittest
 import yaml
@@ -354,6 +355,16 @@ def _deep_update(dst, src):
             _deep_update(dst[k], v)
         else:
             dst[k] = v
+
+_ANCESTOR_RE = re.compile(r'^(.*?)(\^+|~([1-9]\d*))$')
+
+def _parse_ancestor_suffix(ref: str):
+    """Parse git-like ancestor suffix: 'ref^' -> (ref, 1), 'ref^^^' -> (ref, 3), 'ref~N' -> (ref, N)."""
+    m = _ANCESTOR_RE.match(ref)
+    if not m:
+        return ref, 0
+    n = len(m.group(2)) if m.group(2)[0] == '^' else int(m.group(3))
+    return m.group(1), n
 
 def flatten(d, format_value, prefix=""):
     for k in sorted(d.keys(), key=str):
@@ -1243,14 +1254,26 @@ class Sprout:
 
         run_id = None
         if run:
+            run, n = _parse_ancestor_suffix(run)
             run_id = run
         else:
+            head, n = _parse_ancestor_suffix(head)
             if head not in heads:
                 raise SproutError(f"head '{head}' not found")
             run_id = heads[head]
 
         if run_id not in runs:
             raise SproutError(f"run '{run_id}' not found")
+
+        for step in range(n):
+            parent = runs[run_id].get("parent")
+            if not parent:
+                raise SproutError(
+                    f"run '{run_id}' has no parent "
+                    f"({n - step} more step(s) requested)")
+            if parent not in runs:
+                raise SproutError(f"parent '{parent}' of '{run_id}' not found in metadata")
+            run_id = parent
 
         return runs[run_id], run_id
 
@@ -3191,6 +3214,48 @@ class SproutCLITests(unittest.TestCase):
         # Wait, from runs_before to the first switch: +1 new run, -1 deleted run = 0 net change
         # Second switch: +1 new run, -1 deleted run = 0 net change.
         self.assertEqual(len(runs_after), num_runs_before)
+
+    def test_ancestor_syntax(self):
+        # Build a 4-run chain via snapshots: r0 <- r1 <- r2 <- r3, head A -> r3.
+        # Each "create --from-head A" snapshots the current active run and
+        # advances head A to a freshly created child.
+        rc, out, err = self.run_sprout("create GroupA --head A")
+        self.assertEqual(rc, 0, msg=err)
+        _, heads, _ = self.sprout.get_tree()
+        r0 = heads['A']
+
+        for _ in range(3):
+            rc, out, err = self.run_sprout("create --from-head A")
+            self.assertEqual(rc, 0, msg=err)
+
+        _, heads, _ = self.sprout.get_tree()
+        r3 = heads['A']
+        runs, _, _ = self.sprout.get_tree()
+        r2 = runs[r3]['parent']
+        r1 = runs[r2]['parent']
+        # r0 is the root: r0 <- r1 <- r2 <- r3
+
+        def get(run=None, head=None):
+            _, rid = self.sprout.get_run(run=run, head=head)
+            return rid
+
+        # --head addressing
+        self.assertEqual(get(head="A"),    r3)
+        self.assertEqual(get(head="A^"),   r2)
+        self.assertEqual(get(head="A^^"),  r1)
+        self.assertEqual(get(head="A^^^"), r0)
+        self.assertEqual(get(head="A~1"),  r2)
+        self.assertEqual(get(head="A~3"),  r0)
+
+        # --run addressing
+        self.assertEqual(get(run=r3),       r3)
+        self.assertEqual(get(run=r3+"^"),   r2)
+        self.assertEqual(get(run=r3+"^^"),  r1)
+        self.assertEqual(get(run=r3+"~3"),  r0)
+
+        # past root raises
+        with self.assertRaises(SproutError):
+            get(head="A~4")
 
 
 # In order to test sprout run:
