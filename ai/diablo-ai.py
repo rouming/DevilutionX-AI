@@ -1065,13 +1065,15 @@ def model_drop_best(args):
         return 0
 
     custom = dict(run.get("custom", {}) or {})
-    if "best" in custom:
-        custom.pop("best")
+    eval_custom = custom.get("eval", {})
+    if "best" in eval_custom:
+        eval_custom.pop("best")
+        custom["eval"] = eval_custom
         # custom_update=False replaces the whole custom dict with the popped version.
         spr.edit(head=args.model, custom_dict=custom, custom_update=False)
-        print(f"Cleared 'best' from sprout custom metadata for head '{args.model}'")
+        print(f"Cleared 'eval/best' from sprout custom metadata for head '{args.model}'")
     else:
-        print(f"No 'best' in sprout custom metadata for head '{args.model}' (nothing to clear)")
+        print(f"No 'eval/best' in sprout custom metadata for head '{args.model}' (nothing to clear)")
 
     return 0
 
@@ -1902,7 +1904,7 @@ def _sprout_duration(spr, model_dir):
     # spr may be None if sprout is not configured
     try:
         run, _ = spr.get_run(head=os.path.basename(model_dir))
-        return run.get("custom", {}).get("last", {}).get("duration", 0)
+        return run.get("custom", {}).get("eval", {}).get("last", {}).get("duration", 0)
     except Exception:
         return 0
 
@@ -2149,6 +2151,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     if is_main:
         txt_logger.info(f"Start training from {_fmt_frames(num_frames)} frames | run {run_id}\n")
 
+    train_success_sum = 0.0
+    train_success_count = 0
+
     while num_frames < args.frames_int:
         # Update model parameters
         update_start_time = time.time()
@@ -2173,6 +2178,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         success_per_episode = utils.synthesize(
             [1 if s else 0 for s in logs["success_per_episode"]])
         success_rate = success_per_episode['mean']
+        train_success_sum += success_rate
+        train_success_count += 1
         duration = int(time.time() - start_time)
 
         # Print logs (main rank only)
@@ -2293,11 +2300,11 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time)} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info("Status saved")
 
-            custom_dict = {"duration": duration,
-                           "frames": num_frames,
-                           "success_rate": success_rate}
-            best = {"best": custom_dict}
-            last = {"last": custom_dict}
+            snap = {"duration": duration,
+                    "frames": num_frames,
+                    "success_rate": success_rate}
+            train_mean_sr = train_success_sum / train_success_count
+            eval_dict = {"last": snap}
 
             if success_rate > best_success_rate:
                 best_success_rate = success_rate
@@ -2305,12 +2312,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 dst_path = utils.get_status_path(model_dir, best=True)
                 shutil.copyfile(src_path, dst_path)
                 txt_logger.info("Success rate {: .3f}; best model is saved".format(success_rate))
+                eval_dict["best"] = snap
 
-                spr.edit(head=args.model, custom_dict=last | best,
-                         custom_update=True)
-            else:
-                spr.edit(head=args.model, custom_dict=last,
-                         custom_update=True)
+            spr.edit(head=args.model,
+                     custom_dict={"eval": eval_dict,
+                                  "train": {"mean": {"success_rate": train_mean_sr}}},
+                     custom_update=True)
 
             txt_logger.info(f"Collecting env-stats (last {args.stats_episodes}/{args.eval_stats_episodes} training/eval episodes)")
             diablo_state.write_env_stats(os.path.join(model_dir, "env-stats.txt"),
