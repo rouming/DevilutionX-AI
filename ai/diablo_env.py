@@ -1623,6 +1623,16 @@ class DiabloEnv_ClearAllLevels_v3(DiabloEnv_ClearAllLevels_v0):
     }
 
 
+class DiabloEnv_ClearAllLevels_v4(DiabloEnv_ClearAllLevels_v3):
+    """Like v3 but with damage-taken penalty re-enabled to teach cautious combat.
+    The agent is penalised proportionally to HP lost per step, encouraging it
+    to lure monsters and fight defensively rather than tanking hits."""
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v3.REWARDS,
+        RewardEvent.DamageTaken: 5.0,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1643,6 +1653,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v2 },
     { 'id': 'Diablo-ClearAllLevels-v3',
       'entry_point': DiabloEnv_ClearAllLevels_v3 },
+    { 'id': 'Diablo-ClearAllLevels-v4',
+      'entry_point': DiabloEnv_ClearAllLevels_v4 },
 
     # HRL Environment Classes
 
