@@ -1847,13 +1847,17 @@ def prepare_directory_for_run(args, dir_name):
                           for k, v in vars(args).items()
                           if k not in SPROUT_SKIP_PARAMS)
 
+    creating_snapshot = False
     if not os.path.isdir(run_dir):
         # Create model state
         spr.create(group=args.env, head=dir_name, params_str=params_str)
+        creating_snapshot = True
     elif not args.cont:
-        # Create a snapshot of a model state (no alias/description inherited)
-        spr.create(from_head=dir_name, params_str=params_str,
-                   alias_str="", description_str="")
+        creating_snapshot = True
+        spr.create_or_edit(
+            from_head=dir_name, params_str=params_str,
+            alias_str="", description_str="",
+            check=sprout.SNAP_CHECK_PARAMS)
     else:
         # Continue in the current head, but be careful; firstly, check
         # if the environment has changed
@@ -1874,7 +1878,7 @@ def prepare_directory_for_run(args, dir_name):
         # training without creating a snapshot
         spr.edit(head=dir_name, params_str=params_str)
 
-    if args.best_drop or (not args.no_drop_best and not args.cont):
+    if args.best_drop or (not args.no_drop_best and creating_snapshot):
         model_drop_best(args)
 
     _, run_id = spr.get_run(head=dir_name)
