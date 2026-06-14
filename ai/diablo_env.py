@@ -1640,6 +1640,24 @@ class DiabloEnv_ClearAllLevels_v4(DiabloEnv_ClearAllLevels_v3):
     }
 
 
+class DiabloEnv_ClearAllLevels_v5(DiabloEnv_ClearAllLevels_v0):
+    """Partially dense: full v0 shaping restored with v3 terminal magnitudes
+    and v4 damage penalty. SpellUnavailable/WastedPrimary/WastedSecondary
+    directly penalise the observed spell spam and lazy action patterns."""
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v0.REWARDS,
+        RewardEvent.Goal:           +40.0,
+        RewardEvent.DiabloKilled:   +40.0,
+        RewardEvent.Death:          -20.0,
+        RewardEvent.Escape:         -25.0,
+        RewardEvent.Stuck:          -25.0,
+        RewardEvent.Timedout:       -25.0,
+        RewardEvent.ActivateObject: +0.08,
+        RewardEvent.CollectItem:    +0.08,
+        RewardEvent.DamageTaken:    5.0,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1662,6 +1680,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v3 },
     { 'id': 'Diablo-ClearAllLevels-v4',
       'entry_point': DiabloEnv_ClearAllLevels_v4 },
+    { 'id': 'Diablo-ClearAllLevels-v5',
+      'entry_point': DiabloEnv_ClearAllLevels_v5 },
 
     # HRL Environment Classes
 
