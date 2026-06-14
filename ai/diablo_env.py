@@ -1258,7 +1258,12 @@ class RewardEvent(enum.Enum):
 class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     """Combat + exploration across all dungeon levels with the v2 action and
     observation set. Reward magnitudes live in the REWARDS class dict;
-    subclasses tune shaping by overriding individual entries."""
+    subclasses tune shaping by overriding individual entries.
+
+    PHASING_THREAT_DIST: None = reward phasing whenever any monster is visible
+    (legacy). Set to an integer N to reward phasing only when a monster is
+    within N cells; phasing with no nearby threat is penalised as SpellWasteful."""
+    PHASING_THREAT_DIST = None
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1493,13 +1498,25 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 ae = _SPELL_TO_ACTION.get(int(spell_id.value))
                 if ae is not None:
                     if ae == ActionEnum.CastPhasing:
-                        # Escape spell: reward when monsters are visible.
-                        if diablo_state.count_visible_monsters(env) > 0:
+                        # Escape spell: reward only when a real threat is nearby.
+                        dist = self.PHASING_THREAT_DIST
+                        EF = diablo_state.EnvironmentFlag
+                        if dist is None:
+                            threatened = diablo_state.count_visible_monsters(env) > 0
+                        else:
+                            threatened = diablo_state.player_has_nearby(
+                                env, self.view_radius, EF.Monster.value, dist)
+                        if threatened:
                             r = R[RewardEvent.SpellSuccessful]
                             if r:
                                 reward += r
                             made_progress = True
                             print("Successful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
+                        elif dist is not None:
+                            r = R[RewardEvent.SpellWasteful]
+                            if r:
+                                reward += r
+                            print("Wasteful %s spell, R %.2f" % (spell_id.name, r), file=self.log)
                     elif ae == ActionEnum.CastManaShield:
                         # Casting when already active wastes mana with no benefit.
                         if self.prev_mana_shield:
@@ -1658,6 +1675,14 @@ class DiabloEnv_ClearAllLevels_v5(DiabloEnv_ClearAllLevels_v0):
     }
 
 
+class DiabloEnv_ClearAllLevels_v6(DiabloEnv_ClearAllLevels_v5):
+    """Like v5 but phasing is only rewarded when a monster is within
+    PHASING_THREAT_DIST cells; otherwise penalised as SpellWasteful.
+    Prevents the agent from using phasing as free reward when no
+    immediate threat is present."""
+    PHASING_THREAT_DIST = 4
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1682,6 +1707,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v4 },
     { 'id': 'Diablo-ClearAllLevels-v5',
       'entry_point': DiabloEnv_ClearAllLevels_v5 },
+    { 'id': 'Diablo-ClearAllLevels-v6',
+      'entry_point': DiabloEnv_ClearAllLevels_v6 },
 
     # HRL Environment Classes
 
