@@ -417,9 +417,14 @@ def env_stats(args):
     else:
         order = sorted(counts)
 
-    freq_s = {k: "%.1f%%(%d)" % (100.0 * counts[k] / total_ev, counts[k]) for k in order}
-    w_freq = max(max(len(s) for s in freq_s.values()), len("freq"))
-    w_sum  = max(max(len("%.1f" % sums[k]) for k in order), len("sum_R"))
+    freq_s  = {k: "%.1f%%(%d)" % (100.0 * counts[k] / total_ev, counts[k]) for k in order}
+    if episodes_scanned:
+        per_ep_s = {k: "%.2f" % (counts[k] / episodes_scanned) for k in order}
+    else:
+        per_ep_s = {k: "" for k in order}
+    w_freq   = max(max(len(s) for s in freq_s.values()), len("freq"))
+    w_per_ep = max(max(len(s) for s in per_ep_s.values()), len("per_ep")) if episodes_scanned else 0
+    w_sum    = max(max(len("%.1f" % sums[k]) for k in order), len("sum_R"))
 
     MIN_COUNT = 4
     shown = [k for k in order if counts[k] >= MIN_COUNT]
@@ -432,16 +437,28 @@ def env_stats(args):
     run_suffix = ", run %s" % run_id if run_id else ""
     ep_suffix = ", %s" % ep_desc if ep_desc else ""
     print("Event frequency (%d total events, %d files%s%s):" % (total_ev, len(files), ep_suffix, run_suffix))
-    print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
-    print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
+    if w_per_ep:
+        print("%-*s  %-*s  %*s  label" % (w_freq, "freq", w_per_ep, "per_ep", w_sum, "sum_R"))
+        print("%s  %s  %s  %s" % ("-" * w_freq, "-" * w_per_ep, "-" * w_sum, "-" * 30))
+    else:
+        print("%-*s  %*s  label" % (w_freq, "freq", w_sum, "sum_R"))
+        print("%s  %s  %s" % ("-" * w_freq, "-" * w_sum, "-" * 30))
     for k in shown:
-        print("%-*s  %*.1f  %s" % (w_freq, freq_s[k], w_sum, sums[k], k))
+        if w_per_ep:
+            print("%-*s  %-*s  %*.1f  %s" % (w_freq, freq_s[k], w_per_ep, per_ep_s[k], w_sum, sums[k], k))
+        else:
+            print("%-*s  %*.1f  %s" % (w_freq, freq_s[k], w_sum, sums[k], k))
     if hidden:
         hid_cnt = sum(counts[k] for k in hidden)
         hid_sum = sum(sums[k] for k in hidden)
         hid_freq = "%.1f%%(%d)" % (100.0 * hid_cnt / total_ev, hid_cnt)
-        print("%-*s  %*.1f  ... %d labels skipped (count < %d)" % (
-            w_freq, hid_freq, w_sum, hid_sum, len(hidden), MIN_COUNT))
+        if w_per_ep:
+            hid_per_ep = "%.2f" % (hid_cnt / episodes_scanned)
+            print("%-*s  %-*s  %*.1f  ... %d labels skipped (count < %d)" % (
+                w_freq, hid_freq, w_per_ep, hid_per_ep, w_sum, hid_sum, len(hidden), MIN_COUNT))
+        else:
+            print("%-*s  %*.1f  ... %d labels skipped (count < %d)" % (
+                w_freq, hid_freq, w_sum, hid_sum, len(hidden), MIN_COUNT))
 
     if not lvl_out:
         return 0
