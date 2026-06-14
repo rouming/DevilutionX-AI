@@ -1803,20 +1803,11 @@ def cli_log(args,
 
     # renamed history: show ancestry diffs for run or head
     try:
-        _, heads, _ = sprout.get_tree()
-        run_id = None
-        if args.run:
-            run_id = args.run
-        elif args.head:
-            if args.head not in heads:
-                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
-                return 2
-            run_id = heads[args.head]
-        else:
-            print("ERROR: log requires --run or --head", file=sys.stderr)
-            return 2
+        _, run_id = sprout.get_run(run=args.run or None, head=args.head or None)
 
         chain = sprout.history_chain(run_id)
+        meta = sprout._load_meta()
+        heads = meta.get("heads", {})
         params: Dict[str, str] = {}
         for i, (rid, r) in enumerate(chain):
             run_params = r["params"]
@@ -1889,18 +1880,9 @@ def cli_show(args,
              skip_params=None,
              params_overrides_fn=None) -> int:
     try:
-        _, heads, _ = sprout.get_tree()
-        run_id = None
-        if args.run:
-            run_id = args.run
-        elif args.head:
-            if args.head not in heads:
-                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
-                return 2
-            run_id = heads[args.head]
-        else:
-            print("ERROR: show requires --run or --head", file=sys.stderr)
-            return 2
+        meta = sprout._load_meta()
+        _, run_id = sprout.get_run(run=args.run or None, head=args.head or None, meta=meta)
+        heads = meta.get("heads", {})
 
         chain = sprout.history_chain(run_id)
         rid, r = chain[-1]
@@ -2015,23 +1997,8 @@ def cli_exec(args, sprout: Sprout) -> int:
             print("ERROR: exec requires a command to be passed for execution", file=sys.stderr)
             return 2
 
-        run_id = None
-        if args.run:
-            run_id = args.run
-        elif args.head:
-            _, heads, _ = sprout.get_tree()
-            if args.head not in heads:
-                print(f"ERROR: head '{args.head}' not found", file=sys.stderr)
-                return 2
-            run_id = heads[args.head]
-        else:
-            print("ERROR: exec requires --run or --head", file=sys.stderr)
-            return 2
-
         meta = sprout._load_meta()
-        runs = meta.get("runs", {})
-        if run_id not in runs:
-            raise SproutError(f"run '{run_id}' not found")
+        _, run_id = sprout.get_run(run=args.run or None, head=args.head or None, meta=meta)
         active_head = sprout._active_head_for_run(run_id, meta)
 
         cmd = list(args.exec_cmd)
