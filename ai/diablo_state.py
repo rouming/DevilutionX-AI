@@ -796,18 +796,13 @@ def count_visible_monsters(env):
     return np.sum((env & EnvironmentFlag.Monster.value) != 0)
 
 @njit(cache=True)
-def player_has_adjacent(env, view_radius, mask, exclude_mask):
-    """Return True if any of the 8 tiles adjacent to the player matches:
+def player_has_nearby(env, view_radius, mask, distance, exclude_mask=0):
+    """Return True if any tile within `distance` cells of the player matches:
       (t & mask) != 0 and (t & exclude_mask) == 0.
-    Player is always at (view_radius, view_radius) in the windowed env.
-
-    Typical calls:
-      player_has_adjacent(env, r, Monster,                    0)    - melee target
-      player_has_adjacent(env, r, Item|Interactable|Door, Open)    - pickup/open target
-    """
+    Player is always at (view_radius, view_radius) in the windowed env."""
     rows, cols = env.shape
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
+    for dy in range(-distance, distance + 1):
+        for dx in range(-distance, distance + 1):
             if dx == 0 and dy == 0:
                 continue
             x = view_radius + dx
@@ -817,6 +812,18 @@ def player_has_adjacent(env, view_radius, mask, exclude_mask):
                 if t & mask and not (t & exclude_mask):
                     return True
     return False
+
+@njit(cache=True)
+def player_has_adjacent(env, view_radius, mask, exclude_mask):
+    """Return True if any of the 8 tiles adjacent to the player matches:
+      (t & mask) != 0 and (t & exclude_mask) == 0.
+    Player is always at (view_radius, view_radius) in the windowed env.
+
+    Typical calls:
+      player_has_adjacent(env, r, Monster,                    0)    - melee target
+      player_has_adjacent(env, r, Item|Interactable|Door, Open)    - pickup/open target
+    """
+    return player_has_nearby(env, view_radius, mask, 1, exclude_mask)
 
 @njit(cache=True)
 def count_explored_tiles(d):
