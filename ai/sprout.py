@@ -1654,7 +1654,7 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
 
     if headnames:
         dot = color("●", rgb=(0, 255, 0), bold=True)
-        ident = dot + " " + " ".join(color(h, bold=True) for h in headnames)
+        ident = dot + " " + color(rid) + " " + " ".join(color(h, bold=True) for h in headnames)
     else:
         ident = color(rid[:8])
 
@@ -1824,7 +1824,7 @@ def cli_log(args,
             ts = to_iso(r["created_at"])
             active_heads = [h for h, run in heads.items() if run == rid]
             if active_heads:
-                rid_or_head = active_heads[0]
+                rid_or_head = f"{rid} {active_heads[0]}"
             else:
                 rid_or_head = rid
             title = f"> {rid_or_head}{alias} at {ts}"
@@ -1902,7 +1902,7 @@ def cli_show(args,
 
         alias = f" ({r['alias']})" if r.get("alias") else ""
         ts = to_iso(r["created_at"])
-        rid_or_head = active_heads[0] if active_heads else rid
+        rid_or_head = f"{rid} {active_heads[0]}" if active_heads else rid
         title = f"> {rid_or_head}{alias} at {ts}"
         print()
         print(color(title, bold=True))
