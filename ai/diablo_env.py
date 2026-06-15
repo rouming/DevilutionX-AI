@@ -1270,6 +1270,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     so distance 2 avoids penalising efficient pre-emptive strikes."""
     PHASING_THREAT_DIST  = None
     WASTED_PRIMARY_DIST  = 1
+    ENV_VERSION          = 0
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1590,17 +1591,24 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             elif self.view_radius is not None:
                 EF = diablo_state.EnvironmentFlag
                 if action == ActionEnum.PrimaryAction.value:
-                    if not diablo_state.player_has_nearby(
-                            env, self.view_radius,
-                            EF.Monster.value, self.WASTED_PRIMARY_DIST):
+                    has_target = diablo_state.player_has_nearby(
+                        env, self.view_radius,
+                        EF.Monster.value, self.WASTED_PRIMARY_DIST)
+                    if not has_target and self.ENV_VERSION >= 8:
+                        obj_mask = EF.Interactable.value | EF.Door.value | EF.Barrel.value
+                        has_target = diablo_state.player_has_adjacent(
+                            env, self.view_radius, obj_mask, 0)
+                    if not has_target:
                         r = R[RewardEvent.WastedPrimary]
                         if r:
                             reward += r
                         print("Wasted primary, R %.2f" % r, file=self.log)
                 elif action == ActionEnum.SecondaryAction.value:
+                    sec_mask = EF.Item.value | EF.Interactable.value
+                    if self.ENV_VERSION >= 8:
+                        sec_mask |= EF.Door.value | EF.Barrel.value
                     if not diablo_state.player_has_adjacent(
-                            env, self.view_radius,
-                            EF.Item.value | EF.Interactable.value, 0):
+                            env, self.view_radius, sec_mask, 0):
                         r = R[RewardEvent.WastedSecondary]
                         if r:
                             reward += r
@@ -1700,6 +1708,16 @@ class DiabloEnv_ClearAllLevels_v7(DiabloEnv_ClearAllLevels_v6):
     }
 
 
+class DiabloEnv_ClearAllLevels_v8(DiabloEnv_ClearAllLevels_v7):
+    """Like v7 but fixes wasted-action detection to match engine mechanics.
+    Primary is not penalised when an object (door/barrel/chest/...) is
+    adjacent since the engine operates it with primary when no monster is
+    targeted. Secondary mask extended with Door and Barrel for the same
+    reason."""
+    ENV_VERSION = 8
+
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1728,6 +1746,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v6 },
     { 'id': 'Diablo-ClearAllLevels-v7',
       'entry_point': DiabloEnv_ClearAllLevels_v7 },
+    { 'id': 'Diablo-ClearAllLevels-v8',
+      'entry_point': DiabloEnv_ClearAllLevels_v8 },
 
     # HRL Environment Classes
 
