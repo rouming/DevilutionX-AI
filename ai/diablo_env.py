@@ -1262,8 +1262,14 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
 
     PHASING_THREAT_DIST: None = reward phasing whenever any monster is visible
     (legacy). Set to an integer N to reward phasing only when a monster is
-    within N cells; phasing with no nearby threat is penalised as SpellWasteful."""
-    PHASING_THREAT_DIST = None
+    within N cells; phasing with no nearby threat is penalised as SpellWasteful.
+
+    WASTED_PRIMARY_DIST: distance used to decide whether a PrimaryAction is
+    wasted. Default 1 (adjacent only). With skipped walk animation a monster
+    at distance 2 arrives on the adjacent cell in the same tick as the attack,
+    so distance 2 avoids penalising efficient pre-emptive strikes."""
+    PHASING_THREAT_DIST  = None
+    WASTED_PRIMARY_DIST  = 1
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1584,10 +1590,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             elif self.view_radius is not None:
                 EF = diablo_state.EnvironmentFlag
                 if action == ActionEnum.PrimaryAction.value:
-                    # Penalize attack with no adjacent monster (melee assumed).
-                    if not diablo_state.player_has_adjacent(
+                    if not diablo_state.player_has_nearby(
                             env, self.view_radius,
-                            EF.Monster.value, 0):
+                            EF.Monster.value, self.WASTED_PRIMARY_DIST):
                         r = R[RewardEvent.WastedPrimary]
                         if r:
                             reward += r
@@ -1683,6 +1688,18 @@ class DiabloEnv_ClearAllLevels_v6(DiabloEnv_ClearAllLevels_v5):
     PHASING_THREAT_DIST = 4
 
 
+class DiabloEnv_ClearAllLevels_v7(DiabloEnv_ClearAllLevels_v6):
+    """Like v6 but WastedPrimary penalty raised to -0.10 and checked at
+    distance 2. With skipped walk animation a monster at distance 2 arrives
+    adjacent in the same tick as the attack, so pre-emptive strikes are valid
+    and must not be penalised. Empty-space attacks are penalised harder."""
+    WASTED_PRIMARY_DIST = 2
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v6.REWARDS,
+        RewardEvent.WastedPrimary: -0.10,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1709,6 +1726,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v5 },
     { 'id': 'Diablo-ClearAllLevels-v6',
       'entry_point': DiabloEnv_ClearAllLevels_v6 },
+    { 'id': 'Diablo-ClearAllLevels-v7',
+      'entry_point': DiabloEnv_ClearAllLevels_v7 },
 
     # HRL Environment Classes
 
