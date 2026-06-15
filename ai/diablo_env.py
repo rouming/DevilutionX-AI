@@ -1717,6 +1717,16 @@ class DiabloEnv_ClearAllLevels_v8(DiabloEnv_ClearAllLevels_v7):
     ENV_VERSION = 8
 
 
+class DiabloEnv_ClearAllLevels_v9(DiabloEnv_ClearAllLevels_v8):
+    """Like v8 but raises WastedPrimary and WastedSecondary penalties to
+    -0.15."""
+    ENV_VERSION = 9
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v8.REWARDS,
+        RewardEvent.WastedPrimary:   -0.15,
+        RewardEvent.WastedSecondary: -0.15,
+    }
+
 
 from gymnasium.envs.registration import register
 
@@ -1748,6 +1758,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v7 },
     { 'id': 'Diablo-ClearAllLevels-v8',
       'entry_point': DiabloEnv_ClearAllLevels_v8 },
+    { 'id': 'Diablo-ClearAllLevels-v9',
+      'entry_point': DiabloEnv_ClearAllLevels_v9 },
 
     # HRL Environment Classes
 
