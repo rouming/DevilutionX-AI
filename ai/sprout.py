@@ -1644,6 +1644,18 @@ def _graph_row(slots, node_col):
         parts.append('*' if i == node_col else ('|' if s is not None else ' '))
     return ' '.join(parts)
 
+def _run_label(rid, headnames, colored=False):
+    """'rid' alone, or 'rid head ...' when heads are listed.
+    colored=True: adds the active-head dot and ANSI escapes (tree view).
+    colored=False: plain text suitable for embedding in title strings."""
+    if not headnames:
+        return color(rid[:8]) if colored else rid
+    if colored:
+        dot = color("●", rgb=(0, 255, 0), bold=True)
+        return dot + " " + color(rid) + " " + " ".join(color(h, bold=True) for h in headnames)
+    return rid + " " + " ".join(headnames)
+
+
 def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_children=True,
                       params_diff=None):
     """Return list of lines for this node (first line = node, rest = param diffs)."""
@@ -1652,11 +1664,7 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
     headnames = sorted(run_to_heads.get(rid, []))
     alias = f" ({r['alias']})" if r.get("alias") else ""
 
-    if headnames:
-        dot = color("●", rgb=(0, 255, 0), bold=True)
-        ident = dot + " " + color(rid) + " " + " ".join(color(h, bold=True) for h in headnames)
-    else:
-        ident = color(rid[:8])
+    ident = _run_label(rid, headnames, colored=True)
 
     term_w = shutil.get_terminal_size((80, 20)).columns if sys.stdout.isatty() else 80
     # cont lines: '| |   ' = (2*slots-1) + 3 spaces; use that as the binding constraint
@@ -1823,11 +1831,7 @@ def cli_log(args,
             alias = f" ({r['alias']})" if r.get("alias") else ""
             ts = to_iso(r["created_at"])
             active_heads = [h for h, run in heads.items() if run == rid]
-            if active_heads:
-                rid_or_head = f"{rid} {active_heads[0]}"
-            else:
-                rid_or_head = rid
-            title = f"> {rid_or_head}{alias} at {ts}"
+            title = f"> {_run_label(rid, active_heads)}{alias} at {ts}"
             if i > 0:
                 print()
             print(color(title, bold=True))
@@ -1902,8 +1906,7 @@ def cli_show(args,
 
         alias = f" ({r['alias']})" if r.get("alias") else ""
         ts = to_iso(r["created_at"])
-        rid_or_head = f"{rid} {active_heads[0]}" if active_heads else rid
-        title = f"> {rid_or_head}{alias} at {ts}"
+        title = f"> {_run_label(rid, active_heads)}{alias} at {ts}"
         print()
         print(color(title, bold=True))
 
