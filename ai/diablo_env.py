@@ -1268,9 +1268,10 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     wasted. Default 1 (adjacent only). With skipped walk animation a monster
     at distance 2 arrives on the adjacent cell in the same tick as the attack,
     so distance 2 avoids penalising efficient pre-emptive strikes."""
-    PHASING_THREAT_DIST  = None
-    WASTED_PRIMARY_DIST  = 1
-    ENV_VERSION          = 0
+    PHASING_THREAT_DIST      = None
+    WASTED_PRIMARY_DIST      = 1
+    ENV_VERSION              = 0
+    WASTED_PRIMARY_STRICT    = False
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1594,7 +1595,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     has_target = diablo_state.player_has_nearby(
                         env, self.view_radius,
                         EF.Monster.value, self.WASTED_PRIMARY_DIST)
-                    if not has_target and self.ENV_VERSION >= 8:
+                    if not has_target and self.ENV_VERSION >= 8 and not self.WASTED_PRIMARY_STRICT:
                         obj_mask = EF.Interactable.value | EF.Door.value | EF.Barrel.value
                         has_target = diablo_state.player_has_adjacent(
                             env, self.view_radius, obj_mask, 0)
@@ -1728,6 +1729,18 @@ class DiabloEnv_ClearAllLevels_v9(DiabloEnv_ClearAllLevels_v8):
     }
 
 
+class DiabloEnv_ClearAllLevels_v80(DiabloEnv_ClearAllLevels_v8):
+    """Temporary: strict action separation test. Primary penalised whenever
+    no monster is within dist=2 (objects do not exempt it). Secondary uses
+    v8 mask (Door/Barrel included). Rewards kept at v7 levels."""
+    WASTED_PRIMARY_STRICT = True
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v8.REWARDS,
+        RewardEvent.WastedPrimary:   -0.10,
+        RewardEvent.WastedSecondary: -0.05,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1760,6 +1773,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v8 },
     { 'id': 'Diablo-ClearAllLevels-v9',
       'entry_point': DiabloEnv_ClearAllLevels_v9 },
+    { 'id': 'Diablo-ClearAllLevels-v80',
+      'entry_point': DiabloEnv_ClearAllLevels_v80 },
 
     # HRL Environment Classes
 
