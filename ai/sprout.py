@@ -1987,7 +1987,7 @@ def cli_fetch(args, sprout: Sprout):
         sprout._borg_delete_repo_cache()
         sh(f"rm -f ~/.config/borg/security/{repo_id}/manifest-timestamp")
 
-    cmd = f"rsync -avz --delete --ignore-errors --inplace --partial {src_host} {args.working} || true"
+    cmd = f"rsync -avz --delete --ignore-errors --delay-updates --partial-dir=.partial {src_host} {args.working} || true"
     for out in sh(cmd, stream=True):
         print(out)
 
