@@ -1,0 +1,12 @@
+# Backup image for AI model checkpoints.
+# Build and push from repo root:
+#   docker build -t USER/devilutionx-ai-models:TAG -f Dockerfile.models .
+#   docker push USER/devilutionx-ai-models:TAG
+#
+# Restore:
+#   docker create --name tmp USER/devilutionx-ai-models:TAG
+#   docker cp tmp:/models/. ai/models/
+#   docker rm tmp
+
+FROM scratch
+COPY ai/models /models
