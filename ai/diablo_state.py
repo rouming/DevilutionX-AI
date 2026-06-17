@@ -564,6 +564,8 @@ def write_env_stats(path, eval_runners, last_episodes, run_id=None):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.write(buf.getvalue())
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 

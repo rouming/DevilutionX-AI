@@ -32,6 +32,8 @@ def get_status(model_dir, best=False):
 def save_status(status, model_dir):
     path = get_status_path(model_dir)
     torch.save(status, path)
+    with open(path, 'rb') as f:
+        os.fsync(f.fileno())
 
 
 def get_vocab(model_dir):

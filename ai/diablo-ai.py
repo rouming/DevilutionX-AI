@@ -2311,6 +2311,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 src_path = utils.get_status_path(model_dir, best=False)
                 dst_path = utils.get_status_path(model_dir, best=True)
                 shutil.copyfile(src_path, dst_path)
+                with open(dst_path, 'rb') as f:
+                    os.fsync(f.fileno())
                 txt_logger.info("Success rate {: .3f}; best model is saved".format(success_rate))
                 eval_dict["best"] = snap
 

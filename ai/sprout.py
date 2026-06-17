@@ -167,6 +167,8 @@ def read_json(path: str):
 def write_json(path: str, obj) -> None:
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
 
 def random_sha8(rng: random.Random) -> str:
     return "".join(rng.choices(string.hexdigits.lower(), k=8))
