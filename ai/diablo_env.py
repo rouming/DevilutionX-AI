@@ -1718,6 +1718,18 @@ class DiabloEnv_ClearAllLevels_v8(DiabloEnv_ClearAllLevels_v7):
     ENV_VERSION = 8
 
 
+class DiabloEnv_ClearAllLevels_v9(DiabloEnv_ClearAllLevels_v8):
+    """Like v8 but SpellUnavailable penalty doubled from -0.10 to -0.20.
+    Targets the growing pattern of Fireball attempts on empty mana - at
+    -0.10 the expected value of spamming is still marginally positive, so
+    the agent keeps doing it. -0.20 makes it clearly negative."""
+    ENV_VERSION = 9
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v8.REWARDS,
+        RewardEvent.SpellUnavailable: -0.20,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1748,6 +1760,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v7 },
     { 'id': 'Diablo-ClearAllLevels-v8',
       'entry_point': DiabloEnv_ClearAllLevels_v8 },
+    { 'id': 'Diablo-ClearAllLevels-v9',
+      'entry_point': DiabloEnv_ClearAllLevels_v9 },
 
     # HRL Environment Classes
 
