@@ -1718,29 +1718,6 @@ class DiabloEnv_ClearAllLevels_v8(DiabloEnv_ClearAllLevels_v7):
     ENV_VERSION = 8
 
 
-class DiabloEnv_ClearAllLevels_v9(DiabloEnv_ClearAllLevels_v8):
-    """Like v8 but raises WastedPrimary and WastedSecondary penalties to
-    -0.15."""
-    ENV_VERSION = 9
-    REWARDS = {
-        **DiabloEnv_ClearAllLevels_v8.REWARDS,
-        RewardEvent.WastedPrimary:   -0.15,
-        RewardEvent.WastedSecondary: -0.15,
-    }
-
-
-class DiabloEnv_ClearAllLevels_v80(DiabloEnv_ClearAllLevels_v8):
-    """Temporary: strict action separation test. Primary penalised whenever
-    no monster is within dist=2 (objects do not exempt it). Secondary uses
-    v8 mask (Door/Barrel included). Rewards kept at v7 levels."""
-    WASTED_PRIMARY_STRICT = True
-    REWARDS = {
-        **DiabloEnv_ClearAllLevels_v8.REWARDS,
-        RewardEvent.WastedPrimary:   -0.10,
-        RewardEvent.WastedSecondary: -0.05,
-    }
-
-
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1771,10 +1748,6 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v7 },
     { 'id': 'Diablo-ClearAllLevels-v8',
       'entry_point': DiabloEnv_ClearAllLevels_v8 },
-    { 'id': 'Diablo-ClearAllLevels-v9',
-      'entry_point': DiabloEnv_ClearAllLevels_v9 },
-    { 'id': 'Diablo-ClearAllLevels-v80',
-      'entry_point': DiabloEnv_ClearAllLevels_v80 },
 
     # HRL Environment Classes
 
