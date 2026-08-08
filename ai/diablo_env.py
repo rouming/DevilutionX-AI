@@ -1730,6 +1730,22 @@ class DiabloEnv_ClearAllLevels_v9(DiabloEnv_ClearAllLevels_v8):
     }
 
 
+class DiabloEnv_ClearAllLevels_v10(DiabloEnv_ClearAllLevels_v9):
+    """Like v9 but raises WastedPrimary, WastedSecondary, and SpellWasteful
+    all to -0.15. v9 tried the same attack-waste increase on v8 and failed,
+    but on v9 the spell-spam problem is already solved; the agent can now
+    focus on reducing wasteful attacks without fighting two penalty fronts
+    at once. SpellWasteful goes from -0.10 to -0.15 (not -0.20) to avoid
+    over-suppressing phasing which is still net-positive at current rates."""
+    ENV_VERSION = 10
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v9.REWARDS,
+        RewardEvent.WastedPrimary:   -0.15,
+        RewardEvent.WastedSecondary: -0.15,
+        RewardEvent.SpellWasteful:   -0.15,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1762,6 +1778,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v8 },
     { 'id': 'Diablo-ClearAllLevels-v9',
       'entry_point': DiabloEnv_ClearAllLevels_v9 },
+    { 'id': 'Diablo-ClearAllLevels-v10',
+      'entry_point': DiabloEnv_ClearAllLevels_v10 },
 
     # HRL Environment Classes
 
