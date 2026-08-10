@@ -1246,6 +1246,7 @@ class RewardEvent(enum.Enum):
     RestoreManaWasteful  = enum.auto()
     RestoreManaNoPot     = enum.auto()
     SpellUnavailable   = enum.auto()
+    SpellManaDepleted  = enum.auto()
     SpellSuccessful    = enum.auto()
     SpellWasteful      = enum.auto()
     SpellRedundantShield = enum.auto()
@@ -1293,6 +1294,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         RewardEvent.RestoreManaWasteful: -0.10,
         RewardEvent.RestoreManaNoPot:    -0.10,
         RewardEvent.SpellUnavailable:    -0.10,
+        RewardEvent.SpellManaDepleted:    0.0,
         RewardEvent.SpellSuccessful:     +0.15,
         RewardEvent.SpellWasteful:       -0.10,
         RewardEvent.SpellRedundantShield:-0.10,
@@ -1498,6 +1500,11 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     if r:
                         reward += r
                     print("Unavailable %s spell, R %.2f" % (spell_id.name, r), file=self.log)
+                elif self.ENV_VERSION >= 11 and mana == self.prev_mana:
+                    r = R[RewardEvent.SpellManaDepleted]
+                    if r:
+                        reward += r
+                    print("Mana depleted %s spell, R %.2f" % (spell_id.name, r), file=self.log)
 
             # Spell cast reward: animation skipped so PM_SPELL lasts 1 tick;
             # may fire later than the action was submitted.
@@ -1746,6 +1753,18 @@ class DiabloEnv_ClearAllLevels_v10(DiabloEnv_ClearAllLevels_v9):
     }
 
 
+class DiabloEnv_ClearAllLevels_v11(DiabloEnv_ClearAllLevels_v10):
+    """Like v10 but adds SpellManaDepleted penalty for casting when mana is
+    insufficient. Previously these attempts were silent no-ops with zero
+    cost; the agent could freely spam spells on a depleted mana pool.
+    -0.20 matches SpellUnavailable so both failure modes carry equal weight."""
+    ENV_VERSION = 11
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v10.REWARDS,
+        RewardEvent.SpellManaDepleted: -0.20,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1780,6 +1799,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v9 },
     { 'id': 'Diablo-ClearAllLevels-v10',
       'entry_point': DiabloEnv_ClearAllLevels_v10 },
+    { 'id': 'Diablo-ClearAllLevels-v11',
+      'entry_point': DiabloEnv_ClearAllLevels_v11 },
 
     # HRL Environment Classes
 
