@@ -38,6 +38,9 @@ enum ring_entry_type {
 
 	RING_ENTRY_KEY_CAST_SPELL      = 1<<20, /* data1 = SpellID */
 
+	/* Stat assignment: data1 bits[7:0]=Str, [15:8]=Mag, [23:16]=Dex, [31:24]=Vit */
+	RING_ENTRY_KEY_STAT_ASSIGN     = 1<<21,
+
 	/* Events */
 	RING_ENTRY_EVENT_STEP_FINISHED = 1<<30,
 

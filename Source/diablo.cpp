@@ -816,6 +816,17 @@ void GameEventHandler(const SDL_Event &event, uint16_t modState)
 	}
 }
 
+static _cmd_id AttributeToCmd(CharacterAttribute attr)
+{
+	switch (attr) {
+	case CharacterAttribute::Strength:  return CMD_ADDSTR;
+	case CharacterAttribute::Magic:     return CMD_ADDMAG;
+	case CharacterAttribute::Dexterity: return CMD_ADDDEX;
+	case CharacterAttribute::Vitality:  return CMD_ADDVIT;
+	}
+	app_fatal("AttributeToCmd: unknown attribute");
+}
+
 static bool
 inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 				  uint32_t data1, uint32_t data2)
@@ -996,6 +1007,33 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 						       static_cast<unsigned>(spellType));
 					}
 				}
+			}
+			continue;
+
+		} else if (bit == RING_ENTRY_KEY_STAT_ASSIGN) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				Player &p = *MyPlayer;
+				struct { CharacterAttribute attr; int pts; } assigns[] = {
+					{ CharacterAttribute::Strength,  (int)(data1 >>  0) & 0xFF },
+					{ CharacterAttribute::Magic,     (int)(data1 >>  8) & 0xFF },
+					{ CharacterAttribute::Dexterity, (int)(data1 >> 16) & 0xFF },
+					{ CharacterAttribute::Vitality,  (int)(data1 >> 24) & 0xFF },
+				};
+				for (auto &a : assigns) {
+					if (a.pts <= 0) continue;
+					int pts = std::min(a.pts,
+					    p.GetMaximumAttributeValue(a.attr) - p.GetBaseAttributeValue(a.attr));
+					pts = std::min(pts, p._pStatPts);
+					if (pts <= 0) continue;
+					NetSendCmdParam1(true, AttributeToCmd(a.attr), pts);
+					p._pStatPts -= pts;
+				}
+				printf(">> %s: STAT_ASSIGN str=%u mag=%u dex=%u vit=%u pStatPts=%d\n",
+				       __func__,
+				       (data1 >>  0) & 0xFF, (data1 >>  8) & 0xFF,
+				       (data1 >> 16) & 0xFF, (data1 >> 24) & 0xFF,
+				       p._pStatPts);
 			}
 			continue;
 
