@@ -59,9 +59,13 @@ class RingEntryType:
     RING_ENTRY_KEY_INV_MOVE_ITEM   = 1<<17  # data1 = src_slot, data2 = dst_slot
     RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18  # data1 = item_slot
     RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19
+    RING_ENTRY_KEY_INV_REPAIR_ITEM = 1<<22  # data1 = cii
 
     # Spell cast: auto-targets via the gamepad QuickCast path on the engine side.
     RING_ENTRY_KEY_CAST_SPELL      = 1<<20  # data1 = SpellID
+
+    # Stat assignment: data1 bits[7:0]=Str, [15:8]=Mag, [23:16]=Dex, [31:24]=Vit
+    RING_ENTRY_KEY_STAT_ASSIGN     = 1<<21
 
     # Events
     RING_ENTRY_EVENT_STEP_FINISHED = 1<<30

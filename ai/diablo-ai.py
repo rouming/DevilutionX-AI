@@ -75,9 +75,9 @@ def parse_dungeon_level(s):
             lo, hi = int(lo_s), int(hi_s)
         else:
             lo = hi = int(lvl_part)
-        if not (1 <= lo <= hi <= 16):
+        if not (0 <= lo <= hi <= 16):
             raise argparse.ArgumentTypeError(
-                "dungeon level must be within 1-16, got %r" % entry)
+                "dungeon level must be within 0-16, got %r" % entry)
         for lvl in range(lo, hi + 1):
             result.append((lvl, weight))
             if is_auto:
@@ -85,6 +85,13 @@ def parse_dungeon_level(s):
     if not result:
         raise argparse.ArgumentTypeError("empty dungeon level spec: %r" % s)
     return DungeonLevelSpec(sorted(result), auto_levels)
+
+def _parse_stat_strategy_arg(s):
+    from diablo_agent import AgentAI
+    try:
+        return AgentAI.validate_stat_strategy(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
 
 def _compress_level_ranges(levels):
     """Compress sorted list of ints into a single range string: [1,2,3,5] -> '1-3,5'."""
@@ -253,6 +260,7 @@ def make_diablo_parser():
                      '--blind-monsters',
                      '--harmless-barrels',
                      '--no-butcher',
+                     '--enable-quests',
                      '--seed-base',
                      '--fixed-seed']
     }
@@ -317,6 +325,9 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--no-butcher", action="store_true",
         help="Skip placing The Butcher on level 2")
+    common_parser.add_argument(
+        "--enable-quests", action="store_true",
+        help="Enable quests (default: quests are disabled; use this to re-enable them)")
     common_parser.add_argument(
         "--spell-potency", type=float, default=0.0, metavar="PROB",
         help="Spell potency multiplier [0.0, 1.0]: 0=normal engine rules, 1=spells one-shot any monster (default: 0.0)")
@@ -444,6 +455,49 @@ def make_diablo_parser():
     play_bot_parser.add_argument(
         "--episodes", type=str, default='1',
         help="Number of episodes to evaluate (default: 1)")
+
+    #
+    # agent-ai
+    #
+    agent_ai_parser = subparsers.add_parser(
+        "agent-ai", parents=[common_parser, common_ai_parser],
+        help="Run the algorithmic agent supervisor with a trained RL model "
+             "through the full game (town + all 16 dungeon levels).",
+        formatter_class=IndentedHelpFormatter)
+    agent_ai_parser.add_argument(
+        "--env", required=True,
+        help="Name of the environment the model was trained on (REQUIRED)")
+    agent_ai_parser.add_argument(
+        "--model", required=True,
+        help="Name of the trained model (REQUIRED)")
+    agent_ai_parser.add_argument(
+        "--best", action="store_true", default=False,
+        help="Load best checkpoint instead of the latest")
+    agent_ai_parser.add_argument(
+        "--argmax", action="store_true", default=False,
+        help="Select the action with highest probability instead of sampling (default: False)")
+    agent_ai_parser.add_argument(
+        "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
+        help="Stat allocation: named preset ('dex-rush', 'str-vit') or "
+             "per-level spec '1-7=2s2v1d,8+=5s' (s/m/d/v, N+ open-ended, sum=5)")
+    agent_ai_parser.add_argument(
+        "--kill-threshold", type=float, default=0.5,
+        help="Fraction of monsters to kill before pathfinding to stairs (default: 0.5)")
+    agent_ai_parser.add_argument(
+        "--repair-threshold", type=float, default=0.25,
+        help="Repair equipped gear when durability falls below this fraction (default: 0.25)")
+    agent_ai_parser.add_argument(
+        "--max-steps-per-level", type=int, default=3000,
+        help="Step budget per level before forcing pathfind to stairs (default: 3000)")
+    agent_ai_parser.add_argument(
+        "--no-gear-management", action="store_true", default=False,
+        help="Disable all gear management (equip and repair)")
+    agent_ai_parser.add_argument(
+        "--safe-radius", type=int, default=2,
+        help="Monster-free radius required for gear management: 0=always, N=only when no monster within N tiles (default: 2)")
+    agent_ai_parser.add_argument(
+        "--pause", type=float, default=0,
+        help="Seconds to pause between agent steps, useful in GUI mode (default: 0)")
 
     #
     # train-ai
@@ -2637,6 +2691,64 @@ def play_ai(args, gameconfig):
     return 0
 
 
+def agent_ai(args, gameconfig):
+    from diablo_agent import AgentAI, ModelRunner
+    from rl.flat_model import FlatACModel
+    from rl.hrl_model import HRLACModel
+    from rl.utils import device
+
+    model_dir = utils.get_run_dir(args.model)
+    if not os.path.isdir(model_dir):
+        raise RuntimeError(f"model folder '{model_dir}' does not exist")
+
+    print(f"Device: {device}\n")
+
+    # Create one env instance to obtain obs/action space metadata and a game
+    env_config = copy.deepcopy(gameconfig)
+    env_config['index'] = 0
+    EnvClass = utils.get_env_class(args.env)
+    EnvClass.tune_config(env_config)
+    game = diablo_state.DiabloGame.run_or_attach(env_config)
+    env  = utils.make_env(args.env, env_config, game)
+
+    obs_space            = env.unwrapped.observation_space
+    action_space         = env.unwrapped.action_space
+    num_hierarchy_levels = env.unwrapped.num_hierarchy_levels
+
+    obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
+    if hasattr(preprocess_obss, "vocab"):
+        preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
+
+    if num_hierarchy_levels == 1:
+        acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                              embedding_dim=args.embedding_dim,
+                              use_memory=True, use_text=False)
+    else:
+        acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                             embedding_dim=args.embedding_dim,
+                             use_memory=True, use_text=False)
+
+    acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
+    acmodel.to(device)
+    acmodel.eval()
+
+    model_runner = ModelRunner(acmodel, preprocess_obss, device, argmax=args.argmax)
+    supervisor   = AgentAI(
+        game, model_runner,
+        view_radius=gameconfig['view-radius'],
+        kill_threshold=args.kill_threshold,
+        repair_threshold=args.repair_threshold,
+        max_steps_per_level=args.max_steps_per_level,
+        no_gear_management=args.no_gear_management,
+        safe_radius=args.safe_radius,
+        pause=args.pause,
+        stat_strategy=args.stat_strategy)
+    supervisor.run()
+
+    env.close()
+    return 0
+
+
 def play_bot(args, gameconfig):
     from rl.imitation import BotEnv, ImitationLearning
     from rl.torch_ac.utils import ParallelEnvPool
@@ -2750,6 +2862,7 @@ def main():
         "blind-monsters": args.blind_monsters,
         "harmless-barrels": args.harmless_barrels,
         "no_butcher": args.no_butcher,
+        "no-quests": not args.enable_quests,
         "spell-potency": args.spell_potency,
         "no-spells": args.no_spells,
         "stats-scale": args.stats_scale,
@@ -2820,6 +2933,8 @@ def main():
         return train_il(args, gameconfig)
     if args.command == 'play-ai':
         return play_ai(args, gameconfig)
+    if args.command == 'agent-ai':
+        return agent_ai(args, gameconfig)
     if args.command == 'play-bot':
         return play_bot(args, gameconfig)
 

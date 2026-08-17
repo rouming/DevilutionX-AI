@@ -297,25 +297,6 @@ class FindRandomGoal_Bot:
         r, c = player_pos_local
         nr, nc = step_point_local
 
-        def direction_to_action(direction):
-            """Direction is (x,y), the (0,0) is in the upper left corner"""
-            if direction == (-1, 1):
-                return diablo_env.ActionEnum.Walk_SW.value
-            elif direction == (0, 1):
-                return diablo_env.ActionEnum.Walk_S.value
-            elif direction == (1, 1):
-                return diablo_env.ActionEnum.Walk_SE.value
-            elif direction == (-1, 0):
-                return diablo_env.ActionEnum.Walk_W.value
-            elif direction == (1, 0):
-                return diablo_env.ActionEnum.Walk_E.value
-            elif direction == (-1, -1):
-                return diablo_env.ActionEnum.Walk_NW.value
-            elif direction == (0, -1):
-                return diablo_env.ActionEnum.Walk_N.value
-            elif direction == (1, -1):
-                return diablo_env.ActionEnum.Walk_NE.value
-            assert 0, f"Incorrect direction {direction}"
 
         diag_move = (sum(np.abs(move_dir)) == 2)
         barrel_or_item = (diablo_state.EnvironmentFlag.Barrel.value |
@@ -355,30 +336,13 @@ class FindRandomGoal_Bot:
             # want to break a barrel, and if we are not facing it we
             # can accidentally open a neighboring door instead.
             #
-            match diablo_state.player_direction(d):
-                case dx.Direction.North.value:
-                    player_dir = (0, -1)
-                case dx.Direction.NorthEast.value:
-                    player_dir = (1, -1)
-                case dx.Direction.East.value:
-                    player_dir = (1, 0)
-                case dx.Direction.SouthEast.value:
-                    player_dir = (1, 1)
-                case dx.Direction.South.value:
-                    player_dir = (0, 1)
-                case dx.Direction.SouthWest.value:
-                    player_dir = (-1, 1)
-                case dx.Direction.West.value:
-                    player_dir = (-1, 0)
-                case dx.Direction.NorthWest.value:
-                    player_dir = (-1, -1)
-
+            player_dir = diablo_env.player_direction_delta(d)
             if move_dir != player_dir:
-                action = direction_to_action(move_dir)
+                action = diablo_env.direction_to_action(move_dir)
             else:
                 action = diablo_env.ActionEnum.SecondaryAction.value
         else:
-            action = direction_to_action(move_dir)
+            action = diablo_env.direction_to_action(move_dir)
 
         # Perform an environment step if the bot has control
         if not self.controlled_by_env:

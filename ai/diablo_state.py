@@ -834,7 +834,7 @@ def count_explored_tiles(d):
 
 @njit(cache=True)
 def find_trigger(d, tmsg):
-    for trig in d.trigs:
+    for trig in d.trigs[:d.numtrigs.value]:
         if trig._tmsg == tmsg.value:
             return trig
     return None
@@ -1782,6 +1782,7 @@ class DiabloGame:
                          blind_monsters=1 if config["blind-monsters"] else 0,
                          harmless_barrels=1 if config["harmless-barrels"] else 0,
                          no_butcher=1 if config.get("no_butcher") else 0,
+                         no_quests=1 if config.get("no-quests") else 0,
                          spell_potency=int(config.get("spell-potency", 0.0) * 100),
                          no_spells=1 if config.get("no-spells") else 0,
                          stats_scale_pct=int(config.get("stats-scale", 1.0) * 100),

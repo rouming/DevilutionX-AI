@@ -54,6 +54,34 @@ class ActionEnum(enum.Enum):
     CastPhasing     = enum.auto()
     CastFireball    = enum.auto()
 
+_DIR_MAP = [
+    (dx.Direction.North,     ( 0, -1), ActionEnum.Walk_N),
+    (dx.Direction.NorthEast, ( 1, -1), ActionEnum.Walk_NE),
+    (dx.Direction.East,      ( 1,  0), ActionEnum.Walk_E),
+    (dx.Direction.SouthEast, ( 1,  1), ActionEnum.Walk_SE),
+    (dx.Direction.South,     ( 0,  1), ActionEnum.Walk_S),
+    (dx.Direction.SouthWest, (-1,  1), ActionEnum.Walk_SW),
+    (dx.Direction.West,      (-1,  0), ActionEnum.Walk_W),
+    (dx.Direction.NorthWest, (-1, -1), ActionEnum.Walk_NW),
+]
+_DIR_TO_DELTA    = {d.value: delta        for d, delta, _ in _DIR_MAP}
+_DELTA_TO_ACTION = {delta:   a.value      for _, delta, a in _DIR_MAP}
+
+def direction_delta(player_dir):
+    """Convert player_direction() int to (dx, dy) delta. Returns (0,0) if unknown."""
+    return _DIR_TO_DELTA.get(player_dir, (0, 0))
+
+def player_direction_delta(d):
+    """Return the hero's current facing as a (dx, dy) delta."""
+    return direction_delta(diablo_state.player_direction(d))
+
+def direction_to_action(delta):
+    """Map (dx, dy) movement delta to a Walk ActionEnum int value."""
+    action = _DELTA_TO_ACTION.get(delta)
+    assert action is not None, f"bad direction {delta}"
+    return action
+
+
 # Priority order for the two restore actions. Searched belt then inventory
 # inside DiabloGame.find_restore_item; smallest-first by convention so the
 # agent does not waste a full-heal when a small_hp would do.

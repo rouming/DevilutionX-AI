@@ -171,6 +171,28 @@ def visibility_frontier(start, visibility_fn) -> tuple[set[tuple], set[tuple]]:
     return visited - frontier, frontier
 
 
+def bfs_find(start, passable_fn, target_fn):
+    """8-directional BFS from start. Returns the first position for which
+    target_fn returns True, or None if the search exhausts reachable tiles.
+    passable_fn(pos) controls expansion: only passable tiles are queued.
+    target_fn(pos) is checked on every neighbor before passable_fn, so a
+    target on the room boundary (e.g. a door) is found without expanding it."""
+    visited = {start}
+    q = deque([start])
+    while q:
+        cx, cy = q.popleft()
+        for nx, ny in ((cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1),
+                       (cx-1, cy-1), (cx-1, cy+1), (cx+1, cy-1), (cx+1, cy+1)):
+            if (nx, ny) in visited:
+                continue
+            visited.add((nx, ny))
+            if target_fn((nx, ny)):
+                return (nx, ny)
+            if passable_fn((nx, ny)):
+                q.append((nx, ny))
+    return None
+
+
 if __name__ == "__main__":
     grid_text = """
     1 1 0 0 0 0 0 0

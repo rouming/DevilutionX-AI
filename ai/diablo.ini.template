@@ -100,6 +100,7 @@ Load player into the level={dungeon_level}
 Disable all monsters={no_monsters}
 Blind monsters={blind_monsters}
 No butcher={no_butcher}
+No quests={no_quests}
 Skip animation={skip_animation}
 Disable monsters auto-pursuing=1
 Game ticks per step={game_ticks_per_step}

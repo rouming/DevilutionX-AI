@@ -1,4 +1,5 @@
 from abc import abstractmethod, abstractproperty
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -34,3 +35,7 @@ class RecurrentACModel(BaseACModel):
     @abstractmethod
     def memory_size(self):
         pass
+
+    def reset_memory(self, device, num_envs=1):
+        """Return a zeroed memory tensor for the given batch size."""
+        return torch.zeros(num_envs, self.memory_size, device=device)
