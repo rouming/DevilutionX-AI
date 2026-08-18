@@ -985,6 +985,15 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 			}
 			continue;
 
+		} else if (bit == RING_ENTRY_KEY_INV_REPAIR_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				int cii = static_cast<int>(data1);
+				printf(">> %s: INV_REPAIR_ITEM cii=%d\n", __func__, cii);
+				DoRepair(*MyPlayer, cii);
+			}
+			continue;
+
 		} else if (bit == RING_ENTRY_KEY_CAST_SPELL) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
