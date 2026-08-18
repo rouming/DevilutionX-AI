@@ -242,6 +242,7 @@ Item &GetInventoryItem(Player &player, int location);
 bool UseInvItem(int cii);
 bool InvDropItem(Player &player, int cii);
 bool InvMoveItem(Player &player, int src_cii, int dst_cii);
+bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii);
 void DoTelekinesis();
 int CalculateGold(Player &player);
 

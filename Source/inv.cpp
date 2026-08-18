@@ -2140,6 +2140,69 @@ bool InvMoveItem(Player &player, int src_cii, int dst_cii)
 	return true;
 }
 
+bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii)
+{
+	if (inv_cii < INVITEM_INV_FIRST || inv_cii > INVITEM_INV_LAST)
+		return false;
+	if (body_cii < 0 || body_cii >= INVITEM_INV_FIRST)
+		return false;
+
+	const Item &src = GetInventoryItem(player, inv_cii);
+	if (src.isEmpty())
+		return false;
+
+	if (!CanEquip(src) || player._pmode > PM_WALK_SIDEWAYS)
+		return false;
+
+	const auto loc = static_cast<inv_body_loc>(body_cii);
+	const item_equip_type srcILoc = player.GetItemLocation(src);
+
+	// Type-slot compatibility check without the empty-slot constraint.
+	bool typeOk = false;
+	switch (loc) {
+	case INVLOC_AMULET:     typeOk = srcILoc == ILOC_AMULET; break;
+	case INVLOC_CHEST:      typeOk = srcILoc == ILOC_ARMOR;  break;
+	case INVLOC_HAND_LEFT:
+		typeOk = IsAnyOf(srcILoc, ILOC_ONEHAND, ILOC_TWOHAND)
+		      && src._itype != ItemType::Shield;
+		break;
+	case INVLOC_HAND_RIGHT:
+		typeOk = srcILoc == ILOC_ONEHAND && src._itype == ItemType::Shield;
+		break;
+	case INVLOC_HEAD:       typeOk = srcILoc == ILOC_HELM;   break;
+	case INVLOC_RING_LEFT:
+	case INVLOC_RING_RIGHT: typeOk = srcILoc == ILOC_RING;   break;
+	default: break;
+	}
+	if (!typeOk)
+		return false;
+
+	// Ensure inventory can hold the displaced body item (if any).
+	if (!player.InvBody[loc].isEmpty() && !CanFitItemInInventory(player, player.InvBody[loc]))
+		return false;
+
+	// Two-hander: HAND_RIGHT (shield) must also be displaced.
+	const bool displaceRight = (srcILoc == ILOC_TWOHAND && !player.InvBody[INVLOC_HAND_RIGHT].isEmpty());
+	if (displaceRight && !CanFitItemInInventory(player, player.InvBody[INVLOC_HAND_RIGHT]))
+		return false;
+
+	// Commit: remove src from inventory.
+	player.HoldItem = src;
+	PickUpFromSlot(player, inv_cii);
+
+	if (displaceRight) {
+		AutoPlaceItemInInventory(player, player.InvBody[INVLOC_HAND_RIGHT], false);
+		RemoveEquipment(player, INVLOC_HAND_RIGHT, false);
+	}
+	if (!player.InvBody[loc].isEmpty()) {
+		AutoPlaceItemInInventory(player, player.InvBody[loc], false);
+		player.InvBody[loc].clear();
+	}
+	ChangeEquipment(player, loc, player.HoldItem.pop(), &player == MyPlayer);
+	CalcPlrInv(player, true);
+	return true;
+}
+
 bool UseInvItem(int cii)
 {
 	if (IsInspectingPlayer())

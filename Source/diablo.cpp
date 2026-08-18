@@ -964,8 +964,17 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 		} else if (bit == RING_ENTRY_KEY_INV_MOVE_ITEM) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
-				bool ok = InvMoveItem(*MyPlayer, static_cast<int>(data1), static_cast<int>(data2));
-				printf(">> %s: INV_MOVE_ITEM src=%u dst=%u ok=%d\n", __func__, data1, data2, ok);
+				const int src = static_cast<int>(data1);
+				const int dst = static_cast<int>(data2);
+				// Use swap semantics for body-slot destinations: displaces the
+				// current equipped item to inventory before equipping the new one.
+				// For inventory/belt destinations use the standard move.
+				const bool isBodySlot = (dst < INVITEM_INV_FIRST);
+				bool ok = isBodySlot
+				    ? InvSwapBodyItem(*MyPlayer, src, dst)
+				    : InvMoveItem(*MyPlayer, src, dst);
+				printf(">> %s: INV_MOVE_ITEM(%s) src=%d dst=%d ok=%d\n", __func__,
+				       isBodySlot ? "swap" : "move", src, dst, ok);
 			}
 			continue;
 
