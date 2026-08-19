@@ -3565,6 +3565,14 @@ tl::expected<void, std::string> LoadGameLevelStandardLevel(bool firstflag, lvl_e
 {
 	CreateLevel(lvldir);
 
+	// Dungeon layout (RNG) was consumed above; now strip quest state so that
+	// quest-specific monsters, objects, and staircase sealing are all skipped.
+	if (*GetOptions().Gameplay.noQuests) {
+		for (auto &quest : Quests) {
+			quest._qactive = QUEST_NOTAVAIL;
+		}
+	}
+
 	IncProgress();
 
 	SetRndSeedForDungeonLevel();

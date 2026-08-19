@@ -933,6 +933,7 @@ GameplayOptions::GameplayOptions()
     , invinciblePlayer("Enable invincible player mode", OptionEntryFlags::Invisible, "", "", false)
     , blindMonsters("Blind monsters", OptionEntryFlags::Invisible, "", "", false)
     , noButcher("No butcher", OptionEntryFlags::Invisible, "", "", false)
+    , noQuests("No quests", OptionEntryFlags::Invisible, "", "", false)
     , spellPotency("Spell potency", OptionEntryFlags::Invisible, "", "", 0)
     , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
@@ -1000,6 +1001,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&invinciblePlayer,
 		&blindMonsters,
 		&noButcher,
+		&noQuests,
 		&spellPotency,
 		&heroHpMinPct,
 		&heroHpMaxPct,

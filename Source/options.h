@@ -680,6 +680,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean blindMonsters;
 	/** @brief Skip placing The Butcher on level 2 */
 	OptionEntryBoolean noButcher;
+	/** @brief Disable quests after dungeon generation (RNG preserved, but staircase sealing skipped) */
+	OptionEntryBoolean noQuests;
 	/** @brief Spell potency percentage for curriculum learning (0=normal, 100=one-shot anything) */
 	OptionEntryInt<int> spellPotency;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
