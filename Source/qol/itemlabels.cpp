@@ -196,7 +196,8 @@ void DrawItemNameLabels(const Surface &out)
 			    && !MyPlayerIsDead
 			    && ActiveStore == TalkID::None
 			    && IsMouseOverGameArea()
-			    && LastMouseButtonAction == MouseActionType::None) {
+			    && LastMouseButtonAction == MouseActionType::None
+			    && !item._iMasked) {
 				isLabelHighlighted = true;
 				cursPosition = item.position;
 				pcursitem = label.id;

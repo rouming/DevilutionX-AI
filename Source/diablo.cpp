@@ -982,7 +982,12 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
 				bool ok = InvDropItem(*MyPlayer, static_cast<int>(data1));
-				printf(">> %s: INV_DROP_ITEM cii=%u ok=%d\n", __func__, data1, ok);
+				// data2=1: AI agent requests masking. ItemLimbo holds the dropped item
+				// pending placement; OnPutItem will std::move(ItemLimbo) to the floor
+				// item, carrying _iMasked through. All pickup paths check this flag.
+				if (ok && data2)
+					ItemLimbo._iMasked = true;
+				printf(">> %s: INV_DROP_ITEM cii=%u mask=%u ok=%d\n", __func__, data1, data2, ok);
 			}
 			continue;
 

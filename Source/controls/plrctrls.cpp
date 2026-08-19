@@ -167,7 +167,7 @@ void FindItemOrObject()
 			continue;
 		}
 		Item &item = Items[itemId];
-		if (item.isEmpty() || item.selectionRegion == SelectionRegion::None) {
+		if (item.isEmpty() || item.selectionRegion == SelectionRegion::None || item._iMasked) {
 			continue;
 		}
 

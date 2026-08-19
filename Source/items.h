@@ -254,6 +254,7 @@ struct Item {
 	bool _iStatFlag = false;
 	ItemSpecialEffectHf _iDamAcFlags = ItemSpecialEffectHf::None;
 	uint32_t dwBuff = 0;
+	bool _iMasked = false;
 
 	/**
 	 * @brief Clears this item and returns the old value

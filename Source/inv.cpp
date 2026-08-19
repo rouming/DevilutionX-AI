@@ -2070,16 +2070,23 @@ static void PickUpFromSlot(Player &player, int cii)
 bool InvDropItem(Player &player, int cii)
 {
 	Item &item = GetInventoryItem(player, cii);
+	bool res = false;
 	if (item.isEmpty())
 		return false;
-	if (!FindAdjacentPositionForItem(player.position.future, player._pdir))
-		return false;
+	if (!FindAdjacentPositionForItem(player.position.future, player._pdir)) {
+		goto out;
+	}
 
 	player.HoldItem = item;
 	NewCursor(player.HoldItem);
 	PickUpFromSlot(player, cii);
-	TryDropItem();
-	return true;
+	res = TryDropItem();
+
+out:
+	if (!res)
+		// drop failed: clear mask so AI can re-evaluate the item
+		item._iMasked = false;
+	return res;
 }
 
 bool InvMoveItem(Player &player, int src_cii, int dst_cii)

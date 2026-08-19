@@ -214,28 +214,28 @@ bool TrySelectItem(bool flipflag, Point tile)
 {
 	if (!flipflag && tile.x + 1 < MAXDUNX && dItem[tile.x + 1][tile.y] > 0) {
 		const uint8_t itemId = dItem[tile.x + 1][tile.y] - 1;
-		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle)) {
+		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle) && !Items[itemId]._iMasked) {
 			cursPosition = tile + Displacement { 1, 0 };
 			pcursitem = static_cast<int8_t>(itemId);
 		}
 	}
 	if (flipflag && tile.y + 1 < MAXDUNY && dItem[tile.x][tile.y + 1] > 0) {
 		const uint8_t itemId = dItem[tile.x][tile.y + 1] - 1;
-		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle)) {
+		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle) && !Items[itemId]._iMasked) {
 			cursPosition = tile + Displacement { 0, 1 };
 			pcursitem = static_cast<int8_t>(itemId);
 		}
 	}
 	if (dItem[tile.x][tile.y] > 0) {
 		const uint8_t itemId = dItem[tile.x][tile.y] - 1;
-		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Bottom)) {
+		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Bottom) && !Items[itemId]._iMasked) {
 			cursPosition = tile;
 			pcursitem = static_cast<int8_t>(itemId);
 		}
 	}
 	if (tile.x + 1 < MAXDUNX && tile.y + 1 < MAXDUNY && dItem[tile.x + 1][tile.y + 1] > 0) {
 		const uint8_t itemId = dItem[tile.x + 1][tile.y + 1] - 1;
-		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle)) {
+		if (HasAnyOf(Items[itemId].selectionRegion, SelectionRegion::Middle) && !Items[itemId]._iMasked) {
 			cursPosition = tile + Displacement { 1, 1 };
 			pcursitem = static_cast<int8_t>(itemId);
 		}
@@ -358,12 +358,14 @@ bool TrySelectPixelBased(Point tile)
 		if (itemId != 0) {
 			itemId = itemId - 1;
 			const Item &item = Items[itemId];
-			const ClxSprite sprite = item.AnimInfo.currentSprite();
-			Displacement renderingOffset = item.getRenderingOffset(sprite);
-			if (checkSprite(adjacentTile, sprite, renderingOffset)) {
-				cursPosition = adjacentTile;
-				pcursitem = static_cast<int8_t>(itemId);
-				return true;
+			if (!item._iMasked) {
+				const ClxSprite sprite = item.AnimInfo.currentSprite();
+				Displacement renderingOffset = item.getRenderingOffset(sprite);
+				if (checkSprite(adjacentTile, sprite, renderingOffset)) {
+					cursPosition = adjacentTile;
+					pcursitem = static_cast<int8_t>(itemId);
+					return true;
+				}
 			}
 		}
 	}

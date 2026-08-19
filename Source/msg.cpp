@@ -272,8 +272,6 @@ ankerl::unordered_dense::map<uint8_t, LocalLevel> LocalLevels;
 DJunk sgJunk;
 uint8_t sgbDeltaChunks;
 std::list<TMegaPkt> MegaPktList;
-Item ItemLimbo;
-
 /** @brief Last sent player command for the local player. */
 TCmdLocParam5 lastSentPlayerCmd;
 
@@ -2406,6 +2404,8 @@ size_t OnSpawnMonster(const TCmd *pCmd, const Player &player)
 }
 
 } // namespace
+
+Item ItemLimbo;
 
 void PrepareItemForNetwork(const Item &item, TItem &messageItem)
 {

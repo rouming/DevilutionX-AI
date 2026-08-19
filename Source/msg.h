@@ -727,6 +727,7 @@ struct TPkt {
 
 extern uint8_t gbBufferMsgs;
 extern int dwRecCount;
+extern Item ItemLimbo;
 
 void PrepareItemForNetwork(const Item &item, TItem &messageItem);
 void PrepareEarForNetwork(const Item &item, TEar &ear);
