@@ -1273,6 +1273,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     WASTED_PRIMARY_DIST      = 1
     ENV_VERSION              = 0
     WASTED_PRIMARY_STRICT    = False
+    # Crowd-density damage amplifier
+    CROWD_ALPHA              = 0.0
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1400,6 +1402,23 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                 contrib = 0.0
                 if r:
                     contrib = -(self.prev_hp - hp) / d.player._pMaxHP * r
+                    # Crowd-density amplifier: scale damage penalty by monster
+                    # density in the visible area.  A cornered hero sees few
+                    # tiles (raycasting blocked by walls) but many monsters,
+                    # making density spike toward 1.0 and multiplying the
+                    # penalty.  Open combat keeps density low - barely a nudge.
+                    if self.CROWD_ALPHA:
+                        EF = diablo_state.EnvironmentFlag
+                        m_vis = int(np.sum(
+                            (env & (EF.Monster.value | EF.Visible.value))
+                            == (EF.Monster.value | EF.Visible.value)))
+                        v_vis = int(np.sum((env & EF.Visible.value) != 0))
+                        density = m_vis / v_vis if v_vis > 0 else 0.0
+                        multiplier = 1.0 + self.CROWD_ALPHA * density
+                        contrib *= multiplier
+                        if density > 0:
+                            print("# crowd %.1fx m=%d v=%d" % (
+                                multiplier, m_vis, v_vis), file=self.log)
                     reward += contrib
                 print("Damage taken, R %.2f" % contrib, file=self.log)
             if monster_damaged:
@@ -1765,6 +1784,14 @@ class DiabloEnv_ClearAllLevels_v11(DiabloEnv_ClearAllLevels_v10):
     }
 
 
+class DiabloEnv_ClearAllLevels_v12(DiabloEnv_ClearAllLevels_v11):
+    """Like v11 but penalizes taking damage in crowded situations harder than
+    in open combat - to discourage the agent from walking into dead-end
+    corridors and getting surrounded by layers of monsters."""
+    ENV_VERSION  = 12
+    CROWD_ALPHA  = 5.0
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1801,6 +1828,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v10 },
     { 'id': 'Diablo-ClearAllLevels-v11',
       'entry_point': DiabloEnv_ClearAllLevels_v11 },
+    { 'id': 'Diablo-ClearAllLevels-v12',
+      'entry_point': DiabloEnv_ClearAllLevels_v12 },
 
     # HRL Environment Classes
 

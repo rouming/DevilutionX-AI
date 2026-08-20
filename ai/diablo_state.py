@@ -292,7 +292,7 @@ def env_stats(args):
 
     RE_LEVEL = re.compile(r'dungeon_level=(\d+)')
     RE_DONE  = re.compile(r'EPISODE DONE=(true|false) steps=(\d+)')
-    RE_EVENT = re.compile(r'^(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)\s*$')
+    RE_EVENT = re.compile(r'^(?!\s*#)(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)\s*$')
 
     counts    = {}
     sums      = {}
