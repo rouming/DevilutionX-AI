@@ -1273,8 +1273,10 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     WASTED_PRIMARY_DIST      = 1
     ENV_VERSION              = 0
     WASTED_PRIMARY_STRICT    = False
-    # Crowd-density damage amplifier
+    # Crowd-density damage amplifier, attack-reward scaler, and kill-reward scaler
     CROWD_ALPHA              = 0.0
+    ATTACK_CROWD_GAMMA       = 0.0
+    KILL_CROWD_GAMMA         = 0.0
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1394,6 +1396,22 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             monsters_hit = diablo_state.count_monsters_hit(d, self.prev_mon_hp)
             monster_damaged = monsters_hit > 0
 
+            # Crowd density: lazily computed on first use (damage or kill).
+            # None = not yet computed; filled as (density, m_vis, v_vis) on
+            # demand so steps with no damage and no kills pay nothing.
+            crowd = None
+
+            def _crowd_data():
+                nonlocal crowd
+                if crowd is None:
+                    EF = diablo_state.EnvironmentFlag
+                    m = int(np.sum(
+                        (env & (EF.Monster.value | EF.Visible.value))
+                        == (EF.Monster.value | EF.Visible.value)))
+                    v = int(np.sum((env & EF.Visible.value) != 0))
+                    crowd = (m / v if v > 0 else 0.0, m, v)
+                return crowd
+
             if hp < self.prev_hp:
                 # Player took damage. prev_hp updated unconditionally
                 # at end of step so damage right after a heal still
@@ -1408,12 +1426,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     # making density spike toward 1.0 and multiplying the
                     # penalty.  Open combat keeps density low - barely a nudge.
                     if self.CROWD_ALPHA:
-                        EF = diablo_state.EnvironmentFlag
-                        m_vis = int(np.sum(
-                            (env & (EF.Monster.value | EF.Visible.value))
-                            == (EF.Monster.value | EF.Visible.value)))
-                        v_vis = int(np.sum((env & EF.Visible.value) != 0))
-                        density = m_vis / v_vis if v_vis > 0 else 0.0
+                        density, m_vis, v_vis = _crowd_data()
                         multiplier = 1.0 + self.CROWD_ALPHA * density
                         contrib *= multiplier
                         if density > 0:
@@ -1422,17 +1435,39 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     reward += contrib
                 print("Damage taken, R %.2f" % contrib, file=self.log)
             if monster_damaged:
-                # Monsters took damage
+                # Monsters took damage.  In dense crowds the reward is
+                # discounted by ATTACK_CROWD_GAMMA symmetrically to the
+                # CROWD_ALPHA damage amplifier:
+                #   scale = max(0.5, 1.0 - gamma * density)
                 r = R[RewardEvent.AttackMonster]
                 contrib = monsters_hit * r if r else 0.0
+                if r and self.ATTACK_CROWD_GAMMA:
+                    density, m_vis, v_vis = _crowd_data()
+                    if density > 0:
+                        scale = max(0.5, 1.0 - self.ATTACK_CROWD_GAMMA * density)
+                        contrib *= scale
+                        print("# attack crowd %.2f scale m=%d v=%d" % (
+                            scale, m_vis, v_vis), file=self.log)
                 if r:
                     reward += contrib
                 made_progress = True
                 print("Attack %d monster(s), R %.2f" % (monsters_hit, contrib), file=self.log)
             if monsters_cnt < self.prev_monsters_cnt:
-                # Monsters killed
+                # Monsters killed.  In dense crowds the reward is discounted
+                # by KILL_CROWD_GAMMA to teach luring over horde fighting:
+                #   scale = max(0.5, 1.0 - gamma * density)
+                # Low density (chokepoint kill): near-full reward.
+                # High density (surrounded): up to 50% discount.
                 r = R[RewardEvent.KillMonster]
-                contrib = (self.prev_monsters_cnt - monsters_cnt) * r if r else 0.0
+                kills = self.prev_monsters_cnt - monsters_cnt
+                contrib = kills * r if r else 0.0
+                if r and self.KILL_CROWD_GAMMA:
+                    density, m_vis, v_vis = _crowd_data()
+                    if density > 0:
+                        scale = max(0.5, 1.0 - self.KILL_CROWD_GAMMA * density)
+                        contrib *= scale
+                        print("# kill crowd %.2f scale m=%d v=%d" % (
+                            scale, m_vis, v_vis), file=self.log)
                 if r:
                     reward += contrib
                 self.prev_monsters_cnt = monsters_cnt
@@ -1792,6 +1827,20 @@ class DiabloEnv_ClearAllLevels_v12(DiabloEnv_ClearAllLevels_v11):
     CROWD_ALPHA  = 5.0
 
 
+class DiabloEnv_ClearAllLevels_v13(DiabloEnv_ClearAllLevels_v12):
+    """Like v12 but discounts the attack reward in dense crowds, symmetric
+    to CROWD_ALPHA which amplifies damage taken - hitting monsters in a horde
+    earns less than hitting at a chokepoint.  AttackMonster raised from 0.02
+    to 0.05 so the discount has meaningful absolute range without creating a
+    farming incentive (max 40-kill level still well below goal reward)."""
+    ENV_VERSION        = 13
+    ATTACK_CROWD_GAMMA = 1.5
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v12.REWARDS,
+        RewardEvent.AttackMonster: +0.05,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1830,6 +1879,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v11 },
     { 'id': 'Diablo-ClearAllLevels-v12',
       'entry_point': DiabloEnv_ClearAllLevels_v12 },
+    { 'id': 'Diablo-ClearAllLevels-v13',
+      'entry_point': DiabloEnv_ClearAllLevels_v13 },
 
     # HRL Environment Classes
 
