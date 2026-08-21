@@ -935,6 +935,8 @@ GameplayOptions::GameplayOptions()
     , noButcher("No butcher", OptionEntryFlags::Invisible, "", "", false)
     , noQuests("No quests", OptionEntryFlags::Invisible, "", "", false)
     , spellPotency("Spell potency", OptionEntryFlags::Invisible, "", "", 0)
+    , noSpells("No spells", OptionEntryFlags::Invisible, "", "", false)
+    , statsScalePct("Stats scale pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroManaMinPct("Hero mana min pct", OptionEntryFlags::Invisible, "", "", 100)
@@ -1003,6 +1005,8 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noButcher,
 		&noQuests,
 		&spellPotency,
+		&noSpells,
+		&statsScalePct,
 		&heroHpMinPct,
 		&heroHpMaxPct,
 		&heroManaMinPct,

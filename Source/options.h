@@ -684,6 +684,10 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noQuests;
 	/** @brief Spell potency percentage for curriculum learning (0=normal, 100=one-shot anything) */
 	OptionEntryInt<int> spellPotency;
+	/** @brief Disable hero spells at episode start */
+	OptionEntryBoolean noSpells;
+	/** @brief Hero stat scale percentage: 100=full stats, 70=scaled to 70% midpoints (default 100) */
+	OptionEntryInt<int> statsScalePct;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
 	OptionEntryInt<int> heroHpMinPct;
 	/** @brief Hero HP at episode start: max percent of max HP (0-100, default 100) */

@@ -2668,9 +2668,11 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	// Stats: base + slope*d gives the depth-scaled midpoint; noise widens the range.
 	// Clamped to [10, 250]: 10 ensures the stat is always non-trivial,
 	// 250 is the safe ceiling (uint8_t field sizes in some engine paths).
+	const bool   no_spells = *GetOptions().Gameplay.noSpells;
+	const double scale     = std::max(0.01, *GetOptions().Gameplay.statsScalePct / 100.0);
 	auto stat = [&](int base, int slope, int noise) {
-		return ri(std::max(10, base + slope * d - noise),
-		          std::min(250, base + slope * d + noise));
+		int mid = std::max(10, std::min(250, static_cast<int>((base + slope * d) * scale)));
+		return ri(std::max(10, mid - noise), std::min(250, mid + noise));
 	};
 	int strength  = stat(cs.str_base, cs.str_slope, cs.str_noise);
 	int magic     = stat(cs.mag_base, cs.mag_slope, cs.mag_noise);
@@ -2699,22 +2701,24 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	//   d=1 -> ~133,  d=8 -> ~499,  d=16 -> ~993
 	int sorc_magic = std::min(250, kSorcerer.mag_base + kSorcerer.mag_slope * d);
 	int mana_base  = kSorcerer.mag_base + (sorc_magic - 25) * 4 + level * 2;
-	int max_mana   = std::max(0, ri(int(0.85 * mana_base), int(1.15 * mana_base)));
+	int mana_mid   = static_cast<int>(mana_base * scale);
+	int max_mana   = std::max(0, ri(int(0.85 * mana_mid), int(1.15 * mana_mid)));
 
 	// Armor class: linear with depth, reflecting accumulated gear quality.
 	// +-5 noise keeps individual episodes varied.
-	int base_ac = 5 + static_cast<int>(6.5 * d);
+	int base_ac = static_cast<int>((5 + 6.5 * d) * scale);
 	int ac      = std::max(0, ri(base_ac - 5, base_ac + 5));
 
 	// Damage: quadratic with depth because item damage rolls grow with item quality.
 	// Coefficients reduced ~30% vs previous to make melee weaker relative to spells,
 	// encouraging the agent to rely on the now-guaranteed spell kit.
-	int min_dam = std::max(1, ri(int(1 + 0.10 * d*d), int(2 + 0.18 * d*d)));
-	int max_dam = std::max(min_dam + 1, ri(int(2 + 0.28 * d*d), int(4 + 0.42 * d*d)));
+	int min_dam = std::max(1, ri(int((1 + 0.10 * d*d) * scale), int((2 + 0.18 * d*d) * scale)));
+	int max_dam = std::max(min_dam + 1, ri(int((2 + 0.28 * d*d) * scale), int((4 + 0.42 * d*d) * scale)));
 
 	// To-hit bonus stacks on top of the engine's base (level/2 + dex/2).
 	// Kept in a +-5 band around 10+3d so the hero hits reliably but misses sometimes.
-	int to_hit = std::max(0, ri(10 + 3*d - 5, 10 + 3*d + 5));
+	int to_hit_mid = static_cast<int>((10 + 3*d) * scale);
+	int to_hit     = std::max(0, ri(to_hit_mid - 5, to_hit_mid + 5));
 
 	// Resistances: zero until d=5 (shallow floors have no elemental threat),
 	// then grow toward the 75% hard cap around d=14.
@@ -2734,7 +2738,7 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	};
 	constexpr int kNumSpells = static_cast<int>(std::size(kSpells));
 	// Draw [kMinBonusSpells, kMaxBonusSpells] distinct spells per episode.
-	const int n_spells = ri(kMinBonusSpells, kMaxBonusSpells);
+	const int n_spells = no_spells ? 0 : ri(kMinBonusSpells, kMaxBonusSpells);
 	SpellID spell_ids[kMaxBonusSpells]    = {};
 	int     spell_levels[kMaxBonusSpells] = {};
 	for (int i = 0; i < n_spells; i++) {
