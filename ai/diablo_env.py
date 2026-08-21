@@ -1869,6 +1869,24 @@ class DiabloEnv_ClearAllLevels_v13(DiabloEnv_ClearAllLevels_v12):
     }
 
 
+class DiabloEnv_ClearAllLevels_v14(DiabloEnv_ClearAllLevels_v13):
+    """Drop all crowd coefficients and raise AttackMonster to 0.15.
+
+    The crowd machinery (CROWD_ALPHA, ATTACK_CROWD_GAMMA) is replaced by
+    natural game physics: a hero trained with --stats-scale 0.7 takes more
+    damage per fight, so crowd fighting is already costly without explicit
+    amplification.  1v1 combat at 0.15 is net-positive; fighting multiple
+    monsters simultaneously is net-negative from accumulated damage alone.
+    Luring emerges from physics rather than reward shaping."""
+    ENV_VERSION        = 14
+    CROWD_ALPHA        = 0.0
+    ATTACK_CROWD_GAMMA = 0.0
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v13.REWARDS,
+        RewardEvent.AttackMonster: +0.15,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1909,6 +1927,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v12 },
     { 'id': 'Diablo-ClearAllLevels-v13',
       'entry_point': DiabloEnv_ClearAllLevels_v13 },
+    { 'id': 'Diablo-ClearAllLevels-v14',
+      'entry_point': DiabloEnv_ClearAllLevels_v14 },
 
     # HRL Environment Classes
 
