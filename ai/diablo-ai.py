@@ -321,6 +321,12 @@ def make_diablo_parser():
         "--spell-potency", type=float, default=0.0, metavar="PROB",
         help="Spell potency multiplier [0.0, 1.0]: 0=normal engine rules, 1=spells one-shot any monster (default: 0.0)")
     common_parser.add_argument(
+        "--no-spells", action="store_true",
+        help="Disable hero spells at episode start (spell slots stay empty, mana set to 0)")
+    common_parser.add_argument(
+        "--stats-scale", type=float, default=1.0, metavar="SCALE",
+        help="Scale hero stat midpoints by this factor (1.0=full stats, 0.7=70%% midpoints, noise unchanged; default: 1.0)")
+    common_parser.add_argument(
         "--hero-hp-at-start", type=parse_float_range, default=FloatRangeSpec((100, 100)),
         metavar="MIN-MAX",
         help="Hero HP fraction at episode start as a range in [0.0, 1.0] "
@@ -2745,6 +2751,8 @@ def main():
         "harmless-barrels": args.harmless_barrels,
         "no_butcher": args.no_butcher,
         "spell-potency": args.spell_potency,
+        "no-spells": args.no_spells,
+        "stats-scale": args.stats_scale,
         "hero-hp-min-pct":    args.hero_hp_at_start[0],
         "hero-hp-max-pct":    args.hero_hp_at_start[1],
         "hero-mana-min-pct":  args.hero_mana_at_start[0],

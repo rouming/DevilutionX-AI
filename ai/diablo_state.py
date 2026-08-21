@@ -1783,6 +1783,8 @@ class DiabloGame:
                          harmless_barrels=1 if config["harmless-barrels"] else 0,
                          no_butcher=1 if config.get("no_butcher") else 0,
                          spell_potency=int(config.get("spell-potency", 0.0) * 100),
+                         no_spells=1 if config.get("no-spells") else 0,
+                         stats_scale_pct=int(config.get("stats-scale", 1.0) * 100),
                          no_auto_walk_on_seconday_action=
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
                          hero_hp_min_pct=config.get("hero-hp-min-pct", 100),
