@@ -1885,6 +1885,22 @@ class DiabloEnv_ClearAllLevels_v15(DiabloEnv_ClearAllLevels_v14):
     }
 
 
+class DiabloEnv_ClearAllLevels_v16(DiabloEnv_ClearAllLevels_v15):
+    """Like v15 but adds a positive ExploreTiles reward of +0.02.
+
+    v15 pushes the agent out of explored corners via movement penalty.
+    v16 adds a pull toward unexplored areas: each step that reveals new
+    dungeon tiles earns +0.02 and suppresses the movement penalty for
+    that step.  At 106 explore events per episode the income is +2.12/ep,
+    well below the goal reward (40) and not farmable (max ~600 tiles x
+    0.02 = 12/ep across a full level clear)."""
+    ENV_VERSION = 16
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v15.REWARDS,
+        RewardEvent.ExploreTiles: +0.02,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1929,6 +1945,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v14 },
     { 'id': 'Diablo-ClearAllLevels-v15',
       'entry_point': DiabloEnv_ClearAllLevels_v15 },
+    { 'id': 'Diablo-ClearAllLevels-v16',
+      'entry_point': DiabloEnv_ClearAllLevels_v16 },
 
     # HRL Environment Classes
 
