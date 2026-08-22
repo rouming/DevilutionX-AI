@@ -1871,6 +1871,20 @@ class DiabloEnv_ClearAllLevels_v14(DiabloEnv_ClearAllLevels_v13):
     }
 
 
+class DiabloEnv_ClearAllLevels_v15(DiabloEnv_ClearAllLevels_v14):
+    """Like v14 but raises MovementPenalty from -0.01 to -0.05.
+
+    The stuck terminal (-25) is discounted to ~-1.25 in value-function terms
+    (gamma^300 * -25), giving the agent a weak gradient from corner states.
+    A stronger per-step penalty makes the corner signal dense and immediate:
+    300 idle steps at -0.05 = -15 before stuck fires, vs -3 at -0.01."""
+    ENV_VERSION = 15
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v14.REWARDS,
+        RewardEvent.MovementPenalty: -0.05,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1913,6 +1927,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v13 },
     { 'id': 'Diablo-ClearAllLevels-v14',
       'entry_point': DiabloEnv_ClearAllLevels_v14 },
+    { 'id': 'Diablo-ClearAllLevels-v15',
+      'entry_point': DiabloEnv_ClearAllLevels_v15 },
 
     # HRL Environment Classes
 
