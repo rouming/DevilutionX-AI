@@ -137,6 +137,34 @@ def _find_scroll_of_identify(player):
     return None
 
 
+def _count_scroll_spellid(player, spellid):
+    """Count scrolls with the given spellid in inventory and belt."""
+    imisc_scroll = dx.item_misc_id.IMISC_SCROLL.value
+    itype_none   = dx.ItemType.None_.value
+    count = 0
+    for i in range(int(player._pNumInv)):
+        it = player.InvList[i]
+        if int(it._iMiscId) == imisc_scroll and int(it._iSpell) == spellid:
+            count += 1
+    for i in range(8):
+        it = player.SpdList[i]
+        if (int(it._itype) != itype_none and
+                int(it._iMiscId) == imisc_scroll and
+                int(it._iSpell) == spellid):
+            count += 1
+    return count
+
+
+def _is_combat_spell_scroll(spellid):
+    """Return True if this scroll carries a combat/utility spell worth keeping.
+    TODO: decide per-spell policy - Phasing (SpellID.Phasing) is the primary
+    candidate for Warrior at levels 2-4; others (Firebolt etc.) likely not.
+    Currently returns False so all unrecognised scrolls are dropped by caller.
+    """
+    # TODO: return True for spells the agent should stockpile.
+    return False
+
+
 def _dur_ratio(item):
     """Current durability as a fraction of max. 255 = indestructible -> 1.0."""
     max_dur = int(item._iMaxDur)
@@ -1128,6 +1156,52 @@ class AgentAI:
             RE.RING_ENTRY_KEY_INV_DROP_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
             data=(cii, 1))
 
+    def _evaluate_misc_item(self, d, item, seed, name):
+        """Evaluate a Misc-type item and queue an action or keep it silently."""
+        player       = d.player
+        imisc        = int(item._iMiscId)
+        imisc_book   = dx.item_misc_id.IMISC_BOOK.value
+        imisc_scroll = dx.item_misc_id.IMISC_SCROLL.value
+
+        if imisc == imisc_book:
+            # Read immediately; engine ignores the command if magic stat is too low.
+            print(f"agent {self._tick_count}: queue read book '{name}' seed={seed}", file=self.log)
+            self._queued_seeds.add(seed)
+            self._action_queue.append({'action': 'use', 'seed': seed, 'name': name})
+            return
+
+        if imisc == imisc_scroll:
+            spellid          = int(item._iSpell)
+            spellid_healing  = dx.SpellID.Healing.value
+            spellid_identify = dx.SpellID.Identify.value
+            spellid_portal   = dx.SpellID.TownPortal.value
+
+            if spellid == spellid_healing:
+                # Keep all - primary survival kit, never drop.
+                return
+
+            if spellid in (spellid_identify, spellid_portal):
+                cap = 2
+                if _count_scroll_spellid(player, spellid) > cap:
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - scroll surplus (>{cap})", file=self.log)
+                    self._queued_seeds.add(seed)
+                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+                return
+
+            if _is_combat_spell_scroll(spellid):
+                # TODO: once policy is set, keep up to N per spell type.
+                return
+
+            # All other scrolls: drop.
+            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                  f" - unused scroll spellid={spellid}", file=self.log)
+            self._queued_seeds.add(seed)
+            self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+            return
+
+        # All other Misc types (gold, runes, quest items, etc.): skip silently.
+
     def _locate_dropped_items(self, d):
         """Scan all active floor items for _iMasked set (dropped by agent).
         Apply observation mask and pathfinder-skip so the model ignores them.
@@ -1175,6 +1249,10 @@ class AgentAI:
             return
 
         name = _item_name(item)
+
+        if int(item._itype) == dx.ItemType.Misc.value:
+            self._evaluate_misc_item(d, item, seed, name)
+            return
 
         if int(item._itype) in _SKIP_ITYPE:
             return
@@ -1300,6 +1378,15 @@ class AgentAI:
                 self.game.submit_key(
                     RE.RING_ENTRY_KEY_INV_IDENTIFY_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
                     data=(scroll_cii, cii))
+                return
+            elif entry['action'] == 'use':
+                print(f"agent {self._tick_count}: use '{name}' seed={seed}", file=self.log)
+                self._action_queue.pop(0)
+                self._queued_seeds.discard(seed)
+                RE = ring.RingEntryType
+                self.game.submit_key(
+                    RE.RING_ENTRY_KEY_INV_USE_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
+                    data=(cii, 0))
                 return
             else:
                 print(f"agent {self._tick_count}: drop '{name}' seed={seed}", file=self.log)
