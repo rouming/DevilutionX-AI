@@ -116,6 +116,27 @@ def _item_score(item, hero_class):
     return score, f"mag+vit={score}"
 
 
+def _find_scroll_of_identify(player):
+    """Return cii of first scroll of identify in inventory or belt, or None."""
+    imisc_scroll     = dx.item_misc_id.IMISC_SCROLL.value
+    spellid_identify = dx.SpellID.Identify.value
+    INV_FIRST        = dx.inv_item.INVITEM_INV_FIRST.value
+    BELT_FIRST       = dx.inv_item.INVITEM_BELT_FIRST.value
+    itype_none       = dx.ItemType.None_.value
+    for i in range(int(player._pNumInv)):
+        it = player.InvList[i]
+        if (int(it._iMiscId) == imisc_scroll and
+                int(it._iSpell) == spellid_identify):
+            return INV_FIRST + i
+    for i in range(8):
+        it = player.SpdList[i]
+        if (int(it._itype) != itype_none and
+                int(it._iMiscId) == imisc_scroll and
+                int(it._iSpell) == spellid_identify):
+            return BELT_FIRST + i
+    return None
+
+
 def _dur_ratio(item):
     """Current durability as a fraction of max. 255 = indestructible -> 1.0."""
     max_dur = int(item._iMaxDur)
@@ -504,6 +525,8 @@ class AgentAI:
         self._action_queue           = []
         # seeds currently in _action_queue; prevents re-detection of already-decided items
         self._queued_seeds           = set()
+        # seeds that were just identified this tick; re-evaluated next tick
+        self._identify_pending_seeds = set()
         # True if new InvList seeds were detected this tick; blocks queue execution
         self._inv_changed            = False
 
@@ -588,6 +611,9 @@ class AgentAI:
             curr_list = {s for (c, s, _) in inv_curr    if inv_first <= c < belt_first}
             skip      = self._queued_seeds
             new_seeds = curr_list - prev_list - skip
+            # Re-evaluate items that were just identified this tick.
+            new_seeds |= (self._identify_pending_seeds & curr_list) - skip
+            self._identify_pending_seeds.clear()
             if new_seeds and not self.no_gear_management:
                 self._inv_changed = True
                 for seed in new_seeds:
@@ -636,10 +662,11 @@ class AgentAI:
         self.cur_level          = new_level
         self.level_steps        = 0
         self.stairs_pos         = self._level_stairs.get(new_level)
-        self._action_queue      = []
-        self._queued_seeds      = set()
-        self._inv_changed       = False
-        self._pending_equip     = {}
+        self._action_queue           = []
+        self._queued_seeds           = set()
+        self._identify_pending_seeds = set()
+        self._inv_changed            = False
+        self._pending_equip          = {}
         # Drop tile-skip set: positions are level-specific; stale entries from the
         # previous level could block valid item pickups on the new level.
         self._masked_positions.clear()
@@ -1175,9 +1202,18 @@ class AgentAI:
 
         if (int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
                 and not item._iIdentified):
-            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} - not identified", file=self.log)
-            self._queued_seeds.add(seed)
-            self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+            scroll_cii = _find_scroll_of_identify(player)
+            if scroll_cii is None:
+                print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                      f" - not identified, no scroll", file=self.log)
+                self._queued_seeds.add(seed)
+                self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+            else:
+                print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}", file=self.log)
+                self._queued_seeds.add(seed)
+                self._action_queue.append(
+                    {'action': 'identify', 'seed': seed, 'name': name,
+                     'scroll_cii': scroll_cii})
             return
 
         # For rings: if left slot occupied, try right slot instead.
@@ -1246,6 +1282,24 @@ class AgentAI:
                 # _pending_equip[body_cii] is NOT cleared here - only when engine confirms
                 # via InvBody seed match. Intermediate equips must not clear it prematurely.
                 self._equip(cii, body_cii)
+                return
+            elif entry['action'] == 'identify':
+                scroll_cii = _find_scroll_of_identify(player)
+                if scroll_cii is None:
+                    print(f"agent {self._tick_count}: drop '{name}' seed={seed}"
+                          f" - identify: scroll gone", file=self.log)
+                    self._action_queue.pop(0)
+                    self._queued_seeds.discard(seed)
+                    self._drop_and_mask(d, cii)
+                    return
+                print(f"agent {self._tick_count}: identify '{name}' seed={seed}", file=self.log)
+                self._action_queue.pop(0)
+                self._queued_seeds.discard(seed)
+                self._identify_pending_seeds.add(seed)
+                RE = ring.RingEntryType
+                self.game.submit_key(
+                    RE.RING_ENTRY_KEY_INV_IDENTIFY_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
+                    data=(scroll_cii, cii))
                 return
             else:
                 print(f"agent {self._tick_count}: drop '{name}' seed={seed}", file=self.log)
