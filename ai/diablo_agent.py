@@ -116,22 +116,27 @@ def _item_score(item, hero_class):
     return score, f"mag+vit={score}"
 
 
+def _is_scroll_misc(imisc):
+    """Return True for both IMISC_SCROLL (21) and IMISC_SCROLLT (22)."""
+    return (imisc == dx.item_misc_id.IMISC_SCROLL.value or
+            imisc == dx.item_misc_id.IMISC_SCROLLT.value)
+
+
 def _find_scroll_of_identify(player):
     """Return cii of first scroll of identify in inventory or belt, or None."""
-    imisc_scroll     = dx.item_misc_id.IMISC_SCROLL.value
     spellid_identify = dx.SpellID.Identify.value
     INV_FIRST        = dx.inv_item.INVITEM_INV_FIRST.value
     BELT_FIRST       = dx.inv_item.INVITEM_BELT_FIRST.value
     itype_none       = dx.ItemType.None_.value
     for i in range(int(player._pNumInv)):
         it = player.InvList[i]
-        if (int(it._iMiscId) == imisc_scroll and
+        if (_is_scroll_misc(int(it._iMiscId)) and
                 int(it._iSpell) == spellid_identify):
             return INV_FIRST + i
     for i in range(8):
         it = player.SpdList[i]
         if (int(it._itype) != itype_none and
-                int(it._iMiscId) == imisc_scroll and
+                _is_scroll_misc(int(it._iMiscId)) and
                 int(it._iSpell) == spellid_identify):
             return BELT_FIRST + i
     return None
@@ -139,17 +144,16 @@ def _find_scroll_of_identify(player):
 
 def _count_scroll_spellid(player, spellid):
     """Count scrolls with the given spellid in inventory and belt."""
-    imisc_scroll = dx.item_misc_id.IMISC_SCROLL.value
-    itype_none   = dx.ItemType.None_.value
+    itype_none = dx.ItemType.None_.value
     count = 0
     for i in range(int(player._pNumInv)):
         it = player.InvList[i]
-        if int(it._iMiscId) == imisc_scroll and int(it._iSpell) == spellid:
+        if _is_scroll_misc(int(it._iMiscId)) and int(it._iSpell) == spellid:
             count += 1
     for i in range(8):
         it = player.SpdList[i]
         if (int(it._itype) != itype_none and
-                int(it._iMiscId) == imisc_scroll and
+                _is_scroll_misc(int(it._iMiscId)) and
                 int(it._iSpell) == spellid):
             count += 1
     return count
@@ -1160,9 +1164,8 @@ class AgentAI:
     def _evaluate_misc_item(self, d, item, seed, name):
         """Evaluate a Misc-type item and queue an action or keep it silently."""
         player       = d.player
-        imisc        = int(item._iMiscId)
-        imisc_book   = dx.item_misc_id.IMISC_BOOK.value
-        imisc_scroll = dx.item_misc_id.IMISC_SCROLL.value
+        imisc      = int(item._iMiscId)
+        imisc_book = dx.item_misc_id.IMISC_BOOK.value
 
         if imisc == imisc_book:
             # Read immediately; engine ignores the command if magic stat is too low.
@@ -1171,7 +1174,7 @@ class AgentAI:
             self._action_queue.append({'action': 'use', 'seed': seed, 'name': name})
             return
 
-        if imisc == imisc_scroll:
+        if _is_scroll_misc(imisc):
             spellid          = int(item._iSpell)
             spellid_healing  = dx.SpellID.Healing.value
             spellid_identify = dx.SpellID.Identify.value
