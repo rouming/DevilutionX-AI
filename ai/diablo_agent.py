@@ -706,17 +706,15 @@ class AgentAI:
             curr_list = {s for (c, s, _) in inv_curr    if inv_first <= c}
             skip      = self._queued_seeds
             new_seeds = curr_list - prev_list - skip
-            # Re-evaluate items that were just identified this tick.
-            # inv_in_curr: inventory+belt seeds; body_in_curr: equipped-slot seeds.
-            inv_in_curr  = self._identify_pending_seeds & curr_list
-            body_curr    = {s for (c, s, _) in inv_curr if c < inv_first}
-            body_in_curr = self._identify_pending_seeds & body_curr
-            new_seeds   |= inv_in_curr - skip
+            # Re-evaluate inventory items that were just identified this tick
+            # (e.g. jewelry identified in-place before equip decision).
+            new_seeds |= (self._identify_pending_seeds & curr_list) - skip
             self._identify_pending_seeds.clear()
-            # Equipped item identified - rescan all inventory to find a replacement
-            # in case it turned out to be cursed (large negative _iPL* stats).
-            if body_in_curr:
-                new_seeds |= curr_list - skip
+            # No rescan needed for equipped items identified in body slots: all
+            # inventory gear was already evaluated on pickup and either queued
+            # (seed in _queued_seeds, skipped) or dropped (gone from inv).
+            # New pickups after identification compare against the live InvBody
+            # state which already reflects the identified (possibly cursed) item.
             if new_seeds and not self.no_gear_management:
                 self._inv_changed = True
                 for seed in new_seeds:
