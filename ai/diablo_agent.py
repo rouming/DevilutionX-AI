@@ -53,6 +53,11 @@ _WEAPON_ILOC = frozenset({
     dx.item_equip_type.ILOC_TWOHAND.value,
 })
 
+_JEWELRY_ILOC = frozenset({
+    dx.item_equip_type.ILOC_RING.value,
+    dx.item_equip_type.ILOC_AMULET.value,
+})
+
 _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_ARMOR.value,
     dx.item_equip_type.ILOC_HELM.value,
@@ -139,6 +144,19 @@ def _find_scroll_of_identify(player):
                 _is_scroll_misc(int(it._iMiscId)) and
                 int(it._iSpell) == spellid_identify):
             return BELT_FIRST + i
+    return None
+
+
+def _find_unidentified_equipped(player):
+    """Return (seed, name) of first unidentified magical item in body slots, or None."""
+    none_type      = dx.ItemType.None_.value
+    quality_normal = dx.item_quality.ITEM_QUALITY_NORMAL.value
+    for cii in range(dx.inv_item.INVITEM_INV_FIRST.value):
+        item = player.InvBody[cii]
+        if (int(item._itype) != none_type
+                and int(item._iMagical) != quality_normal
+                and not item._iIdentified):
+            return int(item._iSeed), _item_name(item)
     return None
 
 
@@ -1189,7 +1207,20 @@ class AgentAI:
                 # Keep all - primary survival kit, never drop.
                 return
 
-            if spellid in (spellid_identify, spellid_portal):
+            if spellid == spellid_identify:
+                cap = 2
+                if _count_scroll_spellid(player, spellid) > cap:
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - scroll surplus (>{cap})", file=self.log)
+                    self._queued_seeds.add(seed)
+                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+                else:
+                    # New identify scroll: immediately identify an equipped unidentified
+                    # item if any, so magical bonuses take effect right away.
+                    self._try_identify_with_new_scroll(d)
+                return
+
+            if spellid == spellid_portal:
                 cap = 2
                 if _count_scroll_spellid(player, spellid) > cap:
                     print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
@@ -1231,6 +1262,26 @@ class AgentAI:
             return
 
         # All other Misc types (gold, runes, quest items, etc.): skip silently.
+
+    def _try_identify_with_new_scroll(self, d):
+        """Called when a new scroll of identify is acquired.
+        Queues an identify action for the first unidentified equipped item, if any."""
+        player = d.player
+        target = _find_unidentified_equipped(player)
+        if target is None:
+            return
+        target_seed, target_name = target
+        if target_seed in self._queued_seeds:
+            return
+        scroll_cii = _find_scroll_of_identify(player)
+        if scroll_cii is None:
+            return
+        print(f"agent {self._tick_count}: queue identify equipped '{target_name}'"
+              f" seed={target_seed} (identify scroll acquired)", file=self.log)
+        self._queued_seeds.add(target_seed)
+        self._action_queue.append(
+            {'action': 'identify', 'seed': target_seed, 'name': target_name,
+             'scroll_cii': scroll_cii})
 
     def _locate_dropped_items(self, d):
         """Scan all active floor items for _iMasked set (dropped by agent).
@@ -1318,19 +1369,25 @@ class AgentAI:
 
         if (int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
                 and not item._iIdentified):
-            scroll_cii = _find_scroll_of_identify(player)
-            if scroll_cii is None:
-                print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
-                      f" - not identified, no scroll", file=self.log)
-                self._queued_seeds.add(seed)
-                self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
-            else:
-                print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}", file=self.log)
-                self._queued_seeds.add(seed)
-                self._action_queue.append(
-                    {'action': 'identify', 'seed': seed, 'name': name,
-                     'scroll_cii': scroll_cii})
-            return
+            if int(item._iLoc) in _JEWELRY_ILOC:
+                # Jewelry has no base stats; all value is in _iPL* which only apply
+                # after identification. Must identify to know if worth wearing.
+                scroll_cii = _find_scroll_of_identify(player)
+                if scroll_cii is None:
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - jewelry not identified, no scroll", file=self.log)
+                    self._queued_seeds.add(seed)
+                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+                else:
+                    print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}", file=self.log)
+                    self._queued_seeds.add(seed)
+                    self._action_queue.append(
+                        {'action': 'identify', 'seed': seed, 'name': name,
+                         'scroll_cii': scroll_cii})
+                return
+            # Non-jewelry: base damage (_iMinDam/_iMaxDam) and base AC (_iAC) apply
+            # even without identification. Scoring uses only these base stats so the
+            # comparison is valid - fall through to normal scoring.
 
         # For rings: if left slot occupied, try right slot instead.
         if (int(item._iLoc) == dx.item_equip_type.ILOC_RING.value and
@@ -1392,7 +1449,7 @@ class AgentAI:
                     if int(it._itype) != itype_none and int(it._iSeed) == seed:
                         cii = BELT_FIRST + i
                         break
-            if cii is None:
+            if cii is None and entry['action'] != 'identify':
                 print(f"agent {self._tick_count}: queue discard '{name}' seed={seed} - not in inv/belt", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
@@ -1408,13 +1465,29 @@ class AgentAI:
                 self._equip(cii, body_cii)
                 return
             elif entry['action'] == 'identify':
+                # cii may be None if item is in a body slot (already equipped).
+                target_cii = cii
+                if target_cii is None:
+                    itype_none = dx.ItemType.None_.value
+                    for i in range(INV_FIRST):  # body slots 0..INV_FIRST-1
+                        eq = player.InvBody[i]
+                        if int(eq._itype) != itype_none and int(eq._iSeed) == seed:
+                            target_cii = i
+                            break
+                if target_cii is None:
+                    print(f"agent {self._tick_count}: queue discard '{name}' seed={seed}"
+                          f" - identify: not found", file=self.log)
+                    self._action_queue.pop(0)
+                    self._queued_seeds.discard(seed)
+                    continue
                 scroll_cii = _find_scroll_of_identify(player)
                 if scroll_cii is None:
                     print(f"agent {self._tick_count}: drop '{name}' seed={seed}"
                           f" - identify: scroll gone", file=self.log)
                     self._action_queue.pop(0)
                     self._queued_seeds.discard(seed)
-                    self._drop_and_mask(d, cii)
+                    if cii is not None:  # only drop if item is in inv, not if equipped
+                        self._drop_and_mask(d, cii)
                     return
                 print(f"agent {self._tick_count}: identify '{name}' seed={seed}", file=self.log)
                 self._action_queue.pop(0)
@@ -1423,7 +1496,7 @@ class AgentAI:
                 RE = ring.RingEntryType
                 self.game.submit_key(
                     RE.RING_ENTRY_KEY_INV_IDENTIFY_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
-                    data=(scroll_cii, cii))
+                    data=(scroll_cii, target_cii))
                 return
             elif entry['action'] == 'use':
                 print(f"agent {self._tick_count}: use '{name}' seed={seed}", file=self.log)
