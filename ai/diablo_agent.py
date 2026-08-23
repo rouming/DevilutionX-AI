@@ -1172,6 +1172,13 @@ class AgentAI:
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
 
+        if (int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
+                and not item._iIdentified):
+            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} - not identified", file=self.log)
+            self._queued_seeds.add(seed)
+            self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+            return
+
         # For rings: if left slot occupied, try right slot instead.
         if (int(item._iLoc) == dx.item_equip_type.ILOC_RING.value and
                 int(player.InvBody[body_cii]._itype) != dx.ItemType.None_.value):
