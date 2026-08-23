@@ -1901,6 +1901,29 @@ class DiabloEnv_ClearAllLevels_v16(DiabloEnv_ClearAllLevels_v15):
     }
 
 
+class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
+    """Like v16 but halves MovementPenalty (-0.05 -> -0.025) and raises
+    ExploreTiles (+0.02 -> +0.05).
+
+    v16 analysis showed the agent learned passivity: every move costs -0.039
+    on average (= -0.05 + 0.538 * 0.02), so standing still is the optimal
+    strategy.  These two changes flip that:
+
+      per-move EV = -0.025 + 0.538 * 0.05 = +0.002
+
+    Each step to a new tile now earns a net +0.002, giving the agent an active
+    incentive to keep moving.  The explore reward is still not farmable (max
+    ~600 tiles * 0.05 = 30/ep for a full level clear, below the goal of 40).
+    Movement penalty kept non-zero (-0.025) to maintain the dense stuck-corner
+    signal from v15."""
+    ENV_VERSION = 17
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v16.REWARDS,
+        RewardEvent.MovementPenalty: -0.025,
+        RewardEvent.ExploreTiles:    +0.050,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1947,6 +1970,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v15 },
     { 'id': 'Diablo-ClearAllLevels-v16',
       'entry_point': DiabloEnv_ClearAllLevels_v16 },
+    { 'id': 'Diablo-ClearAllLevels-v17',
+      'entry_point': DiabloEnv_ClearAllLevels_v17 },
 
     # HRL Environment Classes
 
