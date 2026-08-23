@@ -103,11 +103,28 @@ def _can_equip(item, player):
             int(item._iMinDex) <= int(player._pBaseDex))
 
 
+def _pl_stats_warrior(item):
+    """Stat bonus contribution for warrior: STR + VIT.
+    Only meaningful when item is identified; caller is responsible for that check."""
+    return int(item._iPLStr) + int(item._iPLVit)
+
+
 def _item_score(item, hero_class):
     """Scalar score + label for armor and jewelry (used inside class-specific functions)."""
     iloc = int(item._iLoc)
+    identified = bool(item._iIdentified)
     if iloc in _ARMOR_ILOC:
-        score = int(item._iAC)
+        ac = int(item._iAC)
+        if identified:
+            # GetBonusAC: _iAC * _iPLAC / 100 (clamped to sign if rounds to 0)
+            pl_ac = int(item._iPLAC)
+            bonus = ac * pl_ac // 100
+            if bonus == 0 and pl_ac != 0:
+                bonus = 1 if pl_ac > 0 else -1
+            ac += bonus
+            if hero_class == dx.HeroClass.Warrior.value:
+                ac += _pl_stats_warrior(item)
+        score = ac
         return score, f"AC={score}"
     # Jewelry: stat bonus priority depends on class.
     if hero_class == dx.HeroClass.Warrior.value:
@@ -210,7 +227,15 @@ def _is_better_for_warrior(item, player, body_cii, pending):
     if iloc in _WEAPON_ILOC:
         # Shields go to HAND_RIGHT and are scored by AC, not damage.
         if int(item._itype) == dx.ItemType.Shield.value:
-            new_score = int(item._iAC) * _AC_WEIGHT
+            item_id = bool(item._iIdentified)
+            new_ac  = int(item._iAC)
+            if item_id:
+                pl_ac = int(item._iPLAC)
+                b = new_ac * pl_ac // 100
+                if b == 0 and pl_ac != 0:
+                    b = 1 if pl_ac > 0 else -1
+                new_ac += b + _pl_stats_warrior(item)
+            new_score = new_ac * _AC_WEIGHT
             new_label = f"score={new_score:.1f}"
             if pending is not None:
                 _, old_score, old_name = pending
@@ -218,20 +243,33 @@ def _is_better_for_warrior(item, player, body_cii, pending):
             eq = player.InvBody[body_cii]
             if int(eq._itype) == dx.ItemType.None_.value:
                 return True, new_score, new_label, 0, "empty", ""
-            old_score = int(eq._iAC) * _AC_WEIGHT
+            eq_id  = bool(eq._iIdentified)
+            old_ac = int(eq._iAC)
+            if eq_id:
+                pl_ac = int(eq._iPLAC)
+                b = old_ac * pl_ac // 100
+                if b == 0 and pl_ac != 0:
+                    b = 1 if pl_ac > 0 else -1
+                old_ac += b + _pl_stats_warrior(eq)
+            old_score = old_ac * _AC_WEIGHT
             is_better = new_score > old_score or (
                 new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
             return is_better, new_score, new_label, old_score, f"score={old_score:.1f}", _item_name(eq)
 
-        # Weapon in HAND_LEFT: score = avg_dmg + shield_AC * AC_WEIGHT.
+        # Weapon in HAND_LEFT: score = avg_dmg + shield_AC * AC_WEIGHT + stat_bonus.
         # A two-hander displaces the shield, so its AC contribution drops to 0.
         hand_r    = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
         shield_ac = (int(hand_r._iAC)
                      if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
-        new_dmg   = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+        item_id      = bool(item._iIdentified)
+        new_dmg      = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+        if item_id:
+            pl_dam  = int(item._iPLDam)
+            new_dmg *= (1 + pl_dam / 100)
         keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        new_score = new_dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0)
-        new_label = f"score={new_score:.1f}"
+        new_stat     = _pl_stats_warrior(item) if item_id else 0
+        new_score    = new_dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0) + new_stat
+        new_label    = f"score={new_score:.1f}"
 
         if pending is not None:
             _, old_score, old_name = pending
@@ -240,10 +278,15 @@ def _is_better_for_warrior(item, player, body_cii, pending):
         eq = player.InvBody[body_cii]
         if int(eq._itype) == dx.ItemType.None_.value:
             return True, new_score, new_label, 0, "empty", ""
+        eq_id     = bool(eq._iIdentified)
         eq_iloc   = int(eq._iLoc)
         old_dmg   = (int(eq._iMinDam) + int(eq._iMaxDam)) / 2
+        if eq_id:
+            old_pl_dam = int(eq._iPLDam)
+            old_dmg   *= (1 + old_pl_dam / 100)
         old_keeps = (eq_iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        old_score = old_dmg + (shield_ac * _AC_WEIGHT if old_keeps else 0)
+        old_stat  = _pl_stats_warrior(eq) if eq_id else 0
+        old_score = old_dmg + (shield_ac * _AC_WEIGHT if old_keeps else 0) + old_stat
         is_better = new_score > old_score or (
             new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
         return is_better, new_score, new_label, old_score, f"score={old_score:.1f}", _item_name(eq)
@@ -664,8 +707,16 @@ class AgentAI:
             skip      = self._queued_seeds
             new_seeds = curr_list - prev_list - skip
             # Re-evaluate items that were just identified this tick.
-            new_seeds |= (self._identify_pending_seeds & curr_list) - skip
+            # inv_in_curr: inventory+belt seeds; body_in_curr: equipped-slot seeds.
+            inv_in_curr  = self._identify_pending_seeds & curr_list
+            body_curr    = {s for (c, s, _) in inv_curr if c < inv_first}
+            body_in_curr = self._identify_pending_seeds & body_curr
+            new_seeds   |= inv_in_curr - skip
             self._identify_pending_seeds.clear()
+            # Equipped item identified - rescan all inventory to find a replacement
+            # in case it turned out to be cursed (large negative _iPL* stats).
+            if body_in_curr:
+                new_seeds |= curr_list - skip
             if new_seeds and not self.no_gear_management:
                 self._inv_changed = True
                 for seed in new_seeds:
