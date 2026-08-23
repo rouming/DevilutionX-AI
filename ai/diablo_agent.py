@@ -632,13 +632,13 @@ class AgentAI:
             self._log_inv_diff(self._inv_prev, inv_curr)
 
         if self._inv_prev is not None:
-            # Detect new InvList items and evaluate them.
-            # Belt (consumables) excluded: INVITEM_INV_FIRST <= cii < INVITEM_BELT_FIRST.
+            # Detect new InvList and belt items and evaluate them.
+            # Body slots (cii < INVITEM_INV_FIRST) excluded; belt included.
             # Level-entry evaluation of carried items happens in _on_level_change, not here.
             inv_first  = dx.inv_item.INVITEM_INV_FIRST.value
             belt_first = dx.inv_item.INVITEM_BELT_FIRST.value
-            prev_list = {s for (c, s, _) in self._inv_prev if inv_first <= c < belt_first}
-            curr_list = {s for (c, s, _) in inv_curr    if inv_first <= c < belt_first}
+            prev_list = {s for (c, s, _) in self._inv_prev if inv_first <= c}
+            curr_list = {s for (c, s, _) in inv_curr    if inv_first <= c}
             skip      = self._queued_seeds
             new_seeds = curr_list - prev_list - skip
             # Re-evaluate items that were just identified this tick.
@@ -723,9 +723,8 @@ class AgentAI:
         # the current snapshot so the next tick does not treat them as new again.
         if not self.no_gear_management:
             inv_first  = dx.inv_item.INVITEM_INV_FIRST.value
-            belt_first = dx.inv_item.INVITEM_BELT_FIRST.value
             inv_now    = self._inv_snapshot(d.player)
-            for seed in {s for (c, s, _) in inv_now if inv_first <= c < belt_first}:
+            for seed in {s for (c, s, _) in inv_now if inv_first <= c}:
                 self._evaluate_and_queue(d, seed)
             self._inv_prev = inv_now
         else:
@@ -1257,9 +1256,11 @@ class AgentAI:
             data=(inv_cii, body_cii))
 
     def _evaluate_and_queue(self, d, seed):
-        """Evaluate one new InvList item immediately and enqueue an equip or drop action."""
+        """Evaluate one InvList or belt item immediately and enqueue an equip or drop action."""
         player       = d.player
         INV_FIRST    = dx.inv_item.INVITEM_INV_FIRST.value
+        BELT_FIRST   = dx.inv_item.INVITEM_BELT_FIRST.value
+        itype_none   = dx.ItemType.None_.value
         hero_class   = int(player._pClass)
         is_better_fn = _IS_BETTER_FOR_CLASS[hero_class]
 
@@ -1268,6 +1269,12 @@ class AgentAI:
             if int(player.InvList[i]._iSeed) == seed:
                 item = player.InvList[i]
                 break
+        if item is None:
+            for i in range(8):
+                it = player.SpdList[i]
+                if int(it._itype) != itype_none and int(it._iSeed) == seed:
+                    item = it
+                    break
         if item is None:
             return
 
@@ -1370,7 +1377,15 @@ class AgentAI:
                     cii = INV_FIRST + i
                     break
             if cii is None:
-                print(f"agent {self._tick_count}: queue discard '{name}' seed={seed} - not in InvList", file=self.log)
+                itype_none = dx.ItemType.None_.value
+                BELT_FIRST = dx.inv_item.INVITEM_BELT_FIRST.value
+                for i in range(8):
+                    it = player.SpdList[i]
+                    if int(it._itype) != itype_none and int(it._iSeed) == seed:
+                        cii = BELT_FIRST + i
+                        break
+            if cii is None:
+                print(f"agent {self._tick_count}: queue discard '{name}' seed={seed} - not in inv/belt", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 continue
