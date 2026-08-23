@@ -1008,6 +1008,20 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 			}
 			continue;
 
+		} else if (bit == RING_ENTRY_KEY_INV_IDENTIFY_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				int scroll_cii = static_cast<int>(data1);
+				int target_cii = static_cast<int>(data2);
+				printf(">> %s: INV_IDENTIFY_ITEM scroll_cii=%d target_cii=%d\n", __func__, scroll_cii, target_cii);
+				CheckIdentify(*MyPlayer, target_cii);
+				if (scroll_cii >= INVITEM_INV_FIRST && scroll_cii <= INVITEM_INV_LAST)
+					MyPlayer->RemoveInvItem(scroll_cii - INVITEM_INV_FIRST);
+				else if (scroll_cii >= INVITEM_BELT_FIRST && scroll_cii <= INVITEM_BELT_LAST)
+					MyPlayer->RemoveSpdBarItem(scroll_cii - INVITEM_BELT_FIRST);
+			}
+			continue;
+
 		} else if (bit == RING_ENTRY_KEY_CAST_SPELL) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {

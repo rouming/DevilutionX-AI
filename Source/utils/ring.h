@@ -35,7 +35,8 @@ enum ring_entry_type {
 	RING_ENTRY_KEY_INV_MOVE_ITEM   = 1<<17, /* data1 = src_cii, data2 = dst_cii */
 	RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18, /* data1 = cii */
 	RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19,
-	RING_ENTRY_KEY_INV_REPAIR_ITEM = 1<<22, /* data1 = cii */
+	RING_ENTRY_KEY_INV_REPAIR_ITEM   = 1<<22, /* data1 = cii */
+	RING_ENTRY_KEY_INV_IDENTIFY_ITEM = 1<<23, /* data1 = scroll_cii, data2 = target_cii */
 
 	RING_ENTRY_KEY_CAST_SPELL      = 1<<20, /* data1 = SpellID */
 
