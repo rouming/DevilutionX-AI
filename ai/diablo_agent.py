@@ -164,17 +164,21 @@ def _find_scroll_of_identify(player):
     return None
 
 
-def _find_unidentified_equipped(player):
-    """Return (seed, name) of first unidentified magical item in body slots, or None."""
+def _find_unidentified_equipped(player, hero_class):
+    """Return (seed, name) of the highest-scoring unidentified magical body item, or None."""
     none_type      = dx.ItemType.None_.value
     quality_normal = dx.item_quality.ITEM_QUALITY_NORMAL.value
+    best = None  # (score, seed, name)
     for cii in range(dx.inv_item.INVITEM_INV_FIRST.value):
         item = player.InvBody[cii]
-        if (int(item._itype) != none_type
-                and int(item._iMagical) != quality_normal
-                and not item._iIdentified):
-            return int(item._iSeed), _item_name(item)
-    return None
+        if (int(item._itype) == none_type
+                or int(item._iMagical) == quality_normal
+                or item._iIdentified):
+            continue
+        score, _ = _item_score(item, hero_class)
+        if best is None or score > best[0]:
+            best = (score, int(item._iSeed), _item_name(item))
+    return (best[1], best[2]) if best is not None else None
 
 
 def _count_scroll_spellid(player, spellid):
@@ -652,6 +656,8 @@ class AgentAI:
         self._queued_seeds           = set()
         # seeds that were just identified this tick; re-evaluated next tick
         self._identify_pending_seeds = set()
+        # {seed: bool} - identification state of equipped body slots, updated every tick
+        self._body_id_state          = {}
         # True if new InvList seeds were detected this tick; blocks queue execution
         self._inv_changed            = False
 
@@ -726,6 +732,12 @@ class AgentAI:
         if self._inv_prev is not None and inv_curr != self._inv_prev:
             self._log_inv_diff(self._inv_prev, inv_curr)
 
+        # Refresh body-slot id state every tick (needed for shrine detection below).
+        none_type   = dx.ItemType.None_.value
+        body_id_now = {int(d.player.InvBody[c]._iSeed): bool(d.player.InvBody[c]._iIdentified)
+                       for c in range(dx.inv_item.INVITEM_INV_FIRST.value)
+                       if int(d.player.InvBody[c]._itype) != none_type}
+
         if self._inv_prev is not None:
             # Detect new InvList and belt items and evaluate them.
             # Body slots (cii < INVITEM_INV_FIRST) excluded; belt included.
@@ -743,6 +755,12 @@ class AgentAI:
             if pending_id:
                 self._log_identified_items(d, pending_id, inv_curr)
             self._identify_pending_seeds = set()
+            # Log equipped items identified outside the scroll path (e.g. identify shrine).
+            shrine_id = {s for s, idd in body_id_now.items()
+                         if idd and not self._body_id_state.get(s, False)
+                         and s not in pending_id}
+            if shrine_id:
+                self._log_identified_items(d, shrine_id, inv_curr)
             # No rescan needed for equipped items identified in body slots: all
             # inventory gear was already evaluated on pickup and either queued
             # (seed in _queued_seeds, skipped) or dropped (gone from inv).
@@ -753,6 +771,7 @@ class AgentAI:
                 for seed in new_seeds:
                     self._evaluate_and_queue(d, seed)
 
+        self._body_id_state = body_id_now
         self._inv_prev = inv_curr
         self._locate_dropped_items(d)
 
@@ -1349,7 +1368,8 @@ class AgentAI:
         """Called when a new scroll of identify is acquired.
         Queues an identify action for the first unidentified equipped item, if any."""
         player = d.player
-        target = _find_unidentified_equipped(player)
+        hero_class = int(player._pClass)
+        target = _find_unidentified_equipped(player, hero_class)
         if target is None:
             return
         target_seed, target_name = target
