@@ -204,6 +204,36 @@ def _is_combat_spell_scroll(spellid):
     return False
 
 
+def _identified_label(item):
+    """Return a compact string of the revealed magical properties of an item."""
+    parts = []
+    pl_dam  = int(item._iPLDam)
+    pl_ac   = int(item._iPLAC)
+    pl_str  = int(item._iPLStr)
+    pl_vit  = int(item._iPLVit)
+    pl_dex  = int(item._iPLDex)
+    pl_mag  = int(item._iPLMag)
+    pl_tohit= int(item._iPLToHit)
+    pl_hp   = int(item._iPLHP)
+    pl_mana = int(item._iPLMana)
+    pl_fr   = int(item._iPLFR)
+    pl_lr   = int(item._iPLLR)
+    pl_mr   = int(item._iPLMR)
+    if pl_dam   != 0: parts.append(f"dmg%={pl_dam:+d}")
+    if pl_tohit != 0: parts.append(f"tohit={pl_tohit:+d}")
+    if pl_ac    != 0: parts.append(f"ac%={pl_ac:+d}")
+    if pl_str   != 0: parts.append(f"str={pl_str:+d}")
+    if pl_vit   != 0: parts.append(f"vit={pl_vit:+d}")
+    if pl_dex   != 0: parts.append(f"dex={pl_dex:+d}")
+    if pl_mag   != 0: parts.append(f"mag={pl_mag:+d}")
+    if pl_hp    != 0: parts.append(f"hp={pl_hp:+d}")
+    if pl_mana  != 0: parts.append(f"mana={pl_mana:+d}")
+    if pl_fr    != 0: parts.append(f"FR={pl_fr:+d}")
+    if pl_lr    != 0: parts.append(f"LR={pl_lr:+d}")
+    if pl_mr    != 0: parts.append(f"MR={pl_mr:+d}")
+    return " ".join(parts) if parts else "no bonuses"
+
+
 def _dur_ratio(item):
     """Current durability as a fraction of max. 255 = indestructible -> 1.0."""
     max_dur = int(item._iMaxDur)
@@ -708,8 +738,11 @@ class AgentAI:
             new_seeds = curr_list - prev_list - skip
             # Re-evaluate inventory items that were just identified this tick
             # (e.g. jewelry identified in-place before equip decision).
-            new_seeds |= (self._identify_pending_seeds & curr_list) - skip
-            self._identify_pending_seeds.clear()
+            pending_id = self._identify_pending_seeds
+            new_seeds |= (pending_id & curr_list) - skip
+            if pending_id:
+                self._log_identified_items(d, pending_id, inv_curr)
+            self._identify_pending_seeds = set()
             # No rescan needed for equipped items identified in body slots: all
             # inventory gear was already evaluated on pickup and either queued
             # (seed in _queued_seeds, skipped) or dropped (gone from inv).
@@ -1362,6 +1395,38 @@ class AgentAI:
         self.game.submit_key(
             RE.RING_ENTRY_KEY_INV_MOVE_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
             data=(inv_cii, body_cii))
+
+    def _log_identified_items(self, d, seeds, inv_curr):
+        """Log revealed magical properties for all items in seeds that are now identified."""
+        player     = d.player
+        itype_none = dx.ItemType.None_.value
+        INV_FIRST  = dx.inv_item.INVITEM_INV_FIRST.value
+        all_seeds  = {s for (_, s, _) in inv_curr}
+        for seed in seeds:
+            if seed not in all_seeds:
+                continue
+            item = None
+            for i in range(INV_FIRST):
+                eq = player.InvBody[i]
+                if int(eq._itype) != itype_none and int(eq._iSeed) == seed:
+                    item = eq
+                    break
+            if item is None:
+                for i in range(int(player._pNumInv)):
+                    it = player.InvList[i]
+                    if int(it._iSeed) == seed:
+                        item = it
+                        break
+            if item is None:
+                for i in range(8):
+                    it = player.SpdList[i]
+                    if int(it._itype) != itype_none and int(it._iSeed) == seed:
+                        item = it
+                        break
+            if item is None:
+                continue
+            print(f"agent {self._tick_count}: revealed '{_item_name(item)}'"
+                  f" seed={seed} [{_identified_label(item)}]", file=self.log)
 
     def _evaluate_and_queue(self, d, seed):
         """Evaluate one InvList or belt item immediately and enqueue an equip or drop action."""
