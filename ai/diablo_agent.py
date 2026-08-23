@@ -766,6 +766,7 @@ class AgentAI:
                 print(f"agent {self._tick_count}: pathfinder stalled: {reason}",
                       file=self.log)
                 self._pathfind_stall_logged = now
+                self.state = AgentAI.State.DONE
             self._submit(diablo_env.ActionEnum.Stand.value)
             return
 
