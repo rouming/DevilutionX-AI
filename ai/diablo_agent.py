@@ -1513,11 +1513,12 @@ class AgentAI:
             is_better_fn(item, player, body_cii, pending)
 
         if is_better:
+            id_tag = "" if item._iIdentified else " unidentified"
             if old_label == "empty":
-                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}] - empty slot",
+                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag} - empty slot",
                       file=self.log)
             else:
-                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]"
+                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag}"
                       f" over '{old_name}' [{old_label}]", file=self.log)
             # Set _pending_equip at queue-time so subsequent evaluations compare against
             # this winner. Not added to any exclusion set: displaced gear must re-enter evaluation.
