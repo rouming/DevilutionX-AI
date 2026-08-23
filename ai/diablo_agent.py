@@ -501,6 +501,7 @@ class AgentAI:
     def __init__(self, game, model_runner, view_radius=10,
                  kill_threshold=0.5, repair_threshold=0.25,
                  max_steps_per_level=3000, no_gear_management=False,
+                 keep_mana_potions=False,
                  safe_radius=2, pause=0.0, log=None, stat_strategy='dex-rush'):
         self.game          = game
         self.model         = model_runner
@@ -513,6 +514,7 @@ class AgentAI:
         self.repair_threshold    = repair_threshold
         self.max_steps_per_level = max_steps_per_level
         self.no_gear_management  = no_gear_management
+        self.keep_mana_potions   = keep_mana_potions
         self.safe_radius         = safe_radius
         self.pause       = pause
         self.log         = log or sys.stdout
@@ -1196,6 +1198,27 @@ class AgentAI:
             # All other scrolls: drop.
             print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
                   f" - unused scroll spellid={spellid}", file=self.log)
+            self._queued_seeds.add(seed)
+            self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+            return
+
+        imisc_heal     = dx.item_misc_id.IMISC_HEAL.value
+        imisc_fullheal = dx.item_misc_id.IMISC_FULLHEAL.value
+        imisc_rejuv    = dx.item_misc_id.IMISC_REJUV.value
+        imisc_fullrejuv= dx.item_misc_id.IMISC_FULLREJUV.value
+        imisc_mana     = dx.item_misc_id.IMISC_MANA.value
+        imisc_fullmana = dx.item_misc_id.IMISC_FULLMANA.value
+
+        if imisc in (imisc_heal, imisc_fullheal, imisc_rejuv, imisc_fullrejuv):
+            # Always keep healing and rejuvenation potions.
+            return
+
+        if imisc in (imisc_mana, imisc_fullmana):
+            # TODO: enable keep_mana_potions once the agent uses spells heavily.
+            if self.keep_mana_potions:
+                return
+            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                  f" - mana potion, not keeping", file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
