@@ -1168,10 +1168,15 @@ class AgentAI:
         imisc_book = dx.item_misc_id.IMISC_BOOK.value
 
         if imisc == imisc_book:
-            # Read immediately; engine ignores the command if magic stat is too low.
-            print(f"agent {self._tick_count}: queue read book '{name}' seed={seed}", file=self.log)
-            self._queued_seeds.add(seed)
-            self._action_queue.append({'action': 'use', 'seed': seed, 'name': name})
+            if int(player._pMagic) >= int(item._iMinMag):
+                print(f"agent {self._tick_count}: queue read book '{name}' seed={seed}", file=self.log)
+                self._queued_seeds.add(seed)
+                self._action_queue.append({'action': 'use', 'seed': seed, 'name': name})
+            else:
+                print(f"agent {self._tick_count}: queue drop book '{name}' seed={seed}"
+                      f" - magic {int(player._pMagic)} < {int(item._iMinMag)}", file=self.log)
+                self._queued_seeds.add(seed)
+                self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
 
         if _is_scroll_misc(imisc):
