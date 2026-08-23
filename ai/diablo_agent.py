@@ -1018,7 +1018,10 @@ class AgentAI:
         monster_attrs = diablo_state.compute_monster_attrs(
             d, self.view_radius, max_level, max_walk, max_attack,
             diablo_state.ranged_ai_ids_array())
-        return {"env": env, "scalars": scalars, "monster_attrs": monster_attrs}
+        obs = {"env": env, "scalars": scalars, "monster_attrs": monster_attrs}
+        if getattr(self.model.acmodel, 'has_automap', False):
+            obs["automap"] = diablo_env.get_automap_obs(d)
+        return obs
 
     def _submit(self, action):
         RE = ring.RingEntryType

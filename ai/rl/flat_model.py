@@ -493,6 +493,34 @@ class CNN4(nn.Module):
 # controllers, etc.) are trained end-to-end via PPO or another RL algorithm.
 # https://medium.com/@dlgkswn3124/summary-squeeze-and-excitation-networks-senet-a510e902e668
 #
+class AutomapCNN(nn.Module):
+    """Small CNN for the 40x40 automap observation (3 input channels).
+
+    Channels: ch0=explored, ch1=frontier, ch2=player position.
+    Three stride-2 convolutions collapse 40x40 -> 5x5, then AdaptiveAvgPool
+    and a linear projection give a 64-dim embedding added as a residual to
+    the LSTM output.  All layers use default PyTorch init, then FlatACModel
+    normalizes them via apply(init_params) - see init_params() and
+    FlatACModel.__init__ for the effective initial weight scale."""
+
+    def __init__(self, output_dim=64):
+        super().__init__()
+        self.embed_dim = output_dim
+        self.network = nn.Sequential(
+            nn.Conv2d(3, 16, 3, stride=2, padding=1),   # 40->20
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, 3, stride=2, padding=1),  # 20->10
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 10->5
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(64, output_dim),
+        )
+    def forward(self, x):
+        return self.network(x)
+
+
 class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
     def __init__(self, obs_space, action_space,
                  cnn_arch,
@@ -589,12 +617,21 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
             dummy = self.image_conv(dummy)
         self.image_embedding_size = dummy.numel()
 
-        # Define memory. Scalars (when present) are concatenated with
-        # the image embedding at the LSTM input, so the recurrence sees
-        # both spatial and global state every step. Hidden size stays
-        # at image_embedding_size so actor/critic dims are unchanged.
+        # automap branch: 64-dim embedding fed into the LSTM input alongside
+        # the env CNN and scalars so gradients reach the CNN every step.
+        self.has_automap = "automap" in obs_space
+        if self.has_automap:
+            self.automap_enc = AutomapCNN(output_dim=64)
+            self.automap_embed_size = self.automap_enc.embed_dim
+        else:
+            self.automap_embed_size = 0
+
+        # Define memory. Scalars and automap (when present) are concatenated
+        # with the image embedding at the LSTM input so the recurrence sees
+        # spatial, global, and map state every step.
         if self.use_memory:
-            rnn_input_size = self.image_embedding_size + self.scalar_embed_size
+            rnn_input_size = (self.image_embedding_size + self.scalar_embed_size
+                              + self.automap_embed_size)
             self.memory_rnn = nn.LSTMCell(rnn_input_size, self.semi_memory_size)
 
         # Define text embedding
@@ -622,10 +659,12 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         #    self.embedding_size += self.text_embedding_size
         if self.use_text and not "filmcnn" in self.cnn_arch:
             self.embedding_size += self.final_instr_dim
-        # Without an RNN, scalars cannot ride the recurrence; concat
+        # Without an RNN, scalars/automap cannot ride the recurrence; concat
         # them straight into the actor/critic input instead.
         if self.has_scalars and not self.use_memory:
             self.embedding_size += self.scalar_embed_size
+        if self.has_automap and not self.use_memory:
+            self.embedding_size += self.automap_embed_size
 
         if self.cnn_arch.startswith("expert_filmcnn"):
             if self.cnn_arch == "expert_filmcnn":
@@ -728,6 +767,8 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         # Initialize parameters correctly
         self.apply(init_params)
 
+        # Re-init automap final linear with small sigma AFTER apply(init_params)
+        # which would otherwise overwrite it with unit-norm rows (rms~0.125).
     def load_from_status(self, status, logger=None):
         if (self.cnn_arch == "cnn32expert" and
                 "image_conv.network.0.weight" in status["model_state"]):
@@ -741,12 +782,19 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         own = self.state_dict()
         has_mismatch = any(k in own and src[k].shape != own[k].shape
                            for k in src)
+        missing = [k for k in own if k not in src]
         if has_mismatch:
             if logger:
                 logger.info("Detected obs/action shape mismatch, "
                             "applying zero-pad surgery\n")
             status.pop("optimizer_state", None)
             self.load_state_dict(self._pad_state_dict(src))
+        elif missing:
+            if logger:
+                logger.info("Checkpoint missing keys (new branch): %s\n"
+                            % ", ".join(missing))
+            status.pop("optimizer_state", None)
+            self.load_state_dict(src, strict=False)
         else:
             self.load_state_dict(src)
 
@@ -870,14 +918,24 @@ class FlatACModel(nn.Module, torch_ac.RecurrentACModel):
         if self.has_scalars:
             s = self.scalars_enc(obs.scalars)
 
+        if self.has_automap:
+            am = obs.automap.transpose(1, 3).transpose(2, 3)  # (B,H,W,C) -> (B,C,H,W)
+            a = self.automap_enc(am)
+
         if self.use_memory:
-            rnn_in = torch.cat([x, s], dim=1) if self.has_scalars else x
+            rnn_in = torch.cat(
+                [x] + ([s] if self.has_scalars else [])
+                + ([a] if self.has_automap else []),
+                dim=1)
             hidden = (memory[:, :self.semi_memory_size], memory[:, self.semi_memory_size:])
             hidden = self.memory_rnn(rnn_in, hidden)
             embedding = hidden[0]
             memory = torch.cat(hidden, dim=1)
         else:
-            embedding = torch.cat([x, s], dim=1) if self.has_scalars else x
+            embedding = torch.cat(
+                [x] + ([s] if self.has_scalars else [])
+                + ([a] if self.has_automap else []),
+                dim=1)
 
         if self.use_text and not "filmcnn" in self.cnn_arch:
             embedding = torch.cat((embedding, embed_text), dim=1)

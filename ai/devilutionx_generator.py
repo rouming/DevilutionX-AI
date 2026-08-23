@@ -45,7 +45,14 @@ DEVILUTIONX_VARS = [
     "devilution::Items",
     "devilution::dItem",
 
+    # Automap
+
+    "devilution::AutomapView",
+    "devilution::AutomapTypeTiles",
+
     # Gendung
+
+    "devilution::dungeon",
 
     "devilution::currlevel",
     "devilution::setlvlnum",
@@ -66,6 +73,7 @@ DEVILUTIONX_VARS = [
 DEVILUTIONX_TYPES = [
     "devilution::monster_resistance",
     "devilution::inv_item",
+    "devilution::AutomapTile",
 ]
 
 def generate(binary_path):

@@ -660,6 +660,54 @@ def is_arch(d, pos):
 def is_wall(d, pos):
     return not is_floor(d, pos) and not is_arch(d, pos)
 
+@njit(cache=True)
+def _automap_frontier_kernel(d, has_passage):
+    e = d.AutomapView > 0
+
+    passable = np.zeros((40, 40), dtype=np.bool_)
+    for mx in range(40):
+        for my in range(40):
+            can_pass = has_passage[mx, my]
+            if not can_pass:
+                # An empty megatile (all 4 or 3 tiles are floor) is
+                # not considered passable by the megatile flags, so we
+                # need to check this case explicitly.
+                floor_cnt = 0
+                for (dx, dy) in ((0,0), (0,1), (1,0), (1,1)):
+                    pos = (16 + mx * 2 + dx, 16 + my * 2 + dy)
+                    if not is_wall(d, pos):
+                        floor_cnt += 1
+                can_pass = floor_cnt >= 3
+            passable[mx, my] = can_pass
+
+    e_floor = e & passable
+    dilated = np.zeros((40, 40), dtype=np.bool_)
+    for mx in range(40):
+        for my in range(40):
+            if e_floor[mx, my]:
+                if mx > 0:   dilated[mx - 1, my] = True
+                if mx < 39:  dilated[mx + 1, my] = True
+                if my > 0:   dilated[mx, my - 1] = True
+                if my < 39:  dilated[mx, my + 1] = True
+
+    frontier = np.zeros((40, 40), dtype=np.bool_)
+    for mx in range(40):
+        for my in range(40):
+            frontier[mx, my] = dilated[mx, my] and not e[mx, my] and passable[mx, my]
+    return e, frontier
+
+def automap_frontier(d):
+    """Return (explored, frontier) as (40,40) bool arrays.
+
+    Frontier = unexplored passable tiles adjacent to explored passable tiles (e_floor).
+    passable uses top-left game tile SOLData plus passage flags (pre-computed in Python
+    to avoid numba structured-array issues). Known limitation: some wall megatiles whose
+    top-left tile is solid block dilation, so rooms beyond those walls may have no
+    adjacent '?' until the player enters.
+    """
+    passage_mask = dx.Flags.VerticalPassage.value | dx.Flags.HorizontalPassage.value
+    has_passage  = (d.AutomapTypeTiles['flags'][d.dungeon] & passage_mask).astype(np.bool_)
+    return _automap_frontier_kernel(d, has_passage)
 
 @njit(cache=True)
 def to_trigger(d, pos):

@@ -119,6 +119,20 @@ class ActionMask(enum.Enum):
     MASK_OTHER_SOLIDS  = 1<<3
 
 
+def get_automap_obs(d):
+    """Return (40, 40, 3) float32 automap obs: ch0=explored, ch1=frontier, ch2=player."""
+    explored, frontier = diablo_state.automap_frontier(d)
+    player_ch = np.zeros((40, 40), dtype=np.float32)
+    pos = diablo_state.player_position(d)
+    mx = (int(pos[0]) - 16) // 2
+    my = (int(pos[1]) - 16) // 2
+    if 0 <= mx < 40 and 0 <= my < 40:
+        player_ch[mx, my] = 1.0
+    return np.stack([explored.astype(np.float32),
+                     frontier.astype(np.float32),
+                     player_ch], axis=-1)
+
+
 class DiabloEnv(gym.Env):
     MASK_EVERYTHING = (ActionMask.MASK_TRIGGERS.value |
                        ActionMask.MASK_CLOSED_DOORS.value |
@@ -313,6 +327,11 @@ class DiabloEnv(gym.Env):
         LSTM -- new env classes only."""
         return False
 
+    @property
+    def obs_includes_automap(self):
+        """40x40x3 automap: ch0=explored, ch1=frontier, ch2=player."""
+        return False
+
     def _submit_action(self, action):
         """Translate a discrete action into a (key, data) pair and submit once.
 
@@ -366,6 +385,9 @@ class DiabloEnv(gym.Env):
         None; new env classes that set obs_includes_scalars override this."""
         return None
 
+    def _get_automap(self, d):
+        return get_automap_obs(d)
+
     def _build_observation_space(self, d, env):
         """Assemble the gym observation_space dict from the obs_includes_* flags.
         Computes sample arrays once at init to derive shapes."""
@@ -390,6 +412,11 @@ class DiabloEnv(gym.Env):
             spaces["scalars"] = gym.spaces.Box(low=0.0, high=1.0,
                                                 shape=sc.shape,
                                                 dtype=np.float32)
+        if self.obs_includes_automap:
+            am = self._get_automap(d)
+            spaces["automap"] = gym.spaces.Box(low=0.0, high=1.0,
+                                                shape=am.shape,
+                                                dtype=np.float32)
         return gym.spaces.Dict(spaces)
 
     def _build_obs(self, d, env):
@@ -402,6 +429,8 @@ class DiabloEnv(gym.Env):
             obss["monster_attrs"] = self._get_monster_attrs(d)
         if self.obs_includes_scalars:
             obss["scalars"] = self._get_scalars(d)
+        if self.obs_includes_automap:
+            obss["automap"] = self._get_automap(d)
         return obss
 
     def pause_game(self, pause=True):
@@ -1929,6 +1958,19 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
     }
 
 
+class DiabloEnv_ClearAllLevels_v18(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but adds the 40x40 automap observation (explored + frontier + player).
+
+    A gated CNN branch (automap_gamma=0 at init) processes the 3-channel automap
+    and adds a residual to the LSTM output.  The gate starts at zero so a v17
+    checkpoint loads cleanly; the branch grows its contribution as training continues."""
+    ENV_VERSION = 18
+
+    @property
+    def obs_includes_automap(self):
+        return True
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -1977,6 +2019,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v16 },
     { 'id': 'Diablo-ClearAllLevels-v17',
       'entry_point': DiabloEnv_ClearAllLevels_v17 },
+    { 'id': 'Diablo-ClearAllLevels-v18',
+      'entry_point': DiabloEnv_ClearAllLevels_v18 },
 
     # HRL Environment Classes
 

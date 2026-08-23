@@ -46,6 +46,7 @@ def get_obss_preprocessor(obs_space):
         env_space = obs_space.spaces["env"]
         monster_attrs_space = obs_space.spaces["monster_attrs"]
         scalars_space = obs_space.spaces["scalars"]
+        automap_space = obs_space.spaces.get("automap")
         nr_env_channels = int(math.log2(env_space.high.max() + 1))
         nr_monster_channels = monster_attrs_space.shape[-1]
         nr_channels = nr_env_channels + nr_monster_channels
@@ -54,19 +55,26 @@ def get_obss_preprocessor(obs_space):
             "scalars": scalars_space.shape,
             "nr_env_channels": nr_env_channels,
         }
+        if automap_space is not None:
+            obs_space["automap"] = automap_space.shape
 
         def preprocess_obss(obss, device=None):
             env = numpy.array([obs["env"] for obs in obss])
             monster_attrs = numpy.array([obs["monster_attrs"] for obs in obss])
             scalars = numpy.array([obs["scalars"] for obs in obss])
-            return torch_ac.DictList({
+            result = {
                 "image": batch_dungeon_observations_v2_to_image(env,
                                                                 monster_attrs,
                                                                 nr_env_channels,
                                                                 device=device),
                 "scalars": torch.as_tensor(scalars, dtype=torch.float32,
                                            device=device),
-            })
+            }
+            if automap_space is not None:
+                automap = numpy.array([obs["automap"] for obs in obss])
+                result["automap"] = torch.as_tensor(automap, dtype=torch.float32,
+                                                    device=device)
+            return torch_ac.DictList(result)
 
     # Check if obs_space is an image space
     elif isinstance(obs_space, gym.spaces.Box):
