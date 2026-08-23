@@ -1682,8 +1682,13 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                     sec_mask = EF.Item.value | EF.Interactable.value
                     if self.ENV_VERSION >= 8:
                         sec_mask |= EF.Door.value | EF.Barrel.value
+                    excl_mask = 0
+                    if self.ENV_VERSION >= 18:
+                        # Exclude already-open doors: pressing X on an open door
+                        # does nothing, so it should not suppress WastedSecondary.
+                        excl_mask |= EF.Open.value
                     if not diablo_state.player_has_adjacent(
-                            env, self.view_radius, sec_mask, 0):
+                            env, self.view_radius, sec_mask, excl_mask):
                         r = R[RewardEvent.WastedSecondary]
                         reward += r
                         print("Wasted secondary, R %.2f" % r, file=self.log)
