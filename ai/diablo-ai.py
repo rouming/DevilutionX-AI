@@ -867,6 +867,7 @@ RUNNING = True
 LAST_KEY = 0
 SHOW_CHARS = False
 SHOW_INV = False
+SHOW_MAP = False
 INV_CMD = ''
 
 class EventsQueue:
@@ -1286,8 +1287,57 @@ def _handle_inv_key(game, k):
                 game.submit_key(key, data=(slot, 0))
             INV_CMD = ''
 
+def display_automap_window(d, stdscr):
+    """Render AutomapView[40][40] as a 40x40 ASCII grid centered on screen.
+    '@' = player, '.' = explored, '?' = frontier, ' ' = nothingness."""
+    if not hasattr(d, 'AutomapView'):
+        return
+
+    pos = diablo_state.player_position(d)
+    px = (int(pos[0]) - 16) // 2
+    py = (int(pos[1]) - 16) // 2
+
+    e, frontier = diablo_state.automap_frontier(d)
+
+    DMAXX, DMAXY = 40, 40
+    lines = []
+    for y in range(DMAXY):
+        row = []
+        for x in range(DMAXX):
+            if x == px and y == py:
+                row.append('@')
+            elif frontier[x, y]:
+                row.append('?')
+            elif e[x, y]:
+                row.append('.')
+            else:
+                row.append(' ')
+        lines.append("".join(row))
+
+    am_cnt = int(np.sum(e))
+    fr_cnt = int(np.sum(frontier))
+    title = "Automap  explored:%d  frontier:%d  ('m' close)" % (am_cnt, fr_cnt)
+    w = max(DMAXX, len(title)) + 2
+    h = DMAXY + 3  # title + border top/bot + 1 blank
+    scr_h, scr_w = stdscr.getmaxyx()
+    y0 = max(0, scr_h // 2 - h // 2)
+    x0 = max(0, scr_w // 2 - w // 2)
+
+    _addstr(stdscr, y0, x0, '┌' + '─' * w + '┐')
+    _addstr(stdscr, y0 + 1, x0, '│' + title.center(w) + '│')
+    _addstr(stdscr, y0 + 2, x0, '│' + '─' * w + '│')
+    for i, line in enumerate(lines):
+        row = y0 + 3 + i
+        if row >= scr_h - 1:
+            break
+        _addstr(stdscr, row, x0, '│' + line.ljust(w) + '│')
+    bot_row = y0 + 3 + DMAXY
+    if bot_row < scr_h:
+        _addstr(stdscr, bot_row, x0, '└' + '─' * w + '┘')
+
+
 def handle_keyboard(stdscr, game):
-    global LAST_KEY, RUNNING, SHOW_CHARS, SHOW_INV
+    global LAST_KEY, RUNNING, SHOW_CHARS, SHOW_INV, SHOW_MAP
 
     k = stdscr.getch()
     if k == -1:
@@ -1324,10 +1374,15 @@ def handle_keyboard(stdscr, game):
         key = ring.RingEntryType.RING_ENTRY_KEY_SAVE
     elif k == ord('p'):
         key = ring.RingEntryType.RING_ENTRY_KEY_PAUSE
+    elif k == 27:  # Esc: close any open overlay
+        SHOW_CHARS = False
+        SHOW_MAP = False
     elif k == ord('c'):
         SHOW_CHARS = not SHOW_CHARS
     elif k == ord('i'):
         SHOW_INV = not SHOW_INV
+    elif k == ord('m'):
+        SHOW_MAP = not SHOW_MAP
     elif k == ord('q'):
         RUNNING = False  # Stop the main loop
 
@@ -1816,7 +1871,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
     msg = truncate_line(msg, width - 1)
     _addstr(stdscr, 2, width // 2 - len(msg) // 2, msg)
 
-    msg = "'q' quit │ 'c' chars │ 'i' inv │ 'y' cast spell"
+    msg = "'q' quit │ 'c' chars │ 'i' inv │ 'm' map │ 'y' cast spell"
     _addstr(stdscr, height - 1, width // 2 - len(msg) // 2, msg)
 
     display_dungeon(d, stdscr, view_radius, game.goal_pos)
@@ -1827,6 +1882,9 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
     if SHOW_INV:
         display_inventory_window(d, stdscr)
+
+    if SHOW_MAP:
+        display_automap_window(d, stdscr)
 
     if diablo_state.is_game_paused(d):
         msgs = ["            ",
