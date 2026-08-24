@@ -320,7 +320,7 @@ def strip_namespaces(s):
     # Stip namespaces
     s = s.split("::")[-1]
     # Replace special symbols with underscore
-    s = re.sub(r"(<|>|\[|\]|\s+)", "_", s)
+    s = re.sub(r"(<|>|\[|\]|\s+|,)", "_", s)
     # Replace python keywords
     s = re.sub(r"^None$", "None_", s)
     return s
