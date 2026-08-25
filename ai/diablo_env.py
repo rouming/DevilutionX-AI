@@ -1958,17 +1958,25 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
     }
 
 
-class DiabloEnv_ClearAllLevels_v18(DiabloEnv_ClearAllLevels_v17):
-    """Like v17 but adds the 40x40 automap observation (explored + frontier + player).
-
-    A gated CNN branch (automap_gamma=0 at init) processes the 3-channel automap
-    and adds a residual to the LSTM output.  The gate starts at zero so a v17
-    checkpoint loads cleanly; the branch grows its contribution as training continues."""
-    ENV_VERSION = 18
-
-    @property
-    def obs_includes_automap(self):
-        return True
+# v18 was an experiment feeding a 40x40 automap (explored + frontier + player)
+# as an extra observation. Two architectures were tried:
+#   1. Post-LSTM residual gated by automap_gamma (zero-init) - gamma collapsed
+#      to zero, CNN never received gradients (classic gate deadlock).
+#   2. 64-dim automap embedding fed directly into LSTM input alongside env CNN
+#      and scalars - CNN weights stayed at random init after 50M steps.
+# Conclusion: the model already extracts sufficient exploration signal from the
+# local env grid (Explored bit-plane, ch14). The global 40x40 view adds no
+# gradient signal given the current task and reward structure.
+# Implementation kept for future reference (get_automap_obs, automap_frontier,
+# AutomapCNN, obs_includes_automap) - re-enable if adding aux tasks or
+# curriculum that explicitly reward global map awareness.
+#
+# class DiabloEnv_ClearAllLevels_v18(DiabloEnv_ClearAllLevels_v17):
+#     ENV_VERSION = 18
+#
+#     @property
+#     def obs_includes_automap(self):
+#         return True
 
 
 from gymnasium.envs.registration import register
@@ -2019,8 +2027,9 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v16 },
     { 'id': 'Diablo-ClearAllLevels-v17',
       'entry_point': DiabloEnv_ClearAllLevels_v17 },
-    { 'id': 'Diablo-ClearAllLevels-v18',
-      'entry_point': DiabloEnv_ClearAllLevels_v18 },
+    # v18 disabled - see comment above DiabloEnv_ClearAllLevels_v18
+    # { 'id': 'Diablo-ClearAllLevels-v18',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v18 },
 
     # HRL Environment Classes
 
