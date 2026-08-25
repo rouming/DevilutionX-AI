@@ -15,6 +15,108 @@
 
 namespace devilution {
 
+struct AutomapTile {
+	/** The general shape of the tile */
+	enum class Types : uint8_t {
+		None,
+		Diamond,
+		Vertical,
+		Horizontal,
+		Cross,
+		FenceVertical,
+		FenceHorizontal,
+		Corner,
+		CaveHorizontalCross,
+		CaveVerticalCross,
+		CaveHorizontal,
+		CaveVertical,
+		CaveCross,
+		Bridge,
+		River,
+		RiverCornerEast,
+		RiverCornerNorth,
+		RiverCornerSouth,
+		RiverCornerWest,
+		RiverForkIn,
+		RiverForkOut,
+		RiverLeftIn,
+		RiverLeftOut,
+		RiverRightIn,
+		RiverRightOut,
+		CaveHorizontalWoodCross,
+		CaveVerticalWoodCross,
+		CaveLeftCorner,
+		CaveRightCorner,
+		CaveBottomCorner,
+		CaveHorizontalWood,
+		CaveVerticalWood,
+		CaveWoodCross,
+		CaveRightWoodCross,
+		CaveLeftWoodCross,
+		HorizontalLavaThin,
+		VerticalLavaThin,
+		BendSouthLavaThin,
+		BendWestLavaThin,
+		BendEastLavaThin,
+		BendNorthLavaThin,
+		VerticalWallLava,
+		HorizontalWallLava,
+		SELava,
+		SWLava,
+		NELava,
+		NWLava,
+		SLava,
+		WLava,
+		ELava,
+		NLava,
+		Lava,
+		CaveHorizontalWallLava,
+		CaveVerticalWallLava,
+		HorizontalBridgeLava,
+		VerticalBridgeLava,
+		VerticalDiamond,
+		HorizontalDiamond,
+		PentagramClosed,
+		PentagramOpen,
+	};
+
+	Types type;
+
+	/** Additional details about the given tile */
+	enum class Flags : uint8_t {
+		// clang-format off
+		VerticalDoor      = 1 << 0,
+		HorizontalDoor    = 1 << 1,
+		VerticalArch      = 1 << 2,
+		HorizontalArch    = 1 << 3,
+		VerticalGrate     = 1 << 4,
+		HorizontalGrate   = 1 << 5,
+		VerticalPassage   = VerticalDoor | VerticalArch | VerticalGrate,
+		HorizontalPassage = HorizontalDoor | HorizontalArch | HorizontalGrate,
+		Dirt              = 1 << 6,
+		Stairs            = 1 << 7,
+		// clang-format on
+	};
+
+	Flags flags = {};
+
+	[[nodiscard]] DVL_ALWAYS_INLINE constexpr bool hasFlag(Flags test) const
+	{
+		return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(test)) != 0;
+	}
+
+	template <typename... Args>
+	[[nodiscard]] DVL_ALWAYS_INLINE constexpr bool hasAnyFlag(Flags flag, Args... flags)
+	{
+		return (static_cast<uint8_t>(this->flags)
+		           & (static_cast<uint8_t>(flag) | ... | static_cast<uint8_t>(flags)))
+		    != 0;
+	}
+};
+
+/** Maps from tile_id to automap type. */
+extern AutomapTile AutomapTypeTiles[256];
+
 enum MapExplorationType : uint8_t {
 	/** unexplored map tile */
 	MAP_EXP_NONE,
