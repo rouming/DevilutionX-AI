@@ -66,6 +66,7 @@ _DIR_MAP = [
 ]
 _DIR_TO_DELTA    = {d.value: delta        for d, delta, _ in _DIR_MAP}
 _DELTA_TO_ACTION = {delta:   a.value      for _, delta, a in _DIR_MAP}
+_ACTION_TO_DELTA = {a.value: delta        for _, delta, a in _DIR_MAP}
 
 def direction_delta(player_dir):
     """Convert player_direction() int to (dx, dy) delta. Returns (0,0) if unknown."""

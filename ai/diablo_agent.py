@@ -640,6 +640,9 @@ class AgentAI:
         # Door -> Wall:  clear=Door|Open, set=Wall
         # Item -> clear: clear=Item,      set=0  (tile keeps explored/visible etc.)
         self._masked_tiles       = {}
+        # {level: frozenset of (x,y)} - return-trigger positions that the agent
+        # hard-blocks: any model action that would step onto one is vetoed to Stand.
+        self._return_triggers    = {}
         # Set of levels already searched for Butcher door (avoids repeat BFS).
         self._butcher_searched   = set()
         # (level, pos) of item tile we pressed X for; checked next tick.
@@ -918,8 +921,17 @@ class AgentAI:
             self.state = AgentAI.State.PATHFIND
             return
 
-        obs = self._build_obs(d)
-        self._submit(self.model.act(obs))
+        obs    = self._build_obs(d)
+        action = self.model.act(obs)
+        # Hard-block any walk action that would land on a return trigger.
+        blocked = self._return_triggers.get(self.cur_level, frozenset())
+        if blocked:
+            delta = diablo_env._ACTION_TO_DELTA.get(action)
+            if delta is not None:
+                px, py = diablo_state.player_position(d)
+                if (px + delta[0], py + delta[1]) in blocked:
+                    action = diablo_env.ActionEnum.Stand.value
+        self._submit(action)
 
     def _tick_pathfind(self, d):
         player = diablo_state.player_position(d)
@@ -989,22 +1001,26 @@ class AgentAI:
         self._masked_tiles.setdefault(level, {})[pos] = (clear, set_flags)
 
     def _mask_return_triggers(self, d, level):
-        """Mask WM_DIABPREVLVL and WM_DIABTWARPUP triggers as walls.
+        """Mask WM_DIABPREVLVL and WM_DIABTWARPUP triggers as walls and hard-block them.
 
-        Both lead away from the current level (back to town or prev level) and
-        the model should not step on them.  All triggers are placed at level
-        generation time so d.trigs is complete on entry.
+        Wall masking changes what the model sees (soft deterrent).  Hard-blocking
+        vetoes any model action that would physically step onto these tiles so the
+        trigger can never fire even if the model ignores the Wall bit.
+        All triggers are placed at level generation time so d.trigs is complete.
         """
         EF = diablo_state.EnvironmentFlag
         clear = (EF.PrevTrigger.value | EF.WarpTrigger.value |
                  EF.Interactable.value)
         set_flags = EF.Wall.value
+        positions = []
         for trig in d.trigs[:d.numtrigs.value]:
             if (diablo_state.is_trigger_to_prev_level(trig) or
                     diablo_state.is_trigger_warp(trig)):
                 pos = (int(trig.position.x), int(trig.position.y))
                 self._mask_tile(level, pos, clear=clear, set_flags=set_flags)
+                positions.append(pos)
                 print(f"agent {self._tick_count}: masking return trigger at {pos}", file=self.log)
+        self._return_triggers[level] = frozenset(positions)
 
     def _init_butcher_door_mask(self, d):
         """Called once per level-2 visit. Finds the Butcher's room door and
