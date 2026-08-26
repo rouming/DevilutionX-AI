@@ -1148,7 +1148,7 @@ class AgentAI:
             try:
                 if lvl_part.endswith('+'):
                     lo = int(lvl_part[:-1])
-                    hi = 16
+                    hi = 100
                 elif '-' in lvl_part:
                     a, b = lvl_part.split('-', 1)
                     lo, hi = int(a), int(b)
@@ -1160,7 +1160,7 @@ class AgentAI:
                 if 'stat-strategy' in str(exc):
                     raise
                 raise ValueError("stat-strategy: bad level range %r" % lvl_part) from exc
-            covered.update(range(lo, min(hi, 16) + 1))
+            covered.update(range(lo, hi + 1))
             specs = AgentAI._STAT_ALLOC_RE.findall(alloc_str)
             if not specs:
                 raise ValueError("stat-strategy: no stat specs in %r" % alloc_str)
@@ -1173,7 +1173,7 @@ class AgentAI:
             if total != 5:
                 raise ValueError(
                     "stat-strategy: counts must sum to 5, got %d in %r" % (total, alloc_str))
-        missing = sorted(set(range(1, 17)) - covered)
+        missing = sorted(set(range(1, max(covered) + 1)) - covered)
         if missing:
             raise ValueError("stat-strategy: levels not covered: %s" % missing)
         return s
