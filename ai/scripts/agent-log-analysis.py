@@ -17,10 +17,11 @@ if not levels:
     print("no 'hero died at level N' lines found")
     sys.exit(1)
 
-print("n=%d  min=%d  max=%d  mean=%.2f  std=%.2f" % (
-    len(levels), min(levels), max(levels),
-    statistics.mean(levels), statistics.stdev(levels) if len(levels) > 1 else 0.0))
+n = len(levels)
+print("runs=%d  min=%d  max=%d  mean=%.2f  std=%.2f" % (
+    n, min(levels), max(levels),
+    statistics.mean(levels), statistics.stdev(levels) if n > 1 else 0.0))
 print()
 for lvl, cnt in sorted(Counter(levels).items()):
     bar = "#" * cnt
-    print("  level %2d: %3d (%5.1f%%)  %s" % (lvl, cnt, 100 * cnt / len(levels), bar))
+    print("  level %2d: %3d (%5.1f%%)  %s" % (lvl, cnt, 100 * cnt / n, bar))
