@@ -622,6 +622,12 @@ def make_diablo_parser():
         "--eval-dungeon-level", type=parse_dungeon_level, default=DUNGEON_LEVEL_DEFAULT,
         help="Dungeon level spec for eval environments (default: 1)")
     train_ai_parser.add_argument(
+        "--eval-no-spells", action="store_true",
+        help="Disable hero spells for eval environments (default: spells enabled)")
+    train_ai_parser.add_argument(
+        "--eval-stats-scale", type=float, default=1.0, metavar="SCALE",
+        help="Scale hero stat midpoints for eval environments (default: 1.0)")
+    train_ai_parser.add_argument(
         "--stats-episodes", type=int, default=1000,
         help="Number of recent training episodes for env-stats file (default: 1000)")
     train_ai_parser.add_argument(
@@ -2149,6 +2155,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         eval_envs = []
         eval_gameconfig = copy.deepcopy(gameconfig)
         eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
+        eval_gameconfig['no-spells']     = args.eval_no_spells
+        eval_gameconfig['stats-scale']   = args.eval_stats_scale
         eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
         eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
         eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
