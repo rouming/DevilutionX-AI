@@ -597,13 +597,16 @@ class AgentAI:
         DEAD     = "dead"
         DONE     = "done"
 
-    def __init__(self, game, model_runner, view_radius=10,
+    def __init__(self, game, model_runners, view_radius=10,
                  kill_threshold=0.5, repair_threshold=0.25,
                  max_steps_per_level=3000, no_gear_management=False,
                  keep_mana_potions=False,
                  safe_radius=2, pause=0.0, log=None, stat_strategy='dex-rush'):
         self.game          = game
-        self.model         = model_runner
+        # model_runners: dict mapping dungeon level (1-16) -> ModelRunner.
+        # All 16 entries must be present; multiple levels may share the same object.
+        self._model_runners = model_runners
+        self.model          = None  # set on first _on_level_change
         if stat_strategy in AgentAI._STAT_STRATEGIES:
             self._stat_strategy = AgentAI._STAT_STRATEGIES[stat_strategy]
         else:
@@ -824,7 +827,9 @@ class AgentAI:
         # previous level could block valid item pickups on the new level.
         self._masked_positions.clear()
         self._pathfinder._skip_items.clear()
-        self.model.reset()
+        self.model = self._model_runners.get(new_level)
+        if self.model is not None:
+            self.model.reset()
 
         if new_level == 0:
             self.state = AgentAI.State.TOWN
@@ -1124,6 +1129,87 @@ class AgentAI:
         return str_pts, 0, vit_pts
 
     _STAT_ALLOC_RE = re.compile(r'(\d+)([smdv])')
+
+    @staticmethod
+    def validate_model_spec(s):
+        """Validate a multi-model spec string; return it unchanged or raise ValueError.
+
+        A plain model name (no '=') passes through unchanged - single model for all levels.
+
+        Per-level spec format: 'RANGE=MODEL[,RANGE=MODEL...]'
+          RANGE - 'N-M' or 'N-*' (star means 16)
+          MODEL - model folder name (no commas or '=')
+
+        Rules:
+          - Levels must span exactly 1-16 with no gaps.
+          - All ranges must use the same format (all must contain '=').
+          - If every range maps to the same model, reject: use a plain name instead.
+        """
+        if '=' not in s:
+            return s   # plain model name, valid as-is
+        covered = set()
+        models  = []
+        for entry in s.split(','):
+            if '=' not in entry:
+                raise ValueError("model-spec: missing '=' in segment %r" % entry)
+            lvl_part, model_name = entry.split('=', 1)
+            lvl_part   = lvl_part.strip()
+            model_name = model_name.strip()
+            if not model_name:
+                raise ValueError("model-spec: empty model name in segment %r" % entry)
+            try:
+                if '-' in lvl_part:
+                    a, b = lvl_part.split('-', 1)
+                    lo = int(a)
+                    hi = 16 if b.strip() == '*' else int(b)
+                    if lo > hi:
+                        raise ValueError("model-spec: bad range %r" % lvl_part)
+                else:
+                    lo = hi = int(lvl_part)
+            except ValueError as exc:
+                if 'model-spec' in str(exc):
+                    raise
+                raise ValueError("model-spec: bad level range %r" % lvl_part) from exc
+            if lo < 1 or hi > 16:
+                raise ValueError(
+                    "model-spec: dungeon levels must be 1-16, got %r" % lvl_part)
+            overlap = covered & set(range(lo, hi + 1))
+            if overlap:
+                raise ValueError(
+                    "model-spec: levels %s covered more than once" % sorted(overlap))
+            covered.update(range(lo, hi + 1))
+            models.append(model_name)
+        missing = sorted(set(range(1, 17)) - covered)
+        if missing:
+            raise ValueError("model-spec: levels not covered: %s" % missing)
+        if len(set(models)) == 1:
+            raise ValueError(
+                "model-spec: all ranges use the same model %r - "
+                "use a plain --model name instead" % models[0])
+        return s
+
+    @staticmethod
+    def parse_model_spec(s):
+        """Parse a validated model spec into a dict {dungeon_level: model_name}.
+
+        Plain name (no '=') maps to all 16 levels.
+        """
+        if '=' not in s:
+            return {lvl: s for lvl in range(1, 17)}
+        result = {}
+        for entry in s.split(','):
+            lvl_part, model_name = entry.split('=', 1)
+            lvl_part   = lvl_part.strip()
+            model_name = model_name.strip()
+            if '-' in lvl_part:
+                a, b = lvl_part.split('-', 1)
+                lo = int(a)
+                hi = 16 if b.strip() == '*' else int(b)
+            else:
+                lo = hi = int(lvl_part)
+            for lvl in range(lo, hi + 1):
+                result[lvl] = model_name
+        return result
 
     @staticmethod
     def validate_stat_strategy(s):

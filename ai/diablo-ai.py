@@ -93,6 +93,13 @@ def _parse_stat_strategy_arg(s):
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e))
 
+def _parse_model_spec_arg(s):
+    from diablo_agent import AgentAI
+    try:
+        return AgentAI.validate_model_spec(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
 def _compress_level_ranges(levels):
     """Compress sorted list of ints into a single range string: [1,2,3,5] -> '1-3,5'."""
     if not levels:
@@ -422,7 +429,9 @@ def make_diablo_parser():
         help="Name of the environment to be run (REQUIRED)")
     play_ai_parser.add_argument(
         "--model", required=True,
-        help="Name of the trained model (REQUIRED)")
+        type=_parse_model_spec_arg,
+        help="Model name, or per-level spec: 'N-M=model,N-*=model' (REQUIRED)\n"
+             "Example: --model 1-4=EarlyModel,5-16=FullModel")
     play_ai_parser.add_argument(
         "--best", action="store_true", default=False,
         help="Loads best model from the folder")
@@ -2763,10 +2772,6 @@ def agent_ai(args, gameconfig):
     from rl.hrl_model import HRLACModel
     from rl.utils import device
 
-    model_dir = utils.get_run_dir(args.model)
-    if not os.path.isdir(model_dir):
-        raise RuntimeError(f"model folder '{model_dir}' does not exist")
-
     print(f"Device: {device}\n")
 
     # Create one env instance to obtain obs/action space metadata and a game
@@ -2782,25 +2787,37 @@ def agent_ai(args, gameconfig):
     num_hierarchy_levels = env.unwrapped.num_hierarchy_levels
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
-    if hasattr(preprocess_obss, "vocab"):
-        preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
-    if num_hierarchy_levels == 1:
-        acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
-                              embedding_dim=args.embedding_dim,
-                              use_memory=True, use_text=False)
-    else:
-        acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
-                             embedding_dim=args.embedding_dim,
-                             use_memory=True, use_text=False)
+    # Build {dungeon_level: ModelRunner}.  Multiple levels may share one runner
+    # object when they map to the same model name.
+    level_to_name   = AgentAI.parse_model_spec(args.model)
+    unique_names    = dict.fromkeys(level_to_name.values())  # preserves order, dedupes
+    name_to_runner  = {}
+    for model_name in unique_names:
+        model_dir = utils.get_run_dir(model_name)
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(f"model folder '{model_dir}' does not exist")
+        if hasattr(preprocess_obss, "vocab"):
+            preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
+        if num_hierarchy_levels == 1:
+            acmodel = FlatACModel(obs_space, action_space, args.cnn_arch,
+                                  embedding_dim=args.embedding_dim,
+                                  use_memory=True, use_text=False)
+        else:
+            acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
+                                 embedding_dim=args.embedding_dim,
+                                 use_memory=True, use_text=False)
+        acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
+        acmodel.to(device)
+        acmodel.eval()
+        name_to_runner[model_name] = ModelRunner(acmodel, preprocess_obss, device,
+                                                 argmax=args.argmax)
+        print(f"Loaded model: {model_name}")
 
-    acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
-    acmodel.to(device)
-    acmodel.eval()
+    model_runners = {lvl: name_to_runner[name] for lvl, name in level_to_name.items()}
 
-    model_runner = ModelRunner(acmodel, preprocess_obss, device, argmax=args.argmax)
-    supervisor   = AgentAI(
-        game, model_runner,
+    supervisor = AgentAI(
+        game, model_runners,
         view_radius=gameconfig['view-radius'],
         kill_threshold=args.kill_threshold,
         repair_threshold=args.repair_threshold,
