@@ -845,6 +845,7 @@ class AgentAI:
         print(f"agent {self._tick_count}: now on level {new_level}, monsters {cur_cnt}"
               f" (initial {self.initial_monster_cnt})", file=self.log)
         self._init_butcher_door_mask(d)
+        self._mask_return_triggers(d, new_level)
         self.state = AgentAI.State.DUNGEON
 
         # Evaluate all InvList items carried into this level. Set _inv_prev to
@@ -902,6 +903,12 @@ class AgentAI:
                     diablo_state.count_active_monsters(d))
         kill_pct = kills / max(self.initial_monster_cnt, 1)
         timeout  = self.level_steps >= self.max_steps_per_level
+
+        if timeout and self.stairs_pos is None:
+            # Stairs never found; give up rather than looping forever.
+            print(f"agent {self._tick_count}: timeout, stairs unknown - giving up", file=self.log)
+            self.state = AgentAI.State.DONE
+            return
 
         if self.stairs_pos is not None and (kill_pct >= self.kill_threshold
                                             or timeout):
@@ -980,6 +987,24 @@ class AgentAI:
         """Register a tile override for level at pos.
         Obs tile becomes: (original & ~clear) | set_flags."""
         self._masked_tiles.setdefault(level, {})[pos] = (clear, set_flags)
+
+    def _mask_return_triggers(self, d, level):
+        """Mask WM_DIABPREVLVL and WM_DIABTWARPUP triggers as walls.
+
+        Both lead away from the current level (back to town or prev level) and
+        the model should not step on them.  All triggers are placed at level
+        generation time so d.trigs is complete on entry.
+        """
+        EF = diablo_state.EnvironmentFlag
+        clear = (EF.PrevTrigger.value | EF.WarpTrigger.value |
+                 EF.Interactable.value)
+        set_flags = EF.Wall.value
+        for trig in d.trigs[:d.numtrigs.value]:
+            if (diablo_state.is_trigger_to_prev_level(trig) or
+                    diablo_state.is_trigger_warp(trig)):
+                pos = (int(trig.position.x), int(trig.position.y))
+                self._mask_tile(level, pos, clear=clear, set_flags=set_flags)
+                print(f"agent {self._tick_count}: masking return trigger at {pos}", file=self.log)
 
     def _init_butcher_door_mask(self, d):
         """Called once per level-2 visit. Finds the Butcher's room door and
