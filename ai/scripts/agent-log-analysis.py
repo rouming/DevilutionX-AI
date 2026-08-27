@@ -25,3 +25,10 @@ print()
 for lvl, cnt in sorted(Counter(levels).items()):
     bar = "#" * cnt
     print("  level %2d: %3d (%5.1f%%)  %s" % (lvl, cnt, 100 * cnt / n, bar))
+
+print()
+print("survival function (fraction of runs that reached at least level N):")
+all_levels = range(1, max(levels) + 1)
+for lvl in all_levels:
+    survived = sum(1 for l in levels if l >= lvl)
+    print("  level %2d: %5.1f%%" % (lvl, 100 * survived / n))
