@@ -1169,6 +1169,14 @@ class AgentAI:
 
         return str_pts, 0, vit_pts
 
+    @staticmethod
+    def _warrior_str_dump(d, pts):
+        """Warrior stat allocation - pure strength dump.
+        All points go to Str every level. Matches kWarrior engine injection slope
+        at scale=0.7 for dungeon levels 1-8."""
+        str_val = int(d.player._pBaseStr)
+        return min(pts, max(0, 250 - str_val)), 0, 0
+
     _STAT_ALLOC_RE = re.compile(r'(\d+)([smdv])')
 
     @staticmethod
@@ -1369,8 +1377,9 @@ class AgentAI:
         return strategy
 
     _STAT_STRATEGIES = {
-        'dex-rush': _warrior_dexterity_rush.__func__,
-        'str-vit':  _warrior_str_vit.__func__,
+        'dex-rush':  _warrior_dexterity_rush.__func__,
+        'str-vit':   _warrior_str_vit.__func__,
+        'str-dump':  _warrior_str_dump.__func__,
     }
 
     _REPAIR_SLOTS = (
