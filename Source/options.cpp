@@ -938,6 +938,7 @@ GameplayOptions::GameplayOptions()
     , noSpells("No spells", OptionEntryFlags::Invisible, "", "", false)
     , statsScalePct("Stats scale pct", OptionEntryFlags::Invisible, "", "", 100)
     , charLevelUpTable("Char level up table", OptionEntryFlags::Invisible, "", "", "")
+    , charLevelUpAttrs("Char level up attrs", OptionEntryFlags::Invisible, "", "", "")
     , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroManaMinPct("Hero mana min pct", OptionEntryFlags::Invisible, "", "", 100)
@@ -1009,6 +1010,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&noSpells,
 		&statsScalePct,
 		&charLevelUpTable,
+		&charLevelUpAttrs,
 		&heroHpMinPct,
 		&heroHpMaxPct,
 		&heroManaMinPct,

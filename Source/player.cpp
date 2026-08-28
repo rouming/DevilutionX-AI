@@ -2684,19 +2684,94 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		level = std::max(1, ri(base_level - cs.lvl_noise, base_level + cs.lvl_noise));
 	}
 
-	// Stats: base + slope*d gives the depth-scaled midpoint; noise widens the range.
-	// Clamped to [10, 250]: 10 ensures the stat is always non-trivial,
-	// 250 is the safe ceiling (uint8_t field sizes in some engine paths).
+	// Stats: either simulate per-level-up attr assignments or use the linear slope.
 	const bool   no_spells = *GetOptions().Gameplay.noSpells;
 	const double scale     = std::max(0.01, *GetOptions().Gameplay.statsScalePct / 100.0);
-	auto stat = [&](int base, int slope, int noise) {
-		int mid = std::max(10, std::min(250, static_cast<int>((base + slope * d) * scale)));
-		return ri(std::max(10, mid - noise), std::min(250, mid + noise));
-	};
-	int strength  = stat(cs.str_base, cs.str_slope, cs.str_noise);
-	int magic     = stat(cs.mag_base, cs.mag_slope, cs.mag_noise);
-	int dexterity = stat(cs.dex_base, cs.dex_slope, cs.dex_noise);
-	int vitality  = stat(cs.vit_base, cs.vit_slope, cs.vit_noise);
+	int strength, magic, dexterity, vitality;
+
+	const std::string &attrs_str = *GetOptions().Gameplay.charLevelUpAttrs;
+	if (!attrs_str.empty()) {
+		// Range spec: "2-9=5d,10-*=3s2v" (LO-HI=ALLOC, LO-*=ALLOC, or N=ALLOC).
+		// Matches Python's validate_stat_strategy format.
+		// Level-up i (0-based) brings the player to level i+2.
+		struct AttrAlloc { int s, m, d, v; };
+		struct RangeAlloc { int lo, hi; AttrAlloc a; }; // hi=-1 means open-ended
+		std::vector<RangeAlloc> ranges;
+		const char *p = attrs_str.c_str();
+		while (*p != '\0') {
+			while (*p == ' ') p++;
+			char *ep;
+			int lo = static_cast<int>(std::strtol(p, &ep, 10));
+			if (ep == p) app_fatal("Char level up attrs: expected LO-HI= or LO-*=");
+			p = ep;
+			int hi;
+			if (*p == '-') {
+				p++;
+				if (*p == '*') { hi = -1; p++; }
+				else {
+					hi = static_cast<int>(std::strtol(p, &ep, 10));
+					if (ep == p) app_fatal("Char level up attrs: expected HI after '-'");
+					p = ep;
+				}
+			} else {
+				hi = lo;
+			}
+			if (*p != '=') app_fatal("Char level up attrs: expected '=' after range");
+			p++;
+			AttrAlloc a = { 0, 0, 0, 0 };
+			while (*p != '\0' && *p != ',') {
+				int n = static_cast<int>(std::strtol(p, &ep, 10));
+				if (ep == p) app_fatal("Char level up attrs: expected digit");
+				p = ep;
+				switch (*p) {
+				case 's': a.s += n; p++; break;
+				case 'm': a.m += n; p++; break;
+				case 'd': a.d += n; p++; break;
+				case 'v': a.v += n; p++; break;
+				default: app_fatal("Char level up attrs: expected s/m/d/v after number");
+				}
+			}
+			ranges.push_back({ lo, hi, a });
+			if (*p == ',') p++;
+		}
+		if (ranges.empty())
+			app_fatal("Char level up attrs: empty");
+
+		// Simulate level-ups from class base stats.
+		const ClassAttributes &ca = GetClassAttributes(hero_class);
+		int sv = ca.baseStr, mv = ca.baseMag, dv = ca.baseDex, vv = ca.baseVit;
+		for (int i = 0; i < level - 1; i++) {
+			int lvl = i + 2;
+			for (const auto &r : ranges) {
+				if (lvl >= r.lo && (r.hi == -1 || lvl <= r.hi)) {
+					sv = std::min(250, sv + r.a.s);
+					mv = std::min(250, mv + r.a.m);
+					dv = std::min(250, dv + r.a.d);
+					vv = std::min(250, vv + r.a.v);
+					break;
+				}
+			}
+		}
+
+		// No engine-side stat noise: variability comes from the level table (provided
+		// by the caller, which can introduce per-seed noise before passing it in).
+		strength  = std::clamp(sv, (int)ca.baseStr, (int)ca.maxStr);
+		magic     = std::clamp(mv, (int)ca.baseMag, (int)ca.maxMag);
+		dexterity = std::clamp(dv, (int)ca.baseDex, (int)ca.maxDex);
+		vitality  = std::clamp(vv, (int)ca.baseVit, (int)ca.maxVit);
+	} else {
+		// Legacy linear slope: base + slope*d scaled and noised.
+		// Clamped to [10, 250]: 10 ensures the stat is always non-trivial,
+		// 250 is the safe ceiling (uint8_t field sizes in some engine paths).
+		auto stat = [&](int base, int slope, int noise) {
+			int mid = std::max(10, std::min(250, static_cast<int>((base + slope * d) * scale)));
+			return ri(std::max(10, mid - noise), std::min(250, mid + noise));
+		};
+		strength  = stat(cs.str_base, cs.str_slope, cs.str_noise);
+		magic     = stat(cs.mag_base, cs.mag_slope, cs.mag_noise);
+		dexterity = stat(cs.dex_base, cs.dex_slope, cs.dex_noise);
+		vitality  = stat(cs.vit_base, cs.vit_slope, cs.vit_noise);
+	}
 
 	// HP mirrors Diablo's CalcPlrLifeMana formula per class.
 	// No artificial depth bonus: high vitality at deep levels naturally yields

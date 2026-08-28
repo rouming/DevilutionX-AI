@@ -690,6 +690,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> statsScalePct;
 	/** @brief Explicit char level per dungeon level 1-16, comma-separated. If set, used instead of the linear formula. */
 	OptionEntryString charLevelUpTable;
+	/** @brief Per-level-up attr point assignments, e.g. "5d,5d,3s2v". Last entry repeats. Empty = use linear slope. */
+	OptionEntryString charLevelUpAttrs;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
 	OptionEntryInt<int> heroHpMinPct;
 	/** @brief Hero HP at episode start: max percent of max HP (0-100, default 100) */
