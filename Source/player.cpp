@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 
 #include <fmt/core.h>
 
@@ -2661,9 +2662,27 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	                       : hero_class == HeroClass::Rogue   ? kRogue
 	                                                           : kSorcerer;
 
-	// Hero level: 1 at d=1, scales linearly with depth, +-lvl_noise variation.
-	int base_level = std::max(1, static_cast<int>(std::round(1.0 + cs.lvl_slope * (d - 1))));
-	int level      = std::max(1, ri(base_level - cs.lvl_noise, base_level + cs.lvl_noise));
+	// Hero level: if charLevelUpTable is set use it directly (noise baked in by caller),
+	// otherwise fall back to the linear slope formula with lvl_noise randomization.
+	int level;
+	const std::string &tbl = *GetOptions().Gameplay.charLevelUpTable;
+	if (!tbl.empty()) {
+		int table[16];
+		int count = 0;
+		const char *p = tbl.c_str();
+		while (*p != '\0' && count < 16) {
+			char *end;
+			table[count++] = static_cast<int>(std::strtol(p, &end, 10));
+			if (end == p) break;
+			p = (*end == ',') ? end + 1 : end;
+		}
+		if (count != 16)
+			app_fatal("Char level up table must have exactly 16 comma-separated values");
+		level = std::max(1, table[d - 1]);
+	} else {
+		int base_level = std::max(1, static_cast<int>(std::round(1.0 + cs.lvl_slope * (d - 1))));
+		level = std::max(1, ri(base_level - cs.lvl_noise, base_level + cs.lvl_noise));
+	}
 
 	// Stats: base + slope*d gives the depth-scaled midpoint; noise widens the range.
 	// Clamped to [10, 250]: 10 ensures the stat is always non-trivial,

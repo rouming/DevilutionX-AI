@@ -688,6 +688,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noSpells;
 	/** @brief Hero stat scale percentage: 100=full stats, 70=scaled to 70% midpoints (default 100) */
 	OptionEntryInt<int> statsScalePct;
+	/** @brief Explicit char level per dungeon level 1-16, comma-separated. If set, used instead of the linear formula. */
+	OptionEntryString charLevelUpTable;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
 	OptionEntryInt<int> heroHpMinPct;
 	/** @brief Hero HP at episode start: max percent of max HP (0-100, default 100) */
