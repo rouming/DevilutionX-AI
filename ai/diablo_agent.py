@@ -72,6 +72,61 @@ def _item_name(item):
     return bytes(item._iIName).rstrip(b'\x00').decode('ascii', errors='replace')
 
 
+def _item_slot_type(item):
+    """Return a short string for the item's equip slot (Weapon/Shield/Armor/Helm/Ring/Amulet)."""
+    iloc = int(item._iLoc)
+    ILOC = dx.item_equip_type
+    if iloc == ILOC.ILOC_RING.value:    return 'Ring'
+    if iloc == ILOC.ILOC_AMULET.value:  return 'Amulet'
+    if iloc == ILOC.ILOC_ARMOR.value:   return 'Armor'
+    if iloc == ILOC.ILOC_HELM.value:    return 'Helm'
+    if iloc in (ILOC.ILOC_ONEHAND.value, ILOC.ILOC_TWOHAND.value):
+        if int(item._iClass) == dx.item_class.ICLASS_WEAPON.value:
+            return 'Weapon'
+        return 'Shield'
+    return None
+
+
+def _item_stats_str(item):
+    """Return compact base+affix stats string for an item for logging."""
+    parts = []
+    dmin = int(item._iMinDam);  dmax = int(item._iMaxDam)
+    ac   = int(item._iAC)
+    if dmin or dmax: parts.append(f"dmg={dmin}-{dmax}")
+    if ac:           parts.append(f"ac={ac}")
+    for label, val in (('str', int(item._iPLStr)), ('dex', int(item._iPLDex)),
+                       ('mag', int(item._iPLMag)), ('vit', int(item._iPLVit)),
+                       ('acp', int(item._iPLAC)),  ('hit', int(item._iPLToHit)),
+                       ('dam', int(item._iPLDam))):
+        if val: parts.append(f"{label}={val:+d}")
+    return ' '.join(parts) if parts else '-'
+
+
+_IFLAGS_ATK = ((1 << 20, 4), (1 << 19, 3), (1 << 18, 2), (1 << 17, 1))
+_IFLAGS_REC = ((1 << 23, 3), (1 << 22, 2), (1 << 21, 1))
+
+
+_NUM_INVLOC = 7  # NUM_INVLOC from inv_body_loc enum
+
+def _player_gear_str(p):
+    """Return gear bonus stats covering all simulation fields as a loggable string."""
+    flags = int(p._pIFlags)
+    atk = next((t for mask, t in _IFLAGS_ATK if flags & mask), 0)
+    rec = next((t for mask, t in _IFLAGS_REC if flags & mask), 0)
+    none_val = dx.ItemType.None_.value
+    slots = sum(1 for bc in range(_NUM_INVLOC) if int(p.InvBody[bc]._itype) != none_val)
+    return (f"slots={slots}"
+            f" str={int(p._pStrength)-int(p._pBaseStr)}"
+            f" dex={int(p._pDexterity)-int(p._pBaseDex)}"
+            f" mag={int(p._pMagic)-int(p._pBaseMag)}"
+            f" vit={int(p._pVitality)-int(p._pBaseVit)}"
+            f" ac={int(p._pIAC)} bac={int(p._pIBonusAC)}"
+            f" dmin={int(p._pIMinDam)} dmax={int(p._pIMaxDam)}"
+            f" bdam={int(p._pIBonusDam)} hit={int(p._pIBonusToHit)}"
+            f" fr={int(p._pFireResist)} lr={int(p._pLghtResist)} mr={int(p._pMagResist)}"
+            f" atk={atk} rec={rec}")
+
+
 def _item_body_slot(item):
     """Return the primary body slot cii for item, or None if not equippable."""
     iloc = int(item._iLoc)
@@ -713,11 +768,12 @@ class AgentAI:
                 items.add((cii, int(item._iSeed), _item_name(item)))
         return frozenset(items)
 
-    def _log_inv_diff(self, prev, curr):
+    def _log_inv_diff(self, prev, curr, player):
         removed     = prev - curr
         added       = curr - prev
         added_seeds = {s for (_, s, _) in added}
         inv_first   = dx.inv_item.INVITEM_INV_FIRST.value
+        belt_first  = dx.inv_item.INVITEM_BELT_FIRST.value
         dead        = diablo_state.is_player_dead(self.game.safe_state)
         for cii, seed, name in sorted(removed):
             # Body-slot item gone without seed reappearing: broke in combat.
@@ -726,7 +782,20 @@ class AgentAI:
             suffix = ' (destroyed)' if destroyed else ''
             print(f"agent {self._tick_count}: inv[-] cii={cii} seed={seed} '{name}'{suffix}", file=self.log)
         for cii, seed, name in sorted(added):
-            print(f"agent {self._tick_count}: inv[+] cii={cii} seed={seed} '{name}'", file=self.log)
+            slot  = None
+            stats = None
+            if inv_first <= cii < belt_first:
+                i = cii - inv_first
+                if i < int(player._pNumInv):
+                    item = player.InvList[i]
+                    if int(item._iSeed) == seed:
+                        slot  = _item_slot_type(item)
+                        stats = _item_stats_str(item)
+            if slot:
+                print(f"agent {self._tick_count}: inv[+] cii={cii} seed={seed}"
+                      f" slot={slot} [{stats}] '{name}'", file=self.log)
+            else:
+                print(f"agent {self._tick_count}: inv[+] cii={cii} seed={seed} '{name}'", file=self.log)
 
     def _tick(self):
         d = self.game.safe_state
@@ -736,7 +805,7 @@ class AgentAI:
 
         inv_curr = self._inv_snapshot(d.player)
         if self._inv_prev is not None and inv_curr != self._inv_prev:
-            self._log_inv_diff(self._inv_prev, inv_curr)
+            self._log_inv_diff(self._inv_prev, inv_curr, d.player)
 
         # Refresh body-slot id state every tick (needed for shrine detection below).
         none_type   = dx.ItemType.None_.value
@@ -804,6 +873,10 @@ class AgentAI:
             # Resolve pending equips confirmed by engine this tick.
             for bc in list(self._pending_equip.keys()):
                 if int(d.player.InvBody[bc]._iSeed) == self._pending_equip[bc][0]:
+                    seed, score, name = self._pending_equip[bc]
+                    print(f"agent {self._tick_count}: equipped '{name}' seed={seed}"
+                          f" lvl={self.cur_level}"
+                          f" gear: {_player_gear_str(d.player)}", file=self.log)
                     del self._pending_equip[bc]
             if safe:
                 self._repair_gear(d)
@@ -846,7 +919,8 @@ class AgentAI:
             self._level_monsters[new_level] = cur_cnt
         self.initial_monster_cnt = self._level_monsters[new_level]
         print(f"agent {self._tick_count}: now on level {new_level}, monsters {cur_cnt}"
-              f" (initial {self.initial_monster_cnt})", file=self.log)
+              f" (initial {self.initial_monster_cnt}),"
+              f" hero stats: {_player_gear_str(d.player)}", file=self.log)
         self._init_butcher_door_mask(d)
         self._mask_return_triggers(d, new_level)
         self.state = AgentAI.State.DUNGEON
