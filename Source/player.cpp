@@ -2695,9 +2695,12 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		return p;
 	};
 
-	// Pick a random class for this episode so the model trains across all
-	// three playstyles: Warrior (melee-heavy), Rogue (balanced), Sorcerer (spell-heavy).
-	const HeroClass hero_class = static_cast<HeroClass>(ri(0, 2)); // 0=Warrior, 1=Rogue, 2=Sorcerer
+	const std::string &tbl = *GetOptions().Gameplay.charLevelUpTable;
+	// Table path always uses Warrior: GenerateEpisodeHeroConfig is called before NetInit
+	// so MyPlayer is always null here. charLevelUpAttrs presets are Warrior-tuned anyway.
+	const HeroClass hero_class = tbl.empty()
+	    ? static_cast<HeroClass>(ri(0, 2)) // 0=Warrior, 1=Rogue, 2=Sorcerer
+	    : HeroClass::Warrior;
 
 	const ClassScaling &cs = hero_class == HeroClass::Warrior ? kWarrior
 	                       : hero_class == HeroClass::Rogue   ? kRogue
@@ -2706,7 +2709,6 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	// Hero level: if charLevelUpTable is set use it directly (noise baked in by caller),
 	// otherwise fall back to the linear slope formula with lvl_noise randomization.
 	int level;
-	const std::string &tbl = *GetOptions().Gameplay.charLevelUpTable;
 	if (!tbl.empty()) {
 		int table[16];
 		int count = 0;
