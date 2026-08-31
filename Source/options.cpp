@@ -939,6 +939,8 @@ GameplayOptions::GameplayOptions()
     , statsScalePct("Stats scale pct", OptionEntryFlags::Invisible, "", "", 100)
     , charLevelUpTable("Char level up table", OptionEntryFlags::Invisible, "", "", "")
     , charLevelUpAttrs("Char level up attrs", OptionEntryFlags::Invisible, "", "", "")
+    , charGearStats("Char gear stats", OptionEntryFlags::Invisible, "", "", "")
+    , charGearCombat("Char gear combat", OptionEntryFlags::Invisible, "", "", "")
     , heroHpMinPct("Hero HP min pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroHpMaxPct("Hero HP max pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroManaMinPct("Hero mana min pct", OptionEntryFlags::Invisible, "", "", 100)
@@ -1011,6 +1013,8 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&statsScalePct,
 		&charLevelUpTable,
 		&charLevelUpAttrs,
+		&charGearStats,
+		&charGearCombat,
 		&heroHpMinPct,
 		&heroHpMaxPct,
 		&heroManaMinPct,

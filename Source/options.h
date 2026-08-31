@@ -688,10 +688,14 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noSpells;
 	/** @brief Hero stat scale percentage: 100=full stats, 70=scaled to 70% midpoints (default 100) */
 	OptionEntryInt<int> statsScalePct;
-	/** @brief Explicit char level per dungeon level 1-16, comma-separated. If set, used instead of the linear formula. */
+	/** @brief Explicit char level per dungeon level 1-16, 16 comma-separated lo:hi pairs, e.g. "1:1, 3:5, ...". If set, used instead of the linear formula. */
 	OptionEntryString charLevelUpTable;
 	/** @brief Per-level-up attr point assignments, e.g. "5d,5d,3s2v". Last entry repeats. Empty = use linear slope. */
 	OptionEntryString charLevelUpAttrs;
+	/** @brief Gear stat bonuses per floor 1-16: "str_lo:str_hi/dex_lo:dex_hi/mag_lo:mag_hi/vit_lo:vit_hi, ...". Added on top of base stats. Empty = no gear bonuses. */
+	OptionEntryString charGearStats;
+	/** @brief Gear combat stats per floor 1-16: "dmin:dmax/ac_lo:ac_hi/hit_lo:hit_hi/bdam_lo:bdam_hi/resist_lo:resist_hi/atk/rec, ...". Empty = built-in formulas. */
+	OptionEntryString charGearCombat;
 	/** @brief Hero HP at episode start: min percent of max HP (0-100, default 100) */
 	OptionEntryInt<int> heroHpMinPct;
 	/** @brief Hero HP at episode start: max percent of max HP (0-100, default 100) */

@@ -2469,6 +2469,7 @@ struct EpisodeHeroConfig {
 	int      level, strength, magic, dexterity, vitality;
 	int      max_hp, max_mana, start_hp, start_mana, armor_class;
 	int      min_damage, max_damage, to_hit_bonus;
+	int      bonus_damage;
 	int      resistances;
 	// [kMinBonusSpells, kMaxBonusSpells] distinct learned spells per
 	// episode. spell_count tells how many entries in spell_ids[] /
@@ -2654,6 +2655,31 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		return lo + static_cast<int>(rng % static_cast<uint32_t>(hi - lo + 1));
 	};
 
+	// Parse lo:hi from p (advancing it) and return {lo, hi}. If no ':' follows, hi = lo.
+	auto read_lohi = [](const char *&p) -> std::pair<int, int> {
+		char *end;
+		int lo = static_cast<int>(std::strtol(p, &end, 10));
+		p = end;
+		int hi = lo;
+		if (*p == ':') {
+			p++;
+			hi = static_cast<int>(std::strtol(p, &end, 10));
+			p = end;
+		}
+		return { lo, hi };
+	};
+
+	// Advance p past idx comma-separated entries, skipping surrounding whitespace.
+	auto skip_to_entry = [](const char *p, int idx) -> const char * {
+		for (int i = 0; i < idx; i++) {
+			while (*p != '\0' && *p != ',') p++;
+			if (*p == ',') p++;
+			while (*p == ' ' || *p == '\t') p++;
+		}
+		while (*p == ' ' || *p == '\t') p++;
+		return p;
+	};
+
 	// Pick a random class for this episode so the model trains across all
 	// three playstyles: Warrior (melee-heavy), Rogue (balanced), Sorcerer (spell-heavy).
 	const HeroClass hero_class = static_cast<HeroClass>(ri(0, 2)); // 0=Warrior, 1=Rogue, 2=Sorcerer
@@ -2671,13 +2697,15 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		int count = 0;
 		const char *p = tbl.c_str();
 		while (*p != '\0' && count < 16) {
-			char *end;
-			table[count++] = static_cast<int>(std::strtol(p, &end, 10));
-			if (end == p) break;
-			p = (*end == ',') ? end + 1 : end;
+			while (*p == ' ' || *p == '\t') p++;
+			if (*p == '\0') break;
+			auto [lo, hi] = read_lohi(p);
+			table[count++] = ri(lo, hi);
+			while (*p == ' ' || *p == '\t') p++;
+			if (*p == ',') p++;
 		}
 		if (count != 16)
-			app_fatal("Char level up table must have exactly 16 comma-separated values");
+			app_fatal("Char level up table must have exactly 16 comma-separated lo:hi values");
 		level = std::max(1, table[d - 1]);
 	} else {
 		int base_level = std::max(1, static_cast<int>(std::round(1.0 + cs.lvl_slope * (d - 1))));
@@ -2773,6 +2801,23 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		vitality  = stat(cs.vit_base, cs.vit_slope, cs.vit_noise);
 	}
 
+	// Gear stat bonuses added on top of base stats.
+	// Applied before HP so vitality bonus raises max_hp correctly.
+	const std::string &gs = *GetOptions().Gameplay.charGearStats;
+	if (!gs.empty()) {
+		const char *p = skip_to_entry(gs.c_str(), d - 1);
+		if (*p != '\0') {
+			auto [slo, shi] = read_lohi(p); if (*p == '/') p++;
+			auto [dlo, dhi] = read_lohi(p); if (*p == '/') p++;
+			auto [mlo, mhi] = read_lohi(p); if (*p == '/') p++;
+			auto [vlo, vhi] = read_lohi(p);
+			strength  = std::min(250, strength  + ri(slo, shi));
+			dexterity = std::min(250, dexterity + ri(dlo, dhi));
+			magic     = std::min(250, magic     + ri(mlo, mhi));
+			vitality  = std::min(250, vitality  + ri(vlo, vhi));
+		}
+	}
+
 	// HP mirrors Diablo's CalcPlrLifeMana formula per class.
 	// No artificial depth bonus: high vitality at deep levels naturally yields
 	// more HP, so the model learns a real vitality->survivability relationship.
@@ -2798,26 +2843,72 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	int mana_mid   = static_cast<int>(mana_base * scale);
 	int max_mana   = std::max(0, ri(int(0.85 * mana_mid), int(1.15 * mana_mid)));
 
-	// Armor class: linear with depth, reflecting accumulated gear quality.
-	// +-5 noise keeps individual episodes varied.
-	int base_ac = static_cast<int>((5 + 6.5 * d) * scale);
-	int ac      = std::max(0, ri(base_ac - 5, base_ac + 5));
+	// Combat stats: from charGearCombat table if set, else built-in formulas.
+	// charGearCombat format per entry: dmin:dmax/ac_lo:ac_hi/hit_lo:hit_hi/bdam_lo:bdam_hi/resist_lo:resist_hi/atk/rec
+	//   dmin:dmax        - weapon damage range (absolute, not lo:hi noise)
+	//   ac_lo:ac_hi      - armor class range
+	//   hit_lo:hit_hi    - to-hit bonus range
+	//   bdam_lo:bdam_hi  - bonus damage % range (_pIBonusDam)
+	//   resist_lo:resist - all resistances range
+	//   atk              - attack speed tier (0-3)
+	//   rec              - recovery speed tier (0-3)
+	int ac, min_dam, max_dam, to_hit, resist, bonus_damage;
+	int atk_tier, rec_tier;
 
-	// Damage: quadratic with depth because item damage rolls grow with item quality.
-	// Coefficients reduced ~30% vs previous to make melee weaker relative to spells,
-	// encouraging the agent to rely on the now-guaranteed spell kit.
-	int min_dam = std::max(1, ri(int((1 + 0.10 * d*d) * scale), int((2 + 0.18 * d*d) * scale)));
-	int max_dam = std::max(min_dam + 1, ri(int((2 + 0.28 * d*d) * scale), int((4 + 0.42 * d*d) * scale)));
+	const std::string &gc = *GetOptions().Gameplay.charGearCombat;
+	if (!gc.empty()) {
+		const char *p = skip_to_entry(gc.c_str(), d - 1);
+		auto [dmn, dmx] = read_lohi(p); if (*p == '/') p++;
+		auto [aclo, achi] = read_lohi(p); if (*p == '/') p++;
+		auto [htlo, hthi] = read_lohi(p); if (*p == '/') p++;
+		auto [bdlo, bdhi] = read_lohi(p); if (*p == '/') p++;
+		auto [rslo, rshi] = read_lohi(p); if (*p == '/') p++;
+		char *end;
+		int atk = static_cast<int>(std::strtol(p, &end, 10)); p = end; if (*p == '/') p++;
+		int rec = static_cast<int>(std::strtol(p, &end, 10));
+		min_dam      = std::max(1, dmn);
+		max_dam      = std::max(min_dam + 1, dmx);
+		ac           = std::max(0, ri(aclo, achi));
+		to_hit       = std::max(0, ri(htlo, hthi));
+		bonus_damage = std::max(0, ri(bdlo, bdhi));
+		resist       = std::min(75, std::max(0, ri(rslo, rshi)));
+		atk_tier     = std::clamp(atk, 0, 3);
+		rec_tier     = std::clamp(rec, 0, 3);
+	} else {
+		// Armor class: linear with depth, reflecting accumulated gear quality.
+		// +-5 noise keeps individual episodes varied.
+		int base_ac = static_cast<int>((5 + 6.5 * d) * scale);
+		ac      = std::max(0, ri(base_ac - 5, base_ac + 5));
 
-	// To-hit bonus stacks on top of the engine's base (level/2 + dex/2).
-	// Kept in a +-5 band around 10+3d so the hero hits reliably but misses sometimes.
-	int to_hit_mid = static_cast<int>((10 + 3*d) * scale);
-	int to_hit     = std::max(0, ri(to_hit_mid - 5, to_hit_mid + 5));
+		// Damage: quadratic with depth because item damage rolls grow with item quality.
+		// Coefficients reduced ~30% vs previous to make melee weaker relative to spells,
+		// encouraging the agent to rely on the now-guaranteed spell kit.
+		min_dam = std::max(1, ri(int((1 + 0.10 * d*d) * scale), int((2 + 0.18 * d*d) * scale)));
+		max_dam = std::max(min_dam + 1, ri(int((2 + 0.28 * d*d) * scale), int((4 + 0.42 * d*d) * scale)));
 
-	// Resistances: zero until d=5 (shallow floors have no elemental threat),
-	// then grow toward the 75% hard cap around d=14.
-	int base_res = std::max(0, (d - 4) * 8);
-	int resist   = std::min(75, std::max(0, ri(base_res - 5, base_res + 10)));
+		// To-hit bonus stacks on top of the engine's base (level/2 + dex/2).
+		// Kept in a +-5 band around 10+3d so the hero hits reliably but misses sometimes.
+		int to_hit_mid = static_cast<int>((10 + 3*d) * scale);
+		to_hit     = std::max(0, ri(to_hit_mid - 5, to_hit_mid + 5));
+
+		// Resistances: zero until d=5 (shallow floors have no elemental threat),
+		// then grow toward the 75% hard cap around d=14.
+		int base_res = std::max(0, (d - 4) * 8);
+		resist       = std::min(75, std::max(0, ri(base_res - 5, base_res + 10)));
+
+		bonus_damage = 0;
+
+		// Animation speed tiers injected via item flags.
+		// Attack speed: 0=none, 1=Quick, 2=Fast, 3=Faster. Available from d>=5;
+		// higher tiers become reachable at greater depth (one new tier per 2 floors).
+		// Recovery speed: 0=none, 1=Fast, 2=Faster, 3=Fastest. Available from d>=3;
+		// prevents stunlock on a character with no real armor (one new tier per 3 floors).
+		// Stored packed in a byte: bits 1:0 = attack tier, bits 3:2 = recovery tier.
+		int atk_max = (d >= 5) ? std::min(3, (d - 5) / 2 + 1) : 0;
+		int rec_max = (d >= 3) ? std::min(3, (d - 3) / 3 + 1) : 0;
+		atk_tier = ri(0, atk_max);
+		rec_tier = ri(0, rec_max);
+	}
 
 	// Spell: uniformly random across all trainable spells.
 	// No depth gate -- each spell gets equal exposure across all dungeon levels,
@@ -2847,17 +2938,6 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		spell_ids[i]    = picked;
 		spell_levels[i] = std::min(15, std::max(1, ri(d - 1, d + 3)));
 	}
-
-	// Animation speed tiers injected via item flags.
-	// Attack speed: 0=none, 1=Quick, 2=Fast, 3=Faster. Available from d>=5;
-	// higher tiers become reachable at greater depth (one new tier per 2 floors).
-	// Recovery speed: 0=none, 1=Fast, 2=Faster, 3=Fastest. Available from d>=3;
-	// prevents stunlock on a character with no real armor (one new tier per 3 floors).
-	// Stored packed in a byte: bits 1:0 = attack tier, bits 3:2 = recovery tier.
-	int atk_max = (d >= 5) ? std::min(3, (d - 5) / 2 + 1) : 0;
-	int rec_max = (d >= 3) ? std::min(3, (d - 3) / 3 + 1) : 0;
-	int atk_tier = ri(0, atk_max);
-	int rec_tier = ri(0, rec_max);
 
 	// Starting potion mix. Build a 70-item bag (10 of each of 7 categories),
 	// shuffle it, roll the total count uniformly in [kPotionDrawMin,
@@ -2901,6 +2981,7 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 		.min_damage     = min_dam,
 		.max_damage     = max_dam,
 		.to_hit_bonus   = to_hit,
+		.bonus_damage   = bonus_damage,
 		.resistances    = resist,
 		.spell_count    = static_cast<uint8_t>(n_spells),
 		.spell_ids      = {}, // filled by std::copy_n below
@@ -2925,7 +3006,7 @@ void ApplyHeroConfigCombatStats(Player &player)
 
 	player._pIMinDam      = cfg.min_damage;
 	player._pIMaxDam      = cfg.max_damage;
-	player._pIBonusDam    = 0;
+	player._pIBonusDam    = cfg.bonus_damage;
 	player._pIBonusDamMod = 0;
 	player._pDamageMod    = 0;
 
