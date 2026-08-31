@@ -1340,7 +1340,7 @@ class AgentAI:
 
         Named presets pass through.  Per-level spec format:
           'RANGE=ALLOC[,RANGE=ALLOC...]'
-          RANGE - 'N-M', 'N+', or 'N'
+          RANGE - 'N-M', 'N-*', or 'N'
           ALLOC - concatenated stat specs: '2s3v', '5s', etc.
                   letters: s=str m=mag d=dex v=vit
                   each count 1-5; all counts must sum to 5
@@ -1355,13 +1355,11 @@ class AgentAI:
             lvl_part  = lvl_part.strip()
             alloc_str = alloc_str.strip()
             try:
-                if lvl_part.endswith('+'):
-                    lo = int(lvl_part[:-1])
-                    hi = 100
-                elif '-' in lvl_part:
+                if '-' in lvl_part:
                     a, b = lvl_part.split('-', 1)
-                    lo, hi = int(a), int(b)
-                    if lo > hi:
+                    lo = int(a)
+                    hi = 100 if b.strip() == '*' else int(b)
+                    if hi != 100 and lo > hi:
                         raise ValueError("stat-strategy: bad range %r" % lvl_part)
                 else:
                     lo = hi = int(lvl_part)
@@ -1392,7 +1390,7 @@ class AgentAI:
         """Parse a validated per-level-range stat strategy string; return a strategy function.
 
         Format: 'RANGE=ALLOC[,RANGE=ALLOC...]'  (see validate_stat_strategy)
-        Example: '1-7=2s2v1d,8+=5s'
+        Example: '1-7=2s2v1d,8-*=5s'
         """
         CAPS = {'s': 250, 'm': 100, 'd': 250, 'v': 100}
         FIELD = {'s': '_pBaseStr', 'm': '_pBaseMag', 'd': '_pBaseDex', 'v': '_pBaseVit'}
@@ -1403,11 +1401,10 @@ class AgentAI:
             range_str = range_str.strip()
             alloc_str = alloc_str.strip()
 
-            if range_str.endswith('+'):
-                lo, hi = int(range_str[:-1]), None
-            elif '-' in range_str:
+            if '-' in range_str:
                 a, b = range_str.split('-', 1)
-                lo, hi = int(a), int(b)
+                lo = int(a)
+                hi = None if b.strip() == '*' else int(b)
             else:
                 lo = hi = int(range_str)
 

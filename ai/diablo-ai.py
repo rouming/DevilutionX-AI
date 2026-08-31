@@ -93,6 +93,17 @@ def _parse_stat_strategy_arg(s):
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e))
 
+# Named preset -> charLevelUpAttrs range spec (Warrior base: str=30,mag=10,dex=20,vit=25).
+_STAT_STRATEGY_ATTRS = {
+    'dex-rush': '2-9=5d,10-*=3s2v',  # fill DEX 20->60 over 8 level-ups, then 3s2v
+    'str-vit':  '1-*=3s2v',
+    'str-dump': '1-*=5s',
+}
+
+def _stat_strategy_to_attrs(strategy):
+    """Convert a stat strategy string to charLevelUpAttrs range spec for the engine."""
+    return _STAT_STRATEGY_ATTRS.get(strategy, strategy)
+
 def _parse_model_spec_arg(s):
     from diablo_agent import AgentAI
     try:
@@ -417,6 +428,10 @@ def make_diablo_parser():
     common_ai_parser.add_argument(
         "--no-actions", action="store_true",
         help="Disable agent actions (manual play mode).")
+    common_ai_parser.add_argument(
+        "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
+        help="Stat allocation: named preset ('dex-rush', 'str-vit') or "
+             "per-level spec '1-7=2s2v1d,8-*=5s' (s/m/d/v, N-* open-ended, sum=5)")
 
     #
     # play-ai
@@ -489,10 +504,6 @@ def make_diablo_parser():
     agent_ai_parser.add_argument(
         "--argmax", action="store_true", default=False,
         help="Select the action with highest probability instead of sampling (default: False)")
-    agent_ai_parser.add_argument(
-        "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
-        help="Stat allocation: named preset ('dex-rush', 'str-vit') or "
-             "per-level spec '1-7=2s2v1d,8+=5s' (s/m/d/v, N+ open-ended, sum=5)")
     agent_ai_parser.add_argument(
         "--kill-threshold", type=float, default=0.5,
         help="Fraction of monsters to kill before pathfinding to stairs (default: 0.5)")
@@ -2910,11 +2921,15 @@ def main():
         print("Error: initial configuration is invalid. Please check your 'diablo-ai.ini' file and provide valid paths for 'diablo-build-path' and 'diablo-mshared-filename' configuration options.")
         sys.exit(1)
 
-    def _load_char_tables():
+    def _build_char_tables(a):
         section = 'devilutionx-gameplay'
         if section not in config:
             parser.error(f"[{section}] section missing from diablo-ai.ini")
-        return dict(config[section])
+        tables = dict(config[section])
+        strategy = getattr(a, 'stat_strategy', None)
+        if strategy:
+            tables['char level up attrs'] = _stat_strategy_to_attrs(strategy)
+        return tables
 
     if not (diablo_build_path / "spawn.mpq").exists():
         print(f"Error: Shareware file \"spawn.mpq\" for Diablo content does not exist. Please download and place the file alongside the `devilutionx` binary with the following command:\n\twget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq -P {diablo_build_path}")
@@ -2965,7 +2980,7 @@ def main():
         "spell-potency": args.spell_potency,
         "no-spells": args.no_spells,
         "stats-scale": args.stats_scale,
-        "char-tables": _load_char_tables() if args.char_tables else None,
+        "char-tables": _build_char_tables(args) if args.char_tables else None,
         "hero-hp-min-pct":    args.hero_hp_at_start[0],
         "hero-hp-max-pct":    args.hero_hp_at_start[1],
         "hero-mana-min-pct":  args.hero_mana_at_start[0],
