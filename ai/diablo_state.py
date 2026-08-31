@@ -1807,6 +1807,15 @@ class DiabloGame:
 
     @staticmethod
     def run(config):
+        def _char_tables_fmt(tables):
+            t = tables or {}
+            return {
+                'char_level_up_table': t.get('char level up table', ''),
+                'char_level_up_attrs': t.get('char level up attrs', ''),
+                'char_gear_stats':     t.get('char gear stats', ''),
+                'char_gear_combat':    t.get('char gear combat', ''),
+            }
+
         cfg_file = open("diablo.ini.template", "r")
         cfg = cfg_file.read()
         cfg_file.close()
@@ -1842,6 +1851,7 @@ class DiabloGame:
                          hero_mana_max_pct=config.get("hero-mana-max-pct", 100),
                          hero_potions_min=config.get("hero-potions-min", 2),
                          hero_potions_max=config.get("hero-potions-max", 20),
+                         **_char_tables_fmt(config.get("char-tables")),
                          )
 
         kind   = "eval" if config.get("eval") else "run"

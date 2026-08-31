@@ -118,6 +118,10 @@ Hero mana min pct={hero_mana_min_pct}
 Hero mana max pct={hero_mana_max_pct}
 Hero potions min={hero_potions_min}
 Hero potions max={hero_potions_max}
+Char level up table={char_level_up_table}
+Char level up attrs={char_level_up_attrs}
+Char gear stats={char_gear_stats}
+Char gear combat={char_gear_combat}
 
 [Network]
 Port=6112

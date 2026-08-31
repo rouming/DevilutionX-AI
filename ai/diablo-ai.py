@@ -260,6 +260,7 @@ def make_diablo_parser():
 
     # Define incompatible options
     incompatible_options = {
+        '--char-tables': ['--stats-scale', '--eval-stats-scale'],
         '--attach': ['--game-ticks-per-step',
                      '--step-mode',
                      '--invincible-player',
@@ -341,6 +342,9 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--no-spells", action="store_true",
         help="Disable hero spells at episode start (spell slots stay empty, mana set to 0)")
+    common_parser.add_argument(
+        "--char-tables", action="store_true",
+        help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini for both train and eval; conflicts with --stats-scale and --eval-stats-scale")
     common_parser.add_argument(
         "--stats-scale", type=float, default=1.0, metavar="SCALE",
         help="Scale hero stat midpoints by this factor (1.0=full stats, 0.7=70%% midpoints, noise unchanged; default: 1.0)")
@@ -633,6 +637,10 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--eval-no-spells", action="store_true",
         help="Disable hero spells for eval environments (default: spells enabled)")
+    train_ai_parser.add_argument(
+        "--no-eval-char-tables", "--eval-no-char-tables", action="store_true",
+        dest="no_eval_char_tables",
+        help="Disable char tables for eval even when --char-tables is set (e.g. to compare against legacy eval)")
     train_ai_parser.add_argument(
         "--eval-stats-scale", type=float, default=1.0, metavar="SCALE",
         help="Scale hero stat midpoints for eval environments (default: 1.0)")
@@ -2166,6 +2174,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
         eval_gameconfig['no-spells']     = args.eval_no_spells
         eval_gameconfig['stats-scale']   = args.eval_stats_scale
+        if args.no_eval_char_tables:
+            eval_gameconfig['char-tables'] = None
         eval_gameconfig['hero-hp-min-pct']  = args.eval_hero_hp_at_start[0]
         eval_gameconfig['hero-hp-max-pct']  = args.eval_hero_hp_at_start[1]
         eval_gameconfig['hero-mana-min-pct'] = args.eval_hero_mana_at_start[0]
@@ -2900,6 +2910,12 @@ def main():
         print("Error: initial configuration is invalid. Please check your 'diablo-ai.ini' file and provide valid paths for 'diablo-build-path' and 'diablo-mshared-filename' configuration options.")
         sys.exit(1)
 
+    def _load_char_tables():
+        section = 'devilutionx-gameplay'
+        if section not in config:
+            parser.error(f"[{section}] section missing from diablo-ai.ini")
+        return dict(config[section])
+
     if not (diablo_build_path / "spawn.mpq").exists():
         print(f"Error: Shareware file \"spawn.mpq\" for Diablo content does not exist. Please download and place the file alongside the `devilutionx` binary with the following command:\n\twget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq -P {diablo_build_path}")
         sys.exit(1)
@@ -2949,6 +2965,7 @@ def main():
         "spell-potency": args.spell_potency,
         "no-spells": args.no_spells,
         "stats-scale": args.stats_scale,
+        "char-tables": _load_char_tables() if args.char_tables else None,
         "hero-hp-min-pct":    args.hero_hp_at_start[0],
         "hero-hp-max-pct":    args.hero_hp_at_start[1],
         "hero-mana-min-pct":  args.hero_mana_at_start[0],
