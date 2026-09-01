@@ -354,8 +354,11 @@ def make_diablo_parser():
         "--no-spells", action="store_true",
         help="Disable hero spells at episode start (spell slots stay empty, mana set to 0)")
     common_parser.add_argument(
-        "--char-tables", action="store_true",
-        help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini for both train and eval; conflicts with --stats-scale and --eval-stats-scale")
+        "--char-tables", action="store_true", default=True, dest="char_tables",
+        help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini (default: on)")
+    common_parser.add_argument(
+        "--no-char-tables", action="store_false", dest="char_tables",
+        help="Disable char tables; required when using --stats-scale or --eval-stats-scale")
     common_parser.add_argument(
         "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
         help="Stat allocation strategy when --char-tables is used and char level up attrs is not set in the ini: "
@@ -2907,9 +2910,11 @@ def main():
     args = parser.parse_args(namespace=DiabloParserNamespace())
 
     # Check if some options are incompatible
+    argv_set = set(sys.argv)
     for opt, incompatibles in incompatible_options.items():
-        if opt in sys.argv and (set(incompatibles) & set(sys.argv)):
-            parser.error(f"{opt} cannot be used together with {" or ".join(incompatibles)}")
+        attr = opt.lstrip('-').replace('-', '_')
+        if getattr(args, attr, False) and (set(incompatibles) & argv_set):
+            parser.error(f"{opt} cannot be used together with {' or '.join(incompatibles)}")
 
     config = configparser.ConfigParser()
     config.read('diablo-ai.ini')
