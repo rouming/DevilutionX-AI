@@ -357,6 +357,10 @@ def make_diablo_parser():
         "--char-tables", action="store_true",
         help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini for both train and eval; conflicts with --stats-scale and --eval-stats-scale")
     common_parser.add_argument(
+        "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
+        help="Stat allocation strategy when --char-tables is used and char level up attrs is not set in the ini: "
+             "named preset ('dex-rush', 'str-vit') or per-level spec '1-7=2s2v1d,8-*=5s' (s/m/d/v, N-* open-ended, sum=5)")
+    common_parser.add_argument(
         "--stats-scale", type=float, default=1.0, metavar="SCALE",
         help="Scale hero stat midpoints by this factor (1.0=full stats, 0.7=70%% midpoints, noise unchanged; default: 1.0)")
     common_parser.add_argument(
@@ -428,10 +432,7 @@ def make_diablo_parser():
     common_ai_parser.add_argument(
         "--no-actions", action="store_true",
         help="Disable agent actions (manual play mode).")
-    common_ai_parser.add_argument(
-        "--stat-strategy", type=_parse_stat_strategy_arg, default='dex-rush',
-        help="Stat allocation: named preset ('dex-rush', 'str-vit') or "
-             "per-level spec '1-7=2s2v1d,8-*=5s' (s/m/d/v, N-* open-ended, sum=5)")
+
 
     #
     # play-ai
@@ -2926,9 +2927,8 @@ def main():
         if section not in config:
             parser.error(f"[{section}] section missing from diablo-ai.ini")
         tables = dict(config[section])
-        strategy = getattr(a, 'stat_strategy', None)
-        if strategy:
-            tables['char level up attrs'] = _stat_strategy_to_attrs(strategy)
+        if not tables.get('char level up attrs', '').strip():
+            tables['char level up attrs'] = _stat_strategy_to_attrs(a.stat_strategy)
         return tables
 
     if not (diablo_build_path / "spawn.mpq").exists():
