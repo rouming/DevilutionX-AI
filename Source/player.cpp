@@ -2639,6 +2639,21 @@ static constexpr ClassScaling kSorcerer = {
 
 void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 {
+	static bool once = false;
+	if (!once) {
+		once = true;
+		const GameplayOptions &gp = GetOptions().Gameplay;
+		printf(">> GenerateEpisodeHeroConfig tables:\n"
+		       ">>   charLevelUpTable: \"%s\"\n"
+		       ">>   charLevelUpAttrs: \"%s\"\n"
+		       ">>   charGearStats:    \"%s\"\n"
+		       ">>   charGearCombat:   \"%s\"\n",
+		    (*gp.charLevelUpTable).c_str(),
+		    (*gp.charLevelUpAttrs).c_str(),
+		    (*gp.charGearStats).c_str(),
+		    (*gp.charGearCombat).c_str());
+	}
+
 	const int d = dungeon_level;
 
 	// Independent RNG seeded from the episode seed via the FMix32 mixer.
@@ -2803,6 +2818,7 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 
 	// Gear stat bonuses added on top of base stats.
 	// Applied before HP so vitality bonus raises max_hp correctly.
+	const int lvlup_str = strength, lvlup_mag = magic, lvlup_dex = dexterity, lvlup_vit = vitality;
 	const std::string &gs = *GetOptions().Gameplay.charGearStats;
 	if (!gs.empty()) {
 		const char *p = skip_to_entry(gs.c_str(), d - 1);
@@ -2992,6 +3008,22 @@ void GenerateEpisodeHeroConfig(uint8_t dungeon_level, uint32_t seed)
 	std::copy_n(spell_ids,    kMaxBonusSpells, gEpisodeHeroConfig.spell_ids);
 	std::copy_n(spell_levels, kMaxBonusSpells, gEpisodeHeroConfig.spell_levels);
 	std::copy_n(bag,          kPotionDrawMax,  gEpisodeHeroConfig.potion_bag);
+
+	const EpisodeHeroConfig &cfg = gEpisodeHeroConfig;
+	printf(">> GenerateEpisodeHeroConfig: dlvl=%d hero_lvl=%d"
+	       " str/mag/dex/vit=%d/%d/%d/%d(+%d/+%d/+%d/+%d)"
+	       " hp=%d/%d mana=%d/%d"
+	       " ac=%d dam=%d-%d(+%d%%) hit=%d%% res=%d%%"
+	       " atk=%d rec=%d spells=%d potions=%d\n",
+	    d, cfg.level,
+	    cfg.strength, cfg.magic, cfg.dexterity, cfg.vitality,
+	    cfg.strength - lvlup_str, cfg.magic - lvlup_mag,
+	    cfg.dexterity - lvlup_dex, cfg.vitality - lvlup_vit,
+	    cfg.start_hp, cfg.max_hp, cfg.start_mana, cfg.max_mana,
+	    cfg.armor_class, cfg.min_damage, cfg.max_damage, cfg.bonus_damage,
+	    cfg.to_hit_bonus, cfg.resistances,
+	    cfg.speed_flags & 0x3, (cfg.speed_flags >> 2) & 0x3,
+	    cfg.spell_count, cfg.potion_count);
 }
 
 // Re-applies the item-derived combat overrides after CalcPlrItemVals resets them.
