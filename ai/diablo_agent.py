@@ -1392,8 +1392,8 @@ class AgentAI:
         Format: 'RANGE=ALLOC[,RANGE=ALLOC...]'  (see validate_stat_strategy)
         Example: '1-7=2s2v1d,8-*=5s'
         """
-        CAPS = {'s': 250, 'm': 100, 'd': 250, 'v': 100}
         FIELD = {'s': '_pBaseStr', 'm': '_pBaseMag', 'd': '_pBaseDex', 'v': '_pBaseVit'}
+        CAP_FIELD = {'s': 'maxStr', 'm': 'maxMag', 'd': 'maxDex', 'v': 'maxVit'}
 
         ranges = []
         for entry in spec.split(','):
@@ -1423,10 +1423,11 @@ class AgentAI:
                 # No range matched - fallback: all to str, then vit
                 alloc = [('s', pts), ('v', pts)]
 
+            ca = d.player_class_attrs
             result = {'s': 0, 'm': 0, 'd': 0, 'v': 0}
             remaining = pts
             for letter, count in alloc:
-                cap = CAPS[letter]
+                cap = int(getattr(ca, CAP_FIELD[letter]))
                 cur = int(getattr(d.player, FIELD[letter]))
                 give = min(count, remaining, max(0, cap - cur))
                 result[letter] += give
@@ -1435,7 +1436,7 @@ class AgentAI:
             # Spill remainder to each stat in alloc order that still has room
             if remaining > 0:
                 for letter, _ in alloc:
-                    cap = CAPS[letter]
+                    cap = int(getattr(ca, CAP_FIELD[letter]))
                     cur = int(getattr(d.player, FIELD[letter]))
                     give = min(remaining, max(0, cap - cur - result[letter]))
                     result[letter] += give
