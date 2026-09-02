@@ -159,9 +159,9 @@ def _can_equip(item, player):
 
 
 def _pl_stats_warrior(item):
-    """Stat bonus contribution for warrior: STR + VIT.
+    """Stat bonus contribution for warrior: 1.5*STR + 0.5*VIT (matches 3s2v level-up allocation).
     Only meaningful when item is identified; caller is responsible for that check."""
-    return int(item._iPLStr) + int(item._iPLVit)
+    return 1.5 * int(item._iPLStr) + 0.5 * int(item._iPLVit)
 
 
 def _item_score(item, hero_class):
@@ -180,11 +180,19 @@ def _item_score(item, hero_class):
             if hero_class == dx.HeroClass.Warrior.value:
                 ac += _pl_stats_warrior(item)
         score = ac
-        return score, f"AC={score}"
+        return score, f"AC={score:.1f}"
     # Jewelry: stat bonus priority depends on class.
     if hero_class == dx.HeroClass.Warrior.value:
-        score = int(item._iPLStr) + int(item._iPLVit)
-        return score, f"str+vit={score}"
+        if not identified:
+            return 0, "unidentified"
+        fr    = int(item._iPLFR)
+        lr    = int(item._iPLLR)
+        mr    = int(item._iPLMR)
+        hp    = int(item._iPLHP)
+        p_dam = int(item._iPLDam)
+        score = (1.5 * int(item._iPLStr) + 0.5 * int(item._iPLVit)
+                 + max(fr, lr, mr) * 0.1 + hp * 0.1 + p_dam * 0.2)
+        return score, f"score={score:.2f}"
     if hero_class == dx.HeroClass.Rogue.value:
         score = int(item._iPLDex) + int(item._iPLVit)
         return score, f"dex+vit={score}"
