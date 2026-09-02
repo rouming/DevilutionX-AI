@@ -1173,16 +1173,20 @@ class AgentAI:
         strategy = getattr(self, '_stat_strategy', self._warrior_dexterity_rush)
         str_pts, dex_pts, vit_pts = strategy(d, pts)
 
+        base_str = int(d.player._pBaseStr)
+        base_mag = int(d.player._pBaseMag)
+        base_dex = int(d.player._pBaseDex)
+        base_vit = int(d.player._pBaseVit)
         data1 = (str_pts & 0xFF) | ((dex_pts & 0xFF) << 16) | ((vit_pts & 0xFF) << 24)
         self.game.submit_key(
             ring.RingEntryType.RING_ENTRY_KEY_STAT_ASSIGN |
             ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS,
             data=(data1, 0))
         print(f"agent {self._tick_count}: level up {int(d.player._pLevel)}, assign exp points to "
-              f"str {int(d.player._pBaseStr)}+{str_pts}, "
-              f"mag {int(d.player._pBaseMag)}+0, "
-              f"dex {int(d.player._pBaseDex)}+{dex_pts}, "
-              f"vit {int(d.player._pBaseVit)}+{vit_pts}",
+              f"str {base_str}+{str_pts}, "
+              f"mag {base_mag}+0, "
+              f"dex {base_dex}+{dex_pts}, "
+              f"vit {base_vit}+{vit_pts}",
               file=self.log)
 
     @staticmethod
