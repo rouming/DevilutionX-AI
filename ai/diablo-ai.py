@@ -93,17 +93,6 @@ def _parse_stat_strategy_arg(s):
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e))
 
-# Named preset -> charLevelUpAttrs range spec (Warrior base: str=30,mag=10,dex=20,vit=25).
-_STAT_STRATEGY_ATTRS = {
-    'dex-rush': '2-9=5d,10-*=3s2v',  # fill DEX 20->60 over 8 level-ups, then 3s2v
-    'str-vit':  '1-*=3s2v',
-    'str-dump': '1-*=5s',
-}
-
-def _stat_strategy_to_attrs(strategy):
-    """Convert a stat strategy string to charLevelUpAttrs range spec for the engine."""
-    return _STAT_STRATEGY_ATTRS.get(strategy, strategy)
-
 def _parse_model_spec_arg(s):
     from diablo_agent import AgentAI
     try:
@@ -2928,12 +2917,13 @@ def main():
         sys.exit(1)
 
     def _build_char_tables(a):
+        from diablo_agent import AgentAI
         section = 'devilutionx-gameplay'
         if section not in config:
             parser.error(f"[{section}] section missing from diablo-ai.ini")
         tables = dict(config[section])
         if not tables.get('char level up attrs', '').strip():
-            tables['char level up attrs'] = _stat_strategy_to_attrs(a.stat_strategy)
+            tables['char level up attrs'] = AgentAI.stat_strategy_to_attrs(a.stat_strategy)
         return tables
 
     if not (diablo_build_path / "spawn.mpq").exists():

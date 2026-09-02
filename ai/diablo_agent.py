@@ -1462,6 +1462,18 @@ class AgentAI:
         'str-dump':  _warrior_str_dump.__func__,
     }
 
+    # charLevelUpAttrs spec for each named preset (Warrior base: str=30,mag=10,dex=20,vit=25).
+    _STAT_STRATEGY_ATTRS = {
+        'dex-rush': '2-9=5d,10-*=3s2v',
+        'str-vit':  '1-*=3s2v',
+        'str-dump': '1-*=5s',
+    }
+
+    @staticmethod
+    def stat_strategy_to_attrs(strategy):
+        """Return the charLevelUpAttrs spec for a named preset, or the strategy string itself."""
+        return AgentAI._STAT_STRATEGY_ATTRS.get(strategy, strategy)
+
     _REPAIR_SLOTS = (
         (dx.inv_item.INVITEM_HAND_LEFT.value,  "in left hand"),
         (dx.inv_item.INVITEM_HAND_RIGHT.value, "in right hand"),
