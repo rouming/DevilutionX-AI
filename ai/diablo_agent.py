@@ -116,10 +116,10 @@ def _player_gear_str(p):
     none_val = dx.ItemType.None_.value
     slots = sum(1 for bc in range(_NUM_INVLOC) if int(p.InvBody[bc]._itype) != none_val)
     return (f"slots={slots}"
-            f" str={int(p._pStrength)-int(p._pBaseStr)}"
-            f" dex={int(p._pDexterity)-int(p._pBaseDex)}"
-            f" mag={int(p._pMagic)-int(p._pBaseMag)}"
-            f" vit={int(p._pVitality)-int(p._pBaseVit)}"
+            f" str={int(p._pBaseStr)}({int(p._pStrength)-int(p._pBaseStr):+d})"
+            f" dex={int(p._pBaseDex)}({int(p._pDexterity)-int(p._pBaseDex):+d})"
+            f" mag={int(p._pBaseMag)}({int(p._pMagic)-int(p._pBaseMag):+d})"
+            f" vit={int(p._pBaseVit)}({int(p._pVitality)-int(p._pBaseVit):+d})"
             f" ac={int(p._pIAC)} bac={int(p._pIBonusAC)}"
             f" dmin={int(p._pIMinDam)} dmax={int(p._pIMaxDam)}"
             f" bdam={int(p._pIBonusDam)} hit={int(p._pIBonusToHit)}"

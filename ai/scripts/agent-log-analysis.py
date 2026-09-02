@@ -33,12 +33,14 @@ else:
     _death_lines.append("no 'hero died at level N' lines found")
 
 # --- per-floor hero gear stats ---
-# Parsed from: "now on level N, monsters M (initial M), hero stats: slots=S str=A ..."
-# These are gear bonuses at ENTRY to floor N (before finding items on that floor).
+# Parsed from: "now on level N, monsters M (initial M), hero stats: slots=S str=BASE(+BONUS) ..."
+# str/dex/mag/vit capture the gear bonus (delta). New format: BASE(+BONUS); old format: BONUS.
+# Regex handles both: (?:\d+\()? skips the base in new format, captures bonus in both.
 
 STAT_RE = re.compile(
     r'now on level (\d+), monsters \d+ \(initial \d+\), hero stats: '
-    r'slots=(\d+) str=(-?\d+) dex=(-?\d+) mag=(-?\d+) vit=(-?\d+) '
+    r'slots=(\d+) str=(?:\d+\()?([+-]?\d+)\)? dex=(?:\d+\()?([+-]?\d+)\)? '
+    r'mag=(?:\d+\()?([+-]?\d+)\)? vit=(?:\d+\()?([+-]?\d+)\)? '
     r'ac=(-?\d+) bac=(-?\d+) dmin=(-?\d+) dmax=(-?\d+) '
     r'bdam=(-?\d+) hit=(-?\d+) '
     r'fr=(-?\d+) lr=(-?\d+) mr=(-?\d+) '
