@@ -1191,6 +1191,10 @@ class AgentAI:
         Levels 2-11:  fill Dex to cap (60) - improves to-hit.
         Levels 12-30: 3 Str + 2 Vit per level - armor reqs + HP.
         Levels 31+:   fill Str to cap (250), remainder to Vit."""
+        ca      = d.player_class_attrs
+        max_str = int(ca.maxStr)
+        max_dex = int(ca.maxDex)
+        max_vit = int(ca.maxVit)
         lvl     = int(d.player._pLevel)
         dex     = int(d.player._pBaseDex)
         str_val = int(d.player._pBaseStr)
@@ -1201,22 +1205,22 @@ class AgentAI:
 
         if lvl <= 11:
             # Fill Dex first; any overflow falls through to Str/Vit below
-            dex_pts   = min(remaining, max(0, 60 - dex))
+            dex_pts   = min(remaining, max(0, max_dex - dex))
             remaining -= dex_pts
 
         if lvl <= 30 and remaining > 0:
             # 3 Str : 2 Vit ratio per 5 points
-            s         = min(3, remaining, max(0, 250 - str_val))
-            v         = min(remaining - s, max(0, 100 - vit_val))
+            s         = min(3, remaining, max(0, max_str - str_val))
+            v         = min(remaining - s, max(0, max_vit - vit_val))
             str_pts  += s
             vit_pts  += v
             remaining -= s + v
         elif remaining > 0:
             # Level 31+: fill Str to cap, remainder to Vit
-            s         = min(remaining, max(0, 250 - str_val))
+            s         = min(remaining, max(0, max_str - str_val))
             str_pts  += s
             remaining -= s
-            vit_pts  += min(remaining, max(0, 100 - vit_val))
+            vit_pts  += min(remaining, max(0, max_vit - vit_val))
 
         return str_pts, dex_pts, vit_pts
 
@@ -1225,21 +1229,24 @@ class AgentAI:
         """Warrior stat allocation - strength and vitality split.
         3 Str + 2 Vit every level until Vit caps at 100, then all Str.
         Skips Dex entirely - trades to-hit for early HP and faster gear access."""
+        ca      = d.player_class_attrs
+        max_str = int(ca.maxStr)
+        max_vit = int(ca.maxVit)
         str_val = int(d.player._pBaseStr)
         vit_val = int(d.player._pBaseVit)
 
         str_pts = vit_pts = 0
         remaining = pts
 
-        vit_room = max(0, 100 - vit_val)
+        vit_room = max(0, max_vit - vit_val)
         if vit_room > 0:
             v        = min(remaining, vit_room, 2)
-            s        = min(remaining - v, max(0, 250 - str_val), 3)
+            s        = min(remaining - v, max(0, max_str - str_val), 3)
             vit_pts  = v
             str_pts  = s
             remaining -= v + s
 
-        str_pts += min(remaining, max(0, 250 - str_val - str_pts))
+        str_pts += min(remaining, max(0, max_str - str_val - str_pts))
 
         return str_pts, 0, vit_pts
 
@@ -1248,8 +1255,9 @@ class AgentAI:
         """Warrior stat allocation - pure strength dump.
         All points go to Str every level. Matches kWarrior engine injection slope
         at scale=0.7 for dungeon levels 1-8."""
+        max_str = int(d.player_class_attrs.maxStr)
         str_val = int(d.player._pBaseStr)
-        return min(pts, max(0, 250 - str_val)), 0, 0
+        return min(pts, max(0, max_str - str_val)), 0, 0
 
     _STAT_ALLOC_RE = re.compile(r'(\d+)([smdv])')
 
