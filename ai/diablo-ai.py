@@ -533,6 +533,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--exploration-door-backtrack-penalty", action="store_true",
         help="Penalty for moving away from unexplored doors.")
+    train_ai_parser.add_argument(
+        "--goal-far-bias", action="store_true",
+        help="Bias random goal placement toward far rooms, avoiding trivial near-goal episodes.")
 
     # General RL parameters
     train_ai_parser.add_argument(
@@ -2186,6 +2189,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         eval_gameconfig['hero-mana-max-pct'] = args.eval_hero_mana_at_start[1]
         eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
         eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
+        eval_gameconfig['goal-far-bias']    = False
         eval_offset = world_size * args.env_runners
         for i in range(args.eval_env_runners):
             env_config = copy.deepcopy(eval_gameconfig)
@@ -2998,6 +3002,8 @@ def main():
             if hasattr(args, "exploration_door_attraction") else False,
         "exploration-door-backtrack-penalty": args.exploration_door_backtrack_penalty \
             if hasattr(args, "exploration_door_backtrack_penalty") else False,
+        "goal-far-bias": args.goal_far_bias \
+            if hasattr(args, "goal_far_bias") else False,
     }
 
     if args.attach:

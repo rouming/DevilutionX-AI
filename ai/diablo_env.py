@@ -957,7 +957,8 @@ class DiabloEnv_FindRandomGoal_v0(DiabloEnv):
     def generate_goal_pos(self, d, env_whole):
         start_pos = diablo_state.player_position(d)
         goal_pos, _ = diablo_state.pick_random_clean_goal(
-            env_whole, start_pos, self.np_random)
+            env_whole, start_pos, self.np_random,
+            far_bias=self.config.get('goal-far-bias', False))
         return goal_pos
 
     def evaluate_step(self, d, env, action):
@@ -1039,7 +1040,8 @@ class DiabloEnv_ClearTheLevel_v0(DiabloEnv):
     def generate_goal_pos(self, d, env_whole):
         start_pos = diablo_state.player_position(d)
         goal_pos, _ = diablo_state.pick_random_clean_goal(
-            env_whole, start_pos, self.np_random)
+            env_whole, start_pos, self.np_random,
+            far_bias=self.config.get('goal-far-bias', False))
         return goal_pos
 
     def evaluate_step(self, d, env, action):
@@ -1142,7 +1144,8 @@ class DiabloEnvHRL_ClearTheLevel_v0(DiabloEnv):
     def generate_goal_pos(self, d, env_whole):
         start_pos = diablo_state.player_position(d)
         goal_pos, _ = diablo_state.pick_random_clean_goal(
-            env_whole, start_pos, self.np_random)
+            env_whole, start_pos, self.np_random,
+            far_bias=self.config.get('goal-far-bias', False))
         return goal_pos
 
     def evaluate_step(self, d, env, action):

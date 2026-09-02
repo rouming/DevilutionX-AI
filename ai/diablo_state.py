@@ -1396,12 +1396,16 @@ def get_surroundings(d, radius, goal_pos):
     env = get_environment(d, radius, goal_pos=goal_pos)
     return get_surroundings_by_env(d, env)
 
-def pick_random_clean_goal(env, start, rng):
+def pick_random_clean_goal(env, start, rng, far_bias=False):
     """Pick a goal tile that doesn't match any known dungeon-layout issue
     (see goal_known_issue). Iterates over the picker's strict-empty regions
     in random order WITHOUT REPLACEMENT - once a region is proved sealed
     (or otherwise known-bad) it is dropped from the candidate pool and
     never re-tried within this call.
+
+    far_bias: if True, weight region selection by L1 distance from start so
+    far rooms are preferred over close ones. Avoids trivial episodes where
+    the goal spawns a few steps away.
 
     Returns (goal_pos, retried_issues) on success.
     Raises AssertionError if every strict-empty region in the dungeon
@@ -1423,8 +1427,24 @@ def pick_random_clean_goal(env, start, rng):
     remaining = list(range(1, num_regions + 1))
     retried_issues = []
 
+    # Precompute per-region L1 distance from start via centroid (used when far_bias=True).
+    if far_bias:
+        region_dist = {}
+        for r in remaining:
+            xs_r, ys_r = np.where(labeled_regions == r)
+            region_dist[r] = abs(np.mean(xs_r) - start[0]) + abs(np.mean(ys_r) - start[1])
+
     while remaining:
-        i = rng.integers(len(remaining))
+        if far_bias:
+            weights = np.array([region_dist[r] for r in remaining], dtype=float)
+            total = weights.sum()
+            if total > 0:
+                weights /= total
+            else:
+                weights = None
+            i = rng.choice(len(remaining), p=weights)
+        else:
+            i = rng.integers(len(remaining))
         r = remaining.pop(i)
         xs, ys = np.where(labeled_regions == r)
         j = rng.integers(len(xs))
