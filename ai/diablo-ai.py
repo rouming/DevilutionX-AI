@@ -1717,7 +1717,7 @@ def _item_name(item):
     # Item::clear() only resets _itype to None; _iName and other fields stay stale.
     if int(item._itype) == dx.ItemType.None_.value:
         return ''
-    return ''.join(chr(c) for c in item._iName if c)
+    return bytes(item._iName).split(b'\x00')[0].decode('ascii', errors='replace')
 
 def _item_glyph(item):
     """Return a 2-character glyph for the item, or '..' if empty.
