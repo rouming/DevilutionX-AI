@@ -344,7 +344,8 @@ def make_diablo_parser():
         help="Disable hero spells at episode start (spell slots stay empty, mana set to 0)")
     common_parser.add_argument(
         "--char-tables", action="store_true", default=True, dest="char_tables",
-        help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini (default: on)")
+        help="Use char tables from [devilutionx-gameplay] in diablo-ai.ini (default: on)"
+    ).default_changes_behavior = True
     common_parser.add_argument(
         "--no-char-tables", action="store_false", dest="char_tables",
         help="Disable char tables; required when using --stats-scale or --eval-stats-scale")
@@ -879,7 +880,7 @@ def make_diablo_parser():
         "--dungeon-level", default=None, dest="level_filter",
         help="Show per-level stats only for these levels: '1', '1,10', '1-10,16'")
 
-    return incompatible_options, parser
+    return incompatible_options, parser, train_ai_parser
 
 def delayed_import(binary_path):
     import devilutionx_generator
@@ -2911,7 +2912,7 @@ def main():
     # Set big enough limits
     set_rlimits()
 
-    incompatible_options, parser = make_diablo_parser()
+    incompatible_options, parser, train_ai_parser = make_diablo_parser()
     args = parser.parse_args(namespace=DiabloParserNamespace())
 
     # Check if some options are incompatible
@@ -2958,7 +2959,8 @@ def main():
         return sprout.main(argv=sprout_args, default_parser=parser,
                            params_diff=_sprout_params_diff,
                            skip_params=SPROUT_SKIP_PARAMS,
-                           params_overrides_fn=lambda p: show_head if p == 'model' else None)
+                           params_overrides_fn=lambda p: show_head if p == 'model' else None,
+                           params_parser=train_ai_parser)
     if args.command == 'list':
         list_devilution_processes(str(diablo_bin_path),
                                   diablo_mshared_filename)
