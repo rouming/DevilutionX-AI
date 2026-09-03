@@ -278,6 +278,15 @@ class DiabloEnv(gym.Env):
         self.no_actions = self.config['no-actions'] \
             if 'no-actions' in self.config else 0
 
+        # Alternative success conditions when no goal is placed on the level.
+        # kill_threshold > 0: succeed when killed/total >= threshold.
+        # max_steps_per_level > 0: succeed when steps reach the limit (not failure).
+        # no_stuck_timeout: disable stuck-timeout when no goal placement is active.
+        self._kill_threshold    = self.config.get('eval-kill-threshold', 0.0)
+        self._max_steps_per_level = self.config.get('eval-max-steps-per-level', 0)
+        self._no_stuck_timeout  = self.config.get('eval-no-stuck-timeout', False)
+        self.initial_monsters_cnt = 0
+
         if self.log_to_stdout:
             self.log = sys.stdout
         else:
@@ -547,8 +556,14 @@ class DiabloEnv(gym.Env):
 
         d = self.game.safe_state
 
-        # First init all goal related members
-        self.init_goal(d)
+        if self._no_goal_placement():
+            self.used_goal    = None
+            self.goal_pos     = (-1, -1)
+            self.regions_doors  = {}
+            self.labeled_regions = None
+            self.regions_path   = []
+        else:
+            self.init_goal(d)
 
         # Keep compatibility with old environments
         goal_pos = None
@@ -575,7 +590,8 @@ class DiabloEnv(gym.Env):
         self.prev_closed_doors_ids = closed_doors_ids
         self.opened_doors_ids = []
         self.prev_items_cnt = items_cnt
-        self.prev_monsters_cnt = monsters_cnt
+        self.prev_monsters_cnt    = monsters_cnt
+        self.initial_monsters_cnt = monsters_cnt
         self.prev_mon_total_hp = mon_total_hp
         self.prev_explored_cnt = explored_cnt
         self.prev_hp = hp
@@ -597,13 +613,20 @@ class DiabloEnv(gym.Env):
     EPISODE_TIMEOUT = 3000
     STUCK_TIMEOUT   = 300
 
+    def _no_goal_placement(self):
+        return self._kill_threshold > 0 or self._max_steps_per_level > 0
+
     def is_agent_timedout(self):
-        # Should cover most of the cases
+        if self._no_goal_placement():
+            # max_steps_per_level is a success condition, not a timeout.
+            return False
         return self.steps_cnt >= self.EPISODE_TIMEOUT
 
     def is_agent_stuck(self, d, was_exploring):
         if self.is_agent_timedout():
             return True
+        if self._no_stuck_timeout:
+            return False
 
         p = diablo_state.player_position(d)
 
@@ -1388,6 +1411,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         Counter resets on combat/item progress (made_progress)."""
         if self.is_agent_timedout():
             return True
+        if self._no_stuck_timeout:
+            return False
         if made_progress:
             self.last_steps_cnt = self.steps_cnt
             self.last_player_pos = diablo_state.player_position(d)
@@ -1450,7 +1475,20 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             done = True
             self.episode_success = True
             print("Goal, R %.2f" % reward, file=self.log)
-
+        elif self._no_goal_placement():
+            killed = self.initial_monsters_cnt - monsters_cnt
+            kill_success = (self._kill_threshold > 0 and
+                            self.initial_monsters_cnt > 0 and
+                            killed >= self._kill_threshold * self.initial_monsters_cnt)
+            step_success = (self._max_steps_per_level > 0 and
+                            self.steps_cnt >= self._max_steps_per_level)
+            if kill_success or step_success:
+                reward = R[RewardEvent.Goal]
+                done = True
+                self.episode_success = True
+                reason = "kill-threshold" if kill_success else "max-steps"
+                print("# %s" % reason, file=self.log)
+                print("Goal, R %.2f" % reward, file=self.log)
 
         if done:
             # Leave early

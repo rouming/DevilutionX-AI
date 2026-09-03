@@ -669,6 +669,15 @@ def make_diablo_parser():
         "--eval-hero-potions-at-start", type=parse_int_range, default=IntRangeSpec((2, 20)),
         metavar="MIN-MAX",
         help="Potion count for eval environments (default: 2-20)")
+    train_ai_parser.add_argument(
+        "--eval-kill-threshold", type=float, default=0.0, metavar="RATIO",
+        help="Eval success when killed/total >= RATIO (0..1]; 0 disables (default: 0)")
+    train_ai_parser.add_argument(
+        "--eval-max-steps-per-level", type=int, default=0, metavar="STEPS",
+        help="Eval success when agent survives this many steps (0 disables, default: 0)")
+    train_ai_parser.add_argument(
+        "--eval-no-stuck-timeout", action="store_true",
+        help="Disable stuck-timeout during eval episodes")
 
     #
     # demos-il
@@ -2189,7 +2198,10 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         eval_gameconfig['hero-mana-max-pct'] = args.eval_hero_mana_at_start[1]
         eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
         eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
-        eval_gameconfig['goal-far-bias']    = False
+        eval_gameconfig['goal-far-bias']          = False
+        eval_gameconfig['eval-kill-threshold']    = args.eval_kill_threshold
+        eval_gameconfig['eval-max-steps-per-level'] = args.eval_max_steps_per_level
+        eval_gameconfig['eval-no-stuck-timeout']  = args.eval_no_stuck_timeout
         eval_offset = world_size * args.env_runners
         for i in range(args.eval_env_runners):
             env_config = copy.deepcopy(eval_gameconfig)
