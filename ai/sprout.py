@@ -213,11 +213,16 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
     arg_defs = {}
 
     for action in parser._actions:
+        existing = arg_defs.get(action.dest)
         arg_defs[action.dest] = {
             "default": action.default,
             "required": action.required,
             "option_strings": action.option_strings,
             "action": action,
+            # store_false/store_true pairs share a dest; the second action inherits
+            # the first action's default but loses its dcb marker - preserve it.
+            "default_changes_behavior": getattr(action, 'default_changes_behavior', None)
+                                        or (existing and existing.get("default_changes_behavior")),
         }
     return arg_defs
 
@@ -1659,7 +1664,7 @@ def _run_label(rid, headnames, colored=False):
 
 
 def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_children=True,
-                      params_diff=None):
+                      params_diff=None, defaults=None):
     """Return list of lines for this node (first line = node, rest = param diffs)."""
     r = runs[rid]
     parent_r = runs.get(r["parent"]) if r.get("parent") else None
@@ -1695,6 +1700,8 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
                         diffs.extend(_trunc(l) for l in lines)
                         continue
                 if not in_parent:
+                    if defaults is not None and str(v) == str(defaults.get(k)):
+                        continue
                     diffs.append(_trunc(f"⇾ {k}: {v}"))
                 else:
                     diffs.append(_trunc(f"⇾ {k}: {old_v} -> {v}"))
@@ -1724,7 +1731,15 @@ def _graph_node_lines(rid, runs, run_to_heads, slots, node_col, args, has_childr
         lines.append(f"{cont}   {extra}")
     return lines
 
-def cli_tree(args, sprout: Sprout, params_diff=None) -> int:
+def _build_defaults(params_parser):
+    if params_parser is None:
+        return None
+    return {k: str(v['default'])
+            for k, v in extract_arg_defs(params_parser).items()
+            if v['default'] is not None and not v['default_changes_behavior']}
+
+def cli_tree(args, sprout: Sprout, params_diff=None, params_parser=None) -> int:
+    defaults = _build_defaults(params_parser)
     try:
         runs, heads, tree = sprout.get_tree(group=args.group)
 
@@ -1776,7 +1791,8 @@ def cli_tree(args, sprout: Sprout, params_diff=None) -> int:
 
                 for line in _graph_node_lines(rid, runs, run_to_heads, slots, col, args,
                                               has_children=bool(children),
-                                              params_diff=params_diff):
+                                              params_diff=params_diff,
+                                              defaults=defaults):
                     print(line)
 
                 if not children:
@@ -1809,7 +1825,8 @@ def cli_tree(args, sprout: Sprout, params_diff=None) -> int:
 
 def cli_log(args,
             sprout: Sprout,
-            default_parser: Optional[argparse.ArgumentParser] = None) -> int:
+            default_parser: Optional[argparse.ArgumentParser] = None,
+            params_parser=None) -> int:
 
     # renamed history: show ancestry diffs for run or head
     try:
@@ -1818,13 +1835,15 @@ def cli_log(args,
         chain = sprout.history_chain(run_id)
         meta = sprout._load_meta()
         heads = meta.get("heads", {})
+        defaults = _build_defaults(params_parser)
         params: Dict[str, str] = {}
         for i, (rid, r) in enumerate(chain):
             run_params = r["params"]
             diffs = {}
             for k, v in run_params.items():
                 if k not in params:
-                    diffs[k] = repr(v)
+                    if defaults is None or str(v) != str(defaults.get(k)):
+                        diffs[k] = repr(v)
                 else:
                     old = params[k]
                     if str(old) != str(v):
@@ -1884,7 +1903,8 @@ def cli_show(args,
              sprout: Sprout,
              default_parser: Optional[argparse.ArgumentParser] = None,
              skip_params=None,
-             params_overrides_fn=None) -> int:
+             params_overrides_fn=None,
+             params_parser=None) -> int:
     try:
         meta = sprout._load_meta()
         _, run_id = sprout.get_run(run=args.run or None, head=args.head or None, meta=meta)
@@ -1913,10 +1933,12 @@ def cli_show(args,
         print(color(title, bold=True))
 
         prev_params = chain[-2][1]["params"] if len(chain) > 1 else {}
+        defaults = _build_defaults(params_parser)
         diffs = {}
         for k, v in run_params.items():
             if k not in prev_params:
-                diffs[k] = repr(v)
+                if defaults is None or str(v) != str(defaults.get(k)):
+                    diffs[k] = repr(v)
             else:
                 old = prev_params[k]
                 if str(old) != str(v):
@@ -2134,7 +2156,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
 # -------------------------
 
 def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
-         params_diff=None, skip_params=None, params_overrides_fn=None) -> int:
+         params_diff=None, skip_params=None, params_overrides_fn=None,
+         params_parser=None) -> int:
     parser = build_parser("sprout")
     args = parser.parse_args(argv)
 
@@ -2171,13 +2194,15 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
         elif args.cmd == "rename":
             ret = cli_rename(args, sprout)
         elif args.cmd == "tree":
-            ret = cli_tree(args, sprout, params_diff=params_diff)
+            ret = cli_tree(args, sprout, params_diff=params_diff, params_parser=params_parser)
         elif args.cmd == "log":
-            ret = cli_log(args, sprout, default_parser=default_parser)
+            ret = cli_log(args, sprout, default_parser=default_parser,
+                          params_parser=params_parser)
         elif args.cmd == "show":
             ret = cli_show(args, sprout, default_parser=default_parser,
                            skip_params=skip_params,
-                           params_overrides_fn=params_overrides_fn)
+                           params_overrides_fn=params_overrides_fn,
+                           params_parser=params_parser)
         elif args.cmd == "fetch":
             ret = cli_fetch(args, sprout)
         elif args.cmd == "exec":
