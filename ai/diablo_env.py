@@ -1362,6 +1362,12 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     CROWD_ALPHA              = 0.0
     ATTACK_CROWD_GAMMA       = 0.0
     KILL_CROWD_GAMMA         = 0.0
+    # Dynamic movement penalty: scales base penalty by visible monster count.
+    # 0/0 = disabled (flat penalty). When enabled, penalty ramps linearly from
+    # base at MONST_PENALTY_THRESHOLD to base*MONST_PENALTY_SCALE at MONST_PENALTY_CAP.
+    MONST_PENALTY_THRESHOLD    = 0
+    MONST_PENALTY_CAP          = 0
+    MONST_PENALTY_SCALE        = 1.0
 
     REWARDS = {
         RewardEvent.Death:               -10.0,
@@ -1733,6 +1739,15 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         elif idling:
             if action <= ActionEnum.Stand.value:
                 r = R[RewardEvent.MovementPenalty]
+                if self.MONST_PENALTY_CAP > 0:
+                    m_vis = diablo_state.count_visible_monsters(env)
+                    excess = min(max(0, m_vis - self.MONST_PENALTY_THRESHOLD),
+                                 self.MONST_PENALTY_CAP - self.MONST_PENALTY_THRESHOLD)
+                    scale = 1.0 + (self.MONST_PENALTY_SCALE - 1.0) * excess / (
+                        self.MONST_PENALTY_CAP - self.MONST_PENALTY_THRESHOLD)
+                    r *= scale
+                    if m_vis > self.MONST_PENALTY_THRESHOLD:
+                        print("# monsters %d scale %.2f" % (m_vis, scale), file=self.log)
                 reward += r
                 print("Movement penalty, R %.2f" % r, file=self.log)
             elif self.view_radius is not None:
@@ -2033,6 +2048,28 @@ class DiabloEnv_ClearAllLevels_v19(DiabloEnv_ClearAllLevels_v17):
     STUCK_TIMEOUT = 600
 
 
+class DiabloEnv_ClearAllLevels_v20(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but replaces the flat movement penalty with one that grows
+    with the number of monsters currently visible to the agent.
+
+    The intent is to teach the agent to prefer fighting one monster at a
+    time rather than rushing into crowds.  When few or no monsters are in
+    view the penalty stays at the v17 base, so exploring and 1-on-1 combat
+    are not affected.  As more monsters become visible each idle step costs
+    more, making it expensive to stand or shuffle inside a crowded room.
+    The penalty caps at ten visible monsters so the agent is discouraged
+    from crowd fighting but never penalised so heavily that it refuses to
+    engage at all.
+
+    Fighting 1-3 monsters: same cost as v17, no change in behavior.
+    Fighting 4-9 monsters: penalty rises - agent is nudged to lure first.
+    10+ monsters in view:  penalty fixed at ten times the base (cap)."""
+    ENV_VERSION              = 20
+    MONST_PENALTY_THRESHOLD  = 3
+    MONST_PENALTY_CAP        = 10
+    MONST_PENALTY_SCALE      = 10.0
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2086,6 +2123,8 @@ DIABLO_ENVS = [
     #   'entry_point': DiabloEnv_ClearAllLevels_v18 },
     { 'id': 'Diablo-ClearAllLevels-v19',
       'entry_point': DiabloEnv_ClearAllLevels_v19 },
+    { 'id': 'Diablo-ClearAllLevels-v20',
+      'entry_point': DiabloEnv_ClearAllLevels_v20 },
 
     # HRL Environment Classes
 
