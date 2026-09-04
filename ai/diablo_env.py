@@ -135,6 +135,9 @@ def get_automap_obs(d):
 
 
 class DiabloEnv(gym.Env):
+    EPISODE_TIMEOUT = 3000
+    STUCK_TIMEOUT   = 300
+
     MASK_EVERYTHING = (ActionMask.MASK_TRIGGERS.value |
                        ActionMask.MASK_CLOSED_DOORS.value |
                        ActionMask.MASK_WALLS.value |
@@ -609,9 +612,6 @@ class DiabloEnv(gym.Env):
         obss = self._build_obs(d, env)
         info = {"env-counters": (self.resets_cnt, self.steps_cnt)}
         return obss, info
-
-    EPISODE_TIMEOUT = 3000
-    STUCK_TIMEOUT   = 300
 
     def _no_goal_placement(self):
         return self._kill_threshold > 0 or self._max_steps_per_level > 0
@@ -2021,6 +2021,18 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
 #         return True
 
 
+class DiabloEnv_ClearAllLevels_v19(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but doubles the stuck timeout from 300 to 600 steps.
+
+    The agent has no perception of elapsed time, so the stuck penalty fires
+    as an unattributable random negative.  A longer window gives the agent
+    more room to stumble into an engagement before the episode terminates,
+    letting the kill reward dominate over the stuck penalty and breaking the
+    success plateau that appears once deaths start to drop."""
+    ENV_VERSION   = 19
+    STUCK_TIMEOUT = 600
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2072,6 +2084,8 @@ DIABLO_ENVS = [
     # v18 disabled - see comment above DiabloEnv_ClearAllLevels_v18
     # { 'id': 'Diablo-ClearAllLevels-v18',
     #   'entry_point': DiabloEnv_ClearAllLevels_v18 },
+    { 'id': 'Diablo-ClearAllLevels-v19',
+      'entry_point': DiabloEnv_ClearAllLevels_v19 },
 
     # HRL Environment Classes
 
