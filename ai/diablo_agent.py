@@ -181,10 +181,14 @@ def _item_score(item, hero_class):
                 ac += _pl_stats_warrior(item)
         score = ac
         return score, f"AC={score:.1f}"
-    # Jewelry: stat bonus priority depends on class.
+    # Jewelry (and weapons/shields that fall through): stat bonus priority depends on class.
+    # For unidentified items the internal bonus fields (_iPLStr etc.) already hold the true
+    # values - using them for identify-priority is correct (ALGO peeks at item data, not the
+    # ML model). For identified jewelry the full weighted formula including extras is used.
     if hero_class == dx.HeroClass.Warrior.value:
         if not identified:
-            return 0, "unidentified"
+            score = int(item._iPLStr) + int(item._iPLVit)
+            return score, f"str+vit={score}"
         fr    = int(item._iPLFR)
         lr    = int(item._iPLLR)
         mr    = int(item._iPLMR)
