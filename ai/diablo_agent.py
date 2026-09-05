@@ -159,9 +159,9 @@ def _can_equip(item, player):
 
 
 def _pl_stats_warrior(item):
-    """Stat bonus contribution for warrior: 1.5*STR + 0.5*VIT (matches 3s2v level-up allocation).
+    """Stat bonus contribution for warrior: STR + VIT.
     Only meaningful when item is identified; caller is responsible for that check."""
-    return 1.5 * int(item._iPLStr) + 0.5 * int(item._iPLVit)
+    return int(item._iPLStr) + int(item._iPLVit)
 
 
 def _item_score(item, hero_class):
