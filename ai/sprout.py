@@ -213,12 +213,16 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
     arg_defs = {}
 
     for action in parser._actions:
+        existing = arg_defs.get(action.dest)
         arg_defs[action.dest] = {
             "default": action.default,
             "required": action.required,
             "option_strings": action.option_strings,
             "action": action,
-            "default_changes_behavior": getattr(action, 'default_changes_behavior', None),
+            # store_false/store_true pairs share a dest; the second action inherits
+            # the first action's default but loses its dcb marker - preserve it.
+            "default_changes_behavior": getattr(action, 'default_changes_behavior', None)
+                                        or (existing and existing.get("default_changes_behavior")),
         }
     return arg_defs
 
