@@ -108,6 +108,7 @@ Run the game loop in step mode={step_mode}
 Automap active on start={automap_active}
 Disable explosive barrels, urns, or pods={harmless_barrels}
 Disable auto-walk when pressing the secondary action={no_auto_walk_on_seconday_action}
+Disable doors on primary action={no_primary_action_doors}
 Enable invincible player mode={invincible_player}
 Spell potency={spell_potency}
 No spells={no_spells}

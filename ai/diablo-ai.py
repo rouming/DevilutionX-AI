@@ -331,6 +331,13 @@ def make_diablo_parser():
         "--harmless-barrels", action="store_true",
         help="Disable explosive barrels, urns, or pods")
     common_parser.add_argument(
+        "--no-primary-action-doors", action="store_true", default=True, dest="no_primary_action_doors",
+        help="Disable door open/close on primary action; doors require secondary action (default: on)"
+    ).default_changes_behavior = True
+    common_parser.add_argument(
+        "--primary-action-doors", action="store_false", dest="no_primary_action_doors",
+        help="Allow primary action to open/close doors (restores original behavior)")
+    common_parser.add_argument(
         "--no-butcher", action="store_true",
         help="Skip placing The Butcher on level 2")
     common_parser.add_argument(
@@ -3001,6 +3008,7 @@ def main():
         "hero-potions-min":   args.hero_potions_at_start[0],
         "hero-potions-max":   args.hero_potions_at_start[1],
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
+        "no-primary-action-doors": args.no_primary_action_doors,
         "view-radius": args.view_radius,
         "game-ticks-per-step": args.game_ticks_per_step,
         "step-mode": not args.real_time,
