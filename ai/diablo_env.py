@@ -592,6 +592,7 @@ class DiabloEnv(gym.Env):
         self.prev_obj_cnt = obj_cnt
         self.prev_closed_doors_ids = closed_doors_ids
         self.opened_doors_ids = []
+        self.prev_m_vis = 0
         self.prev_items_cnt = items_cnt
         self.prev_monsters_cnt    = monsters_cnt
         self.initial_monsters_cnt = monsters_cnt
@@ -1321,7 +1322,10 @@ class RewardEvent(enum.Enum):
     AttackMonster      = enum.auto()  # per distinct monster hit
     KillMonster        = enum.auto()  # per kill
     ActivateObject     = enum.auto()  # per object activated
-    OpenDoor           = enum.auto()  # per first-time door open
+    OpenDoor           = enum.auto()  # per first-time door open, no monsters visible
+    OpenDoorInCombat   = enum.auto()  # per door open, monsters visible
+    CloseDoor          = enum.auto()  # per door close, no monsters visible
+    CloseDoorInCombat  = enum.auto()  # per door close, monsters visible
     CollectItem        = enum.auto()  # per item picked up
     ExploreTiles       = enum.auto()
     RestoreHpCorrect   = enum.auto()
@@ -1381,6 +1385,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         RewardEvent.KillMonster:         +0.1,
         RewardEvent.ActivateObject:      +0.05,
         RewardEvent.OpenDoor:            +0.02,
+        RewardEvent.OpenDoorInCombat:     0.0,
+        RewardEvent.CloseDoor:            0.0,
+        RewardEvent.CloseDoorInCombat:    0.0,
         RewardEvent.CollectItem:         +0.02,
         RewardEvent.ExploreTiles:        0.0,
         RewardEvent.RestoreHpCorrect:    +0.05,
@@ -1592,15 +1599,59 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             if len(closed_doors_ids) != len(self.prev_closed_doors_ids):
                 if len(closed_doors_ids) < len(self.prev_closed_doors_ids):
                     opened = list(set(self.prev_closed_doors_ids) - set(closed_doors_ids))
-                    # Exclude doors we previously opened (re-closed -> re-opened cycle).
-                    opened = [o for o in opened if o not in self.opened_doors_ids]
-                    self.opened_doors_ids.extend(opened)
-                    if opened:
-                        r = R[RewardEvent.OpenDoor]
-                        contrib = len(opened) * r if r else 0.0
+                    if self.ENV_VERSION >= 22:
+                        m_vis = self.prev_m_vis
+                        if m_vis > 0:
+                            # combat open: fires every time, not tracked
+                            r = R[RewardEvent.OpenDoorInCombat]
+                            contrib = len(opened) * r if r else 0.0
+                            reward += contrib
+                            made_progress = True
+                            print("# visible monsters %d" % m_vis, file=self.log)
+                            print("Open door in combat, R %.2f" % contrib, file=self.log)
+                        else:
+                            # safe open: first-time only, tracked as before
+                            opened = [o for o in opened if o not in self.opened_doors_ids]
+                            self.opened_doors_ids.extend(opened)
+                            if opened:
+                                r = R[RewardEvent.OpenDoor]
+                                contrib = len(opened) * r if r else 0.0
+                                reward += contrib
+                                made_progress = True
+                                print("Open door, R %.2f" % contrib, file=self.log)
+                    else:
+                        # v0-v21: all opens tracked first-time only
+                        opened = [o for o in opened if o not in self.opened_doors_ids]
+                        self.opened_doors_ids.extend(opened)
+                        if opened:
+                            m_vis = self.prev_m_vis if self.ENV_VERSION >= 21 else 0
+                            key = RewardEvent.OpenDoorInCombat if m_vis > 0 else RewardEvent.OpenDoor
+                            r = R[key]
+                            contrib = len(opened) * r if r else 0.0
+                            reward += contrib
+                            made_progress = True
+                            if m_vis > 0:
+                                print("# visible monsters %d" % m_vis, file=self.log)
+                                print("Open door in combat, R %.2f" % contrib, file=self.log)
+                            else:
+                                print("Open door, R %.2f" % contrib, file=self.log)
+                elif self.ENV_VERSION >= 22:
+                    # doors closed: split by monsters visible
+                    closed_now = list(set(closed_doors_ids) - set(self.prev_closed_doors_ids))
+                    m_vis = self.prev_m_vis
+                    if m_vis > 0:
+                        r = R[RewardEvent.CloseDoorInCombat]
+                        contrib = len(closed_now) * r if r else 0.0
                         reward += contrib
                         made_progress = True
-                        print("Open door, R %.2f" % contrib, file=self.log)
+                        print("# visible monsters %d" % m_vis, file=self.log)
+                        print("Close door in combat, R %.2f" % contrib, file=self.log)
+                    else:
+                        r = R[RewardEvent.CloseDoor]
+                        contrib = len(closed_now) * r if r else 0.0
+                        reward += contrib
+                        made_progress = True
+                        print("Close door, R %.2f" % contrib, file=self.log)
                 self.prev_closed_doors_ids = closed_doors_ids
             if items_cnt != self.prev_items_cnt:
                 if items_cnt < self.prev_items_cnt:
@@ -1720,6 +1771,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.prev_pmode       = curr_pmode
         self.prev_hp_pots     = self._hp_pot_sum(d)
         self.prev_mana_pots   = self._mana_pot_sum(d)
+        if self.ENV_VERSION >= 21:
+            self.prev_m_vis   = diablo_state.count_visible_monsters(env)
 
         # made_progress gates the stuck counter; idling (reward was
         # not changed) gates the idle penalty. Damage alone must not
@@ -2070,6 +2123,36 @@ class DiabloEnv_ClearAllLevels_v20(DiabloEnv_ClearAllLevels_v17):
     MONST_PENALTY_SCALE      = 10.0
 
 
+class DiabloEnv_ClearAllLevels_v21(DiabloEnv_ClearAllLevels_v20):
+    """Like v20 but tracks door opens that happen while monsters are visible.
+
+    A new OpenDoorInCombat event (reward 0.0) fires instead of OpenDoor
+    when monsters are in view at the time of opening.  The split lets
+    future versions assign a negative reward to discourage the agent from
+    opening new rooms while a crowd is already in sight."""
+    ENV_VERSION = 21
+
+
+class DiabloEnv_ClearAllLevels_v22(DiabloEnv_ClearAllLevels_v21):
+    """Like v21 but adds symmetric door rewards for combat situations.
+
+    Opening a door while monsters are visible fires OpenDoorInCombat (-0.1)
+    on every occurrence; the door is not added to opened_doors_ids so each
+    re-open is penalised equally.  Closing a door while monsters are visible
+    fires CloseDoorInCombat (+0.1), rewarding the agent for sealing itself
+    off from a crowd.
+
+    Safe opens (no monsters visible) keep first-occurrence tracking and the
+    +0.02 exploration reward unchanged.  A pure open/close farm cycle nets
+    exactly zero, so there is no farming incentive."""
+    ENV_VERSION = 22
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v21.REWARDS,
+        RewardEvent.OpenDoorInCombat:  -0.1,
+        RewardEvent.CloseDoorInCombat: +0.1,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2125,6 +2208,10 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v19 },
     { 'id': 'Diablo-ClearAllLevels-v20',
       'entry_point': DiabloEnv_ClearAllLevels_v20 },
+    { 'id': 'Diablo-ClearAllLevels-v21',
+      'entry_point': DiabloEnv_ClearAllLevels_v21 },
+    { 'id': 'Diablo-ClearAllLevels-v22',
+      'entry_point': DiabloEnv_ClearAllLevels_v22 },
 
     # HRL Environment Classes
 
