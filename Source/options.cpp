@@ -947,6 +947,7 @@ GameplayOptions::GameplayOptions()
     , heroManaMaxPct("Hero mana max pct", OptionEntryFlags::Invisible, "", "", 100)
     , heroPotionsMin("Hero potions min", OptionEntryFlags::Invisible, "", "", 2)
     , heroPotionsMax("Hero potions max", OptionEntryFlags::Invisible, "", "", 20)
+    , noPrimaryActionDoors("Disable doors on primary action", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -1021,6 +1022,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&heroManaMaxPct,
 		&heroPotionsMin,
 		&heroPotionsMax,
+		&noPrimaryActionDoors,
 	};
 }
 

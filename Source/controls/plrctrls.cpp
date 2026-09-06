@@ -551,6 +551,8 @@ void Interact()
 	}
 
 	if (ObjectUnderCursor != nullptr) {
+		if (ObjectUnderCursor->_oDoorFlag && *GetOptions().Gameplay.noPrimaryActionDoors)
+			return;
 		NetSendCmdLoc(MyPlayerId, true, CMD_OPOBJXY, cursPosition);
 		LastMouseButtonAction = MouseActionType::OperateObject;
 		return;

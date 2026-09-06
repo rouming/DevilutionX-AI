@@ -708,6 +708,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> heroPotionsMin;
 	/** @brief Max number of potions at episode start (default 20) */
 	OptionEntryInt<int> heroPotionsMax;
+	/** @brief Disable door open/close on primary action; doors require secondary action */
+	OptionEntryBoolean noPrimaryActionDoors;
 };
 
 struct ControllerOptions : OptionCategoryBase {
