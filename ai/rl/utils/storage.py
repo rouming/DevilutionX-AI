@@ -1,5 +1,6 @@
 import csv
 import os
+import shutil
 import torch
 import logging
 import sys
@@ -21,12 +22,40 @@ def get_status_path(model_dir, best=False):
     return os.path.join(model_dir, "status.pt")
 
 
-def get_status(model_dir, best=False):
-    path = get_status_path(model_dir, best=best)
-    if not os.path.exists(path):
+def get_train_best_status_path(model_dir):
+    return os.path.join(model_dir, "best-train-status.pt")
+
+
+def get_status(model_dir, best=False, best_train=False):
+    if best_train:
+        path = get_train_best_status_path(model_dir)
+        label = "best-train-status.pt"
+    else:
+        path = get_status_path(model_dir, best=best)
         label = "best-status.pt" if best else "status.pt"
+    if not os.path.exists(path):
         raise FileNotFoundError(f"{label} not found at {path}")
     return torch.load(path, map_location=device, weights_only=False)
+
+
+def get_train_best_status(model_dir):
+    return get_status(model_dir, best_train=True)
+
+
+def _copy_best(src, dst):
+    shutil.copyfile(src, dst)
+    with open(dst, 'rb') as f:
+        os.fsync(f.fileno())
+
+
+def save_eval_best_status(model_dir):
+    # status.pt already contains both success_rate (eval) and train_success_rate
+    _copy_best(get_status_path(model_dir), get_status_path(model_dir, best=True))
+
+
+def save_train_best_status(model_dir):
+    # status.pt already contains both success_rate (eval) and train_success_rate
+    _copy_best(get_status_path(model_dir), get_train_best_status_path(model_dir))
 
 
 def save_status(status, model_dir):
