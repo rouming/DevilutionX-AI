@@ -28,6 +28,7 @@ import copy
 import fcntl
 import json
 import os
+import hashlib
 import random
 import shlex
 import shutil
@@ -569,13 +570,24 @@ class Sprout:
     # Main methods
     # -------------------------
 
-    def random_run_id(self) -> str:
+    def random_run_id(self, parent_id: Optional[str] = None) -> str:
         meta = self._load_meta()
         existing = set(meta.get("runs", {}).keys())
-        while True:
-            rid = random_sha8(self.rng)
-            if rid not in existing:
-                return rid
+        if parent_id is None:
+            while True:
+                rid = random_sha8(self.rng)
+                if rid not in existing:
+                    return rid
+        # Derive deterministic ID from parent only: same parent always
+        # produces the same child ID, enabling reproduction. The counter
+        # suffix handles the rare case where the same parent is branched
+        # more than once (two heads descending from it).
+        for i in range(256):
+            suffix = f":{i}" if i > 0 else ""
+            h = hashlib.sha256((parent_id + suffix).encode()).hexdigest()[:8]
+            if h not in existing:
+                return h
+        raise SproutError("could not derive a unique run ID from parent")
 
     def _snapshot_head(self, head: str, meta: dict,
                        params: Optional[Dict[str, str]] = None,
@@ -611,7 +623,7 @@ class Sprout:
         self._borg_create_from_active(head, run_id)
 
         # Create new run_id for the active head
-        new_run_id = self.random_run_id()
+        new_run_id = self.random_run_id(parent_id=run_id)
 
         new_run_entry = {
             "group": old_run.get("group"),
@@ -716,7 +728,7 @@ class Sprout:
             group = runs[src_run]['group']
 
         # allocate new run id
-        new_run_id = self.random_run_id()
+        new_run_id = self.random_run_id(parent_id=parent_for_new)
 
         if head:
             # active head: real folder lives at active/<head>
@@ -856,7 +868,7 @@ class Sprout:
         custom_dict = src.get("custom", {})
 
         # allocate new run id
-        new_run_id = self.random_run_id()
+        new_run_id = self.random_run_id(parent_id=parent_for_new)
 
         if head:
             target_dir = self._active_dir(head)
@@ -1070,11 +1082,11 @@ class Sprout:
             self._borg_create_from_active(head, run_id)
             rmtree(active_dir)
 
-            new_run_id = self.random_run_id()
+            parent_run = runs[parent_id]
+            new_run_id = self.random_run_id(parent_id=parent_id)
             self._borg_extract(parent_id)
             os.rename(parent_dir, active_dir)
 
-            parent_run = runs[parent_id]
             runs[new_run_id] = {
                 "group": parent_run["group"],
                 "parent": parent_id,
