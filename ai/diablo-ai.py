@@ -18,7 +18,6 @@ import os
 import re
 import resource
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -239,7 +238,7 @@ def parse_int_range(s):
 # Params excluded from sprout storage and post-run-defaults display.
 # These are operational flags (attach, cont) or internal bookkeeping (model,
 # demos, no_drop_best) that are not training hyperparameters.
-SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "best_drop", "load_best", "attach", "help"}
+SPROUT_SKIP_PARAMS = {"model", "demos", "cont", "no_drop_best", "best_drop", "load_best", "load_best_train", "attach", "help"}
 
 class DiabloParserNamespace(argparse.Namespace):
     @property
@@ -452,9 +451,13 @@ def make_diablo_parser():
         type=_parse_model_spec_arg,
         help="Model name, or per-level spec: 'N-M=model,N-*=model' (REQUIRED)\n"
              "Example: --model 1-4=EarlyModel,5-16=FullModel")
-    play_ai_parser.add_argument(
+    play_best_grp = play_ai_parser.add_mutually_exclusive_group()
+    play_best_grp.add_argument(
         "--best", action="store_true", default=False,
-        help="Loads best model from the folder")
+        help="Load best eval checkpoint (best-status.pt)")
+    play_best_grp.add_argument(
+        "--best-train", action="store_true", default=False,
+        help="Load best train checkpoint (best-train-status.pt)")
     play_ai_parser.add_argument(
         "--argmax", action="store_true", default=False,
         help="Select the action with highest probability (default: False)")
@@ -499,9 +502,13 @@ def make_diablo_parser():
     agent_ai_parser.add_argument(
         "--model", required=True,
         help="Name of the trained model (REQUIRED)")
-    agent_ai_parser.add_argument(
+    agent_best_grp = agent_ai_parser.add_mutually_exclusive_group()
+    agent_best_grp.add_argument(
         "--best", action="store_true", default=False,
-        help="Load best checkpoint instead of the latest")
+        help="Load best eval checkpoint (best-status.pt)")
+    agent_best_grp.add_argument(
+        "--best-train", action="store_true", default=False,
+        help="Load best train checkpoint (best-train-status.pt)")
     agent_ai_parser.add_argument(
         "--argmax", action="store_true", default=False,
         help="Select the action with highest probability instead of sampling (default: False)")
@@ -562,9 +569,13 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--continue", action="store_true", dest="cont",
         help="Continue training without taking a snapshot of the model before training begins")
-    train_ai_parser.add_argument(
+    train_load_best_grp = train_ai_parser.add_mutually_exclusive_group()
+    train_load_best_grp.add_argument(
         "--best", action="store_true", dest="load_best",
         help="Load best-status.pt (highest eval score) instead of the latest status.pt")
+    train_load_best_grp.add_argument(
+        "--best-train", action="store_true", dest="load_best_train",
+        help="Load best-train-status.pt (highest train score) instead of the latest status.pt")
     best_grp = train_ai_parser.add_mutually_exclusive_group()
     best_grp.add_argument(
         "--no-drop-best", "--no-best-drop", action="store_true", dest="no_drop_best",
@@ -1143,8 +1154,8 @@ def model_drop_optimizer(args):
 
 def model_drop_best(args):
     """Drop the 'best' marker for a model:
-      - delete <model_dir>/best-status.pt (success-rate snapshot of weights),
-      - clear the 'best' key from the sprout run's custom metadata.
+      - delete <model_dir>/best-status.pt and best-train-status.pt,
+      - clear the 'best' key from eval and train sprout custom metadata.
 
     After this the next evaluation that improves on a freshly-tracked
     baseline becomes the new best - nothing carries over from the
@@ -1156,15 +1167,16 @@ def model_drop_best(args):
         print(f"Error: model directory not found: {model_dir}")
         return 1
 
-    # 1. best-status.pt on disk
-    best_status_path = utils.get_status_path(model_dir, best=True)
-    if os.path.exists(best_status_path):
-        os.remove(best_status_path)
-        print(f"Removed {best_status_path}")
-    else:
-        print(f"No best-status.pt at {best_status_path} (nothing to remove)")
+    # 1. best-status.pt and best-train-status.pt on disk
+    for path in (utils.get_status_path(model_dir, best=True),
+                 utils.get_train_best_status_path(model_dir)):
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"Removed {path}")
+        else:
+            print(f"No {os.path.basename(path)} at {path} (nothing to remove)")
 
-    # 2. sprout run's custom['best']
+    # 2. sprout run's custom eval/best and train/best
     spr = sprout.Sprout(utils.get_models_dir())
     try:
         run, _ = spr.get_run(head=args.model)
@@ -1173,15 +1185,21 @@ def model_drop_best(args):
         return 0
 
     custom = dict(run.get("custom", {}) or {})
-    eval_custom = custom.get("eval", {})
-    if "best" in eval_custom:
-        eval_custom.pop("best")
-        custom["eval"] = eval_custom
+    cleared = []
+    for section in ("eval", "train"):
+        sec_custom = custom.get(section, {})
+        if "best" in sec_custom:
+            sec_custom.pop("best")
+            custom[section] = sec_custom
+            cleared.append(section)
+    if cleared:
         # custom_update=False replaces the whole custom dict with the popped version.
         spr.edit(head=args.model, custom_dict=custom, custom_update=False)
-        print(f"Cleared 'eval/best' from sprout custom metadata for head '{args.model}'")
-    else:
-        print(f"No 'eval/best' in sprout custom metadata for head '{args.model}' (nothing to clear)")
+    for section in ("eval", "train"):
+        if section in cleared:
+            print(f"Cleared '{section}/best' from sprout custom metadata for head '{args.model}'")
+        else:
+            print(f"No '{section}/best' in sprout custom metadata for head '{args.model}' (nothing to clear)")
 
     return 0
 
@@ -2094,10 +2112,11 @@ def train_ai(args, gameconfig):
     # do not spawn runners or create a sprout snapshot needlessly.
     model_dir = utils.get_run_dir(args.model)
     load_best = getattr(args, 'load_best', False)
+    load_best_train = getattr(args, 'load_best_train', False)
     try:
-        status = utils.get_status(model_dir, best=load_best)
+        status = utils.get_status(model_dir, best=load_best, best_train=load_best_train)
     except FileNotFoundError as e:
-        if load_best:
+        if load_best or load_best_train:
             print(f"Error: {e}")
             sys.exit(1)
         status = {"num_frames": 0, "update": 0}
@@ -2230,12 +2249,18 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
 
     # Load best training status if exists
     best_success_rate = 0.0
+    best_train_success_rate = 0.0
     if is_main:
         try:
             best_status = utils.get_status(model_dir, best=True)
             best_success_rate = best_status.get("success_rate", 0.0)
             # Old statuses can contain an array
             best_success_rate = np.mean(best_success_rate)
+        except OSError:
+            pass
+        try:
+            best_train_status = utils.get_train_best_status(model_dir)
+            best_train_success_rate = best_train_status.get("train_success_rate", 0.0)
         except OSError:
             pass
         txt_logger.info("Training status loaded\n")
@@ -2326,6 +2351,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
 
     train_success_sum = 0.0
     train_success_count = 0
+    train_return_sum = None
+    train_window_start_time = time.time()
 
     while num_frames < args.frames_int:
         # Update model parameters
@@ -2353,6 +2380,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         success_rate = success_per_episode['mean']
         train_success_sum += success_rate
         train_success_count += 1
+        r = np.mean(np.array(logs["return_per_episode"]), axis=0)
+        train_return_sum = r if train_return_sum is None else train_return_sum + r
         duration = int(time.time() - start_time)
 
         # Print logs (main rank only)
@@ -2439,6 +2468,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
 
             acmodel_raw.eval()
             eval_start_time = time.time()
+            train_window_elapsed = eval_start_time - train_window_start_time
             vlogs = batch_evaluate(acmodel_raw, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
@@ -2456,10 +2486,18 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             for field, value in zip(header, data):
                 tb_writer.add_scalar(field, value, num_frames)
 
+            train_mean_sr = train_success_sum / train_success_count if train_success_count > 0 else 0.0
+            train_mean_r = train_return_sum / train_success_count if train_return_sum is not None else np.zeros(1)
+            train_success_sum = 0.0
+            train_success_count = 0
+            train_return_sum = None
+            train_window_start_time = time.time()
+
             status = {"num_frames": num_frames,
                       "update": update,
                       "duration": duration,
                       "success_rate": success_rate,
+                      "train_success_rate": train_mean_sr,
                       "effective_batch_size": args.batch_size * world_size,
                       "optimizer_state": algo.optimizer.state_dict()}
             acmodel_raw.save_to_status(status)
@@ -2470,28 +2508,35 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 R_str = f"R {returns_arr[0]:.3f}"
             else:
                 R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(returns_arr))
-            txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time)} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
+            if len(train_mean_r) == 1:
+                train_R_str = f"R {train_mean_r[0]:.3f}"
+            else:
+                train_R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(train_mean_r))
+            txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time):<6} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
+            txt_logger.info(f"Training:   D {_fmt_duration(train_window_elapsed):<6} | {train_R_str} | S {train_mean_sr:.3f} | bS {best_train_success_rate:.3f}")
             txt_logger.info("Status saved")
 
             snap = {"duration": duration,
                     "frames": num_frames,
                     "success_rate": success_rate}
-            train_mean_sr = train_success_sum / train_success_count
             eval_dict = {"last": snap}
+            train_dict = {"mean": {"success_rate": train_mean_sr}}
 
             if success_rate > best_success_rate:
                 best_success_rate = success_rate
-                src_path = utils.get_status_path(model_dir, best=False)
-                dst_path = utils.get_status_path(model_dir, best=True)
-                shutil.copyfile(src_path, dst_path)
-                with open(dst_path, 'rb') as f:
-                    os.fsync(f.fileno())
-                txt_logger.info("Success rate {: .3f}; best model is saved".format(success_rate))
+                utils.save_eval_best_status(model_dir)
+                txt_logger.info("  Eval  success rate {:.3f}; best eval status saved".format(success_rate))
                 eval_dict["best"] = snap
 
+            if train_mean_sr > best_train_success_rate:
+                best_train_success_rate = train_mean_sr
+                train_best_snap = {"duration": duration, "frames": num_frames, "success_rate": train_mean_sr}
+                utils.save_train_best_status(model_dir)
+                txt_logger.info("  Train success rate {:.3f}; best train status saved".format(train_mean_sr))
+                train_dict["best"] = train_best_snap
+
             spr.edit(head=args.model,
-                     custom_dict={"eval": eval_dict,
-                                  "train": {"mean": {"success_rate": train_mean_sr}}},
+                     custom_dict={"eval": eval_dict, "train": train_dict},
                      custom_update=True)
 
             txt_logger.info(f"Collecting env-stats (last {args.stats_episodes}/{args.eval_stats_episodes} training/eval episodes)")
@@ -2775,7 +2820,13 @@ def play_ai(args, gameconfig):
                              embedding_dim=args.embedding_dim,
                              use_memory=True, use_text=False)
 
-    acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
+    best_train = getattr(args, 'best_train', False)
+    try:
+        status = utils.get_status(model_dir, best=args.best, best_train=best_train)
+    except FileNotFoundError as e:
+        print(f"Warning: {e}; falling back to status.pt")
+        status = utils.get_status(model_dir)
+    acmodel.load_from_status(status)
     acmodel.to(device)
     acmodel.eval()
     if hasattr(preprocess_obss, "vocab"):
@@ -2845,7 +2896,13 @@ def agent_ai(args, gameconfig):
             acmodel = HRLACModel(obs_space, action_space, args.cnn_arch,
                                  embedding_dim=args.embedding_dim,
                                  use_memory=True, use_text=False)
-        acmodel.load_from_status(utils.get_status(model_dir, best=args.best))
+        best_train = getattr(args, 'best_train', False)
+        try:
+            status = utils.get_status(model_dir, best=args.best, best_train=best_train)
+        except FileNotFoundError as e:
+            print(f"Warning: {e}; falling back to status.pt")
+            status = utils.get_status(model_dir)
+        acmodel.load_from_status(status)
         acmodel.to(device)
         acmodel.eval()
         name_to_runner[model_name] = ModelRunner(acmodel, preprocess_obss, device,

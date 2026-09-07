@@ -5,12 +5,15 @@ import numpy as np
 import argparse
 
 parser = argparse.ArgumentParser(description="Inspect model")
-parser.add_argument("--best", action="store_true",
-                    help="Will inspect best-status.pt instead of status.pt")
+best_grp = parser.add_mutually_exclusive_group()
+best_grp.add_argument("--best", action="store_true",
+                      help="Inspect best-status.pt (best eval checkpoint)")
+best_grp.add_argument("--best-train", action="store_true",
+                      help="Inspect best-train-status.pt (best train checkpoint)")
 args = parser.parse_args()
 
 # 1. Load the state dictionary
-dict_path = "best-status.pt" if args.best else "status.pt"
+dict_path = "best-train-status.pt" if args.best_train else ("best-status.pt" if args.best else "status.pt")
 pretrained_dict = torch.load(dict_path, map_location='cpu', weights_only=False)['model_state']
 
 # 2. Channel layout
