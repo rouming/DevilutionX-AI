@@ -2089,16 +2089,22 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
 #         return True
 
 
-class DiabloEnv_ClearAllLevels_v19(DiabloEnv_ClearAllLevels_v17):
-    """Like v17 but doubles the stuck timeout from 300 to 600 steps.
-
-    The agent has no perception of elapsed time, so the stuck penalty fires
-    as an unattributable random negative.  A longer window gives the agent
-    more room to stumble into an engagement before the episode terminates,
-    letting the kill reward dominate over the stuck penalty and breaking the
-    success plateau that appears once deaths start to drop."""
-    ENV_VERSION   = 19
-    STUCK_TIMEOUT = 600
+# v19 idea was to convert stuck-timeout episodes into successes by giving
+# the agent more time to stumble into an engagement before the episode
+# terminates. In practice the longer window did not help - the agent
+# still failed to find monsters and the success rate started to
+# decrease rather than improve.
+#
+# class DiabloEnv_ClearAllLevels_v19(DiabloEnv_ClearAllLevels_v17):
+#     """Like v17 but doubles the stuck timeout from 300 to 600 steps.
+#
+#     The agent has no perception of elapsed time, so the stuck penalty fires
+#     as an unattributable random negative.  A longer window gives the agent
+#     more room to stumble into an engagement before the episode terminates,
+#     letting the kill reward dominate over the stuck penalty and breaking the
+#     success plateau that appears once deaths start to drop."""
+#     ENV_VERSION   = 19
+#     STUCK_TIMEOUT = 600
 
 
 class DiabloEnv_ClearAllLevels_v20(DiabloEnv_ClearAllLevels_v17):
@@ -2204,8 +2210,9 @@ DIABLO_ENVS = [
     # v18 disabled - see comment above DiabloEnv_ClearAllLevels_v18
     # { 'id': 'Diablo-ClearAllLevels-v18',
     #   'entry_point': DiabloEnv_ClearAllLevels_v18 },
-    { 'id': 'Diablo-ClearAllLevels-v19',
-      'entry_point': DiabloEnv_ClearAllLevels_v19 },
+    # v19 disabled - see comment above DiabloEnv_ClearAllLevels_v19
+    # { 'id': 'Diablo-ClearAllLevels-v19',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v19 },
     { 'id': 'Diablo-ClearAllLevels-v20',
       'entry_point': DiabloEnv_ClearAllLevels_v20 },
     { 'id': 'Diablo-ClearAllLevels-v21',
