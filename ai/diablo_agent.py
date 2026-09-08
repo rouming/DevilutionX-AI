@@ -215,7 +215,7 @@ def _item_score_for_warrior(item, player):
         hp    = int(item._iPLHP)
         p_dam = int(item._iPLDam)
         score = (_pl_stats_warrior(item)
-                 + max(fr, lr, mr) * 0.1 + hp * 0.1 + p_dam * 0.2)
+                 + max(fr, lr, mr) * 0.1 + hp * 0.005 + p_dam * 0.2)
         return score, f"score={score:.2f}"
     assert False, f"unexpected iloc {iloc} in _item_score_for_warrior"
 
