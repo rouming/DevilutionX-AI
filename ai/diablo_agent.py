@@ -164,10 +164,34 @@ def _pl_stats_warrior(item):
     return int(item._iPLStr) + int(item._iPLVit)
 
 
-def _item_score(item, hero_class):
-    """Scalar score + label for armor and jewelry (used inside class-specific functions)."""
-    iloc = int(item._iLoc)
+def _item_score_for_warrior(item, player):
+    """Scalar score + label for any equippable item (Warrior only)."""
+    iloc       = int(item._iLoc)
     identified = bool(item._iIdentified)
+
+    if iloc in _WEAPON_ILOC:
+        if int(item._itype) == dx.ItemType.Shield.value:
+            ac = int(item._iAC)
+            if identified:
+                pl_ac = int(item._iPLAC)
+                b = ac * pl_ac // 100
+                if b == 0 and pl_ac != 0:
+                    b = 1 if pl_ac > 0 else -1
+                ac += b + _pl_stats_warrior(item)
+            return ac * _AC_WEIGHT, f"score={ac * _AC_WEIGHT:.1f}"
+        # Weapon: avg_dmg + optional shield AC + stat bonus when identified.
+        # A two-hander displaces the shield so its AC contribution drops to 0.
+        hand_r    = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
+        shield_ac = (int(hand_r._iAC)
+                     if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
+        dmg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+        if identified:
+            dmg *= (1 + int(item._iPLDam) / 100)
+        keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
+        stat  = _pl_stats_warrior(item) if identified else 0
+        score = dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0) + stat
+        return score, f"score={score:.1f}"
+
     if iloc in _ARMOR_ILOC:
         ac = int(item._iAC)
         if identified:
@@ -176,15 +200,12 @@ def _item_score(item, hero_class):
             bonus = ac * pl_ac // 100
             if bonus == 0 and pl_ac != 0:
                 bonus = 1 if pl_ac > 0 else -1
-            ac += bonus
-            if hero_class == dx.HeroClass.Warrior.value:
-                ac += _pl_stats_warrior(item)
-        score = ac
-        return score, f"AC={score:.1f}"
-    assert iloc in _JEWELRY_ILOC, f"unexpected iloc {iloc} in _item_score"
-    # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
-    # score 0 so they equip into empty slots but never displace identified gear.
-    if hero_class == dx.HeroClass.Warrior.value:
+            ac += bonus + _pl_stats_warrior(item)
+        return ac, f"AC={ac:.1f}"
+
+    if iloc in _JEWELRY_ILOC:
+        # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
+        # score 0 so they equip into empty slots but never displace identified gear.
         if not identified:
             return 0, "unidentified"
         fr    = int(item._iPLFR)
@@ -195,12 +216,7 @@ def _item_score(item, hero_class):
         score = (1.5 * int(item._iPLStr) + 0.5 * int(item._iPLVit)
                  + max(fr, lr, mr) * 0.1 + hp * 0.1 + p_dam * 0.2)
         return score, f"score={score:.2f}"
-    if hero_class == dx.HeroClass.Rogue.value:
-        score = int(item._iPLDex) + int(item._iPLVit)
-        return score, f"dex+vit={score}"
-    # Sorcerer / others
-    score = int(item._iPLMag) + int(item._iPLVit)
-    return score, f"mag+vit={score}"
+    assert False, f"unexpected iloc {iloc} in _item_score_for_warrior"
 
 
 def _is_scroll_misc(imisc):
@@ -323,88 +339,23 @@ def _is_better_for_warrior(item, player, body_cii, pending):
     Returns (is_better, new_score, new_label, old_score, old_label, old_name).
     old_name is None for class-filtered items (no comparison logged).
     """
-    iloc = int(item._iLoc)
-
     # Warriors do not use bows; ranged weapons are useless for melee fighters.
     if int(item._itype) == dx.ItemType.Bow.value:
         return False, 0, "bow", 0, "", None
 
-    if iloc in _WEAPON_ILOC:
-        # Shields go to HAND_RIGHT and are scored by AC, not damage.
-        if int(item._itype) == dx.ItemType.Shield.value:
-            item_id = bool(item._iIdentified)
-            new_ac  = int(item._iAC)
-            if item_id:
-                pl_ac = int(item._iPLAC)
-                b = new_ac * pl_ac // 100
-                if b == 0 and pl_ac != 0:
-                    b = 1 if pl_ac > 0 else -1
-                new_ac += b + _pl_stats_warrior(item)
-            new_score = new_ac * _AC_WEIGHT
-            new_label = f"score={new_score:.1f}"
-            if pending is not None:
-                _, old_score, old_name = pending
-                return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
-            eq = player.InvBody[body_cii]
-            if int(eq._itype) == dx.ItemType.None_.value:
-                return new_score >= 0, new_score, new_label, 0, "empty", ""
-            eq_id  = bool(eq._iIdentified)
-            old_ac = int(eq._iAC)
-            if eq_id:
-                pl_ac = int(eq._iPLAC)
-                b = old_ac * pl_ac // 100
-                if b == 0 and pl_ac != 0:
-                    b = 1 if pl_ac > 0 else -1
-                old_ac += b + _pl_stats_warrior(eq)
-            old_score = old_ac * _AC_WEIGHT
-            is_better = new_score > old_score or (
-                new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
-            return is_better, new_score, new_label, old_score, f"score={old_score:.1f}", _item_name(eq)
+    new_score, new_label = _item_score_for_warrior(item, player)
 
-        # Weapon in HAND_LEFT: score = avg_dmg + shield_AC * AC_WEIGHT + stat_bonus.
-        # A two-hander displaces the shield, so its AC contribution drops to 0.
-        hand_r    = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
-        shield_ac = (int(hand_r._iAC)
-                     if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
-        item_id      = bool(item._iIdentified)
-        new_dmg      = (int(item._iMinDam) + int(item._iMaxDam)) / 2
-        if item_id:
-            pl_dam  = int(item._iPLDam)
-            new_dmg *= (1 + pl_dam / 100)
-        keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        new_stat     = _pl_stats_warrior(item) if item_id else 0
-        new_score    = new_dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0) + new_stat
-        new_label    = f"score={new_score:.1f}"
-
-        if pending is not None:
-            _, old_score, old_name = pending
-            return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
-
-        eq = player.InvBody[body_cii]
-        if int(eq._itype) == dx.ItemType.None_.value:
-            return new_score >= 0, new_score, new_label, 0, "empty", ""
-        eq_id     = bool(eq._iIdentified)
-        eq_iloc   = int(eq._iLoc)
-        old_dmg   = (int(eq._iMinDam) + int(eq._iMaxDam)) / 2
-        if eq_id:
-            old_pl_dam = int(eq._iPLDam)
-            old_dmg   *= (1 + old_pl_dam / 100)
-        old_keeps = (eq_iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        old_stat  = _pl_stats_warrior(eq) if eq_id else 0
-        old_score = old_dmg + (shield_ac * _AC_WEIGHT if old_keeps else 0) + old_stat
-        is_better = new_score > old_score or (
-            new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
-        return is_better, new_score, new_label, old_score, f"score={old_score:.1f}", _item_name(eq)
-
-    # Armor and jewelry: standard scoring.
-    new_score, new_label = _item_score(item, dx.HeroClass.Warrior.value)
     if pending is not None:
         _, old_score, old_name = pending
         return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
+
     eq = player.InvBody[body_cii]
     if int(eq._itype) == dx.ItemType.None_.value:
+        # >= 0: unidentified jewelry scores 0 and should fill empty slots;
+        # identified harmful items (e.g. cursed ring) score negative and must not.
         return new_score >= 0, new_score, new_label, 0, "empty", ""
-    old_score, old_label = _item_score(eq, dx.HeroClass.Warrior.value)
+
+    old_score, old_label = _item_score_for_warrior(eq, player)
     is_better = new_score > old_score or (
         new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
     return is_better, new_score, new_label, old_score, old_label, _item_name(eq)
