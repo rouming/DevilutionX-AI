@@ -160,9 +160,9 @@ def _can_equip(item, player):
 
 
 def _pl_stats_warrior(item):
-    """Stat bonus contribution for warrior: STR + VIT.
+    """Stat bonus contribution for warrior: STR + VIT + DEX.
     Only meaningful when item is identified; caller is responsible for that check."""
-    return int(item._iPLStr) + int(item._iPLVit)
+    return int(item._iPLStr) + int(item._iPLVit) + int(item._iPLDex)
 
 
 def _item_score_for_warrior(item, player):
