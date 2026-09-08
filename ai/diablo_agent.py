@@ -343,7 +343,7 @@ def _is_better_for_warrior(item, player, body_cii, pending):
                 return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
             eq = player.InvBody[body_cii]
             if int(eq._itype) == dx.ItemType.None_.value:
-                return True, new_score, new_label, 0, "empty", ""
+                return new_score >= 0, new_score, new_label, 0, "empty", ""
             eq_id  = bool(eq._iIdentified)
             old_ac = int(eq._iAC)
             if eq_id:
@@ -378,7 +378,7 @@ def _is_better_for_warrior(item, player, body_cii, pending):
 
         eq = player.InvBody[body_cii]
         if int(eq._itype) == dx.ItemType.None_.value:
-            return True, new_score, new_label, 0, "empty", ""
+            return new_score >= 0, new_score, new_label, 0, "empty", ""
         eq_id     = bool(eq._iIdentified)
         eq_iloc   = int(eq._iLoc)
         old_dmg   = (int(eq._iMinDam) + int(eq._iMaxDam)) / 2
@@ -399,7 +399,7 @@ def _is_better_for_warrior(item, player, body_cii, pending):
         return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
     eq = player.InvBody[body_cii]
     if int(eq._itype) == dx.ItemType.None_.value:
-        return True, new_score, new_label, 0, "empty", ""
+        return new_score >= 0, new_score, new_label, 0, "empty", ""
     old_score, old_label = _item_score(eq, dx.HeroClass.Warrior.value)
     is_better = new_score > old_score or (
         new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
