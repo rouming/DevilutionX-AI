@@ -434,6 +434,17 @@ def find_butcher_door(d):
     return door_pos
 
 
+def _apply_masked_tiles(masked_tiles, level, env, px, py, vr):
+    """Apply per-tile obs overrides for the current level (in-place)."""
+    tiles = masked_tiles.get(level)
+    if not tiles:
+        return
+    for (wx, wy), (clear, set_flags) in tiles.items():
+        lx, ly = wx - px + vr, wy - py + vr
+        if 0 <= lx < env.shape[0] and 0 <= ly < env.shape[1]:
+            env[lx, ly] = (int(env[lx, ly]) & ~clear) | set_flags
+
+
 # ---------------------------------------------------------------------------
 # Pathfinder
 # ---------------------------------------------------------------------------
@@ -523,6 +534,8 @@ class Pathfinder:
         env_local = diablo_state.get_environment(d, radius=self.view_radius)
         vr = self.view_radius
         px, py = player
+        # Apply same tile masks as model observation: masked items invisible to pathfinder
+        _apply_masked_tiles(self._masked_tiles, int(d.currlevel.value), env_local, px, py, vr)
 
         def local(pos):
             return (pos[0] - px + vr, pos[1] - py + vr)
@@ -695,6 +708,9 @@ class AgentAI:
         # pathfinder goal resets - set_goal() rebinds _skip_items, so we re-sync
         # from here each tick in _locate_dropped_items.
         self._masked_positions = set()
+        # Share the masked-tiles dict with the pathfinder so it sees the same view
+        # as the model and does not try to interact with masked items.
+        self._pathfinder._masked_tiles = self._masked_tiles
 
     # -----------------------------------------------------------------------
     # Public
@@ -1083,18 +1099,8 @@ class AgentAI:
                   file=self.log)
 
     def _apply_masked_tiles(self, d, env):
-        """Apply per-tile obs overrides for the current level."""
-        level = int(d.currlevel.value)
-        tiles = self._masked_tiles.get(level)
-        if not tiles:
-            return
         px, py = diablo_state.player_position(d)
-        vr = self.view_radius
-        for (wx, wy), (clear, set_flags) in tiles.items():
-            lx = wx - px + vr
-            ly = wy - py + vr
-            if 0 <= lx < env.shape[0] and 0 <= ly < env.shape[1]:
-                env[lx, ly] = (int(env[lx, ly]) & ~clear) | set_flags
+        _apply_masked_tiles(self._masked_tiles, int(d.currlevel.value), env, px, py, self.view_radius)
 
     def _build_obs(self, d):
         env = diablo_state.get_environment(d, radius=self.view_radius)
