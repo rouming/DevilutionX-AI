@@ -164,6 +164,35 @@ def _pl_stats_warrior(item):
     Only meaningful when item is identified; caller is responsible for that check."""
     return int(item._iPLStr) + int(item._iPLVit) + int(item._iPLDex)
 
+def _hp_score(item):
+    """Life bonus score. _iPLHP stored *64; coefficient gives 0.3 per actual HP."""
+    return int(item._iPLHP) * 0.005
+
+def _tohit_score(item):
+    """To-hit contribution: attack-rating bonus + enemy-AC reduction."""
+    return (int(item._iPLToHit) + int(item._iPLEnAc)) * 0.1
+
+def _gethit_score(item):
+    """Damage-taken modifier: negative GetHit = less damage per hit = good."""
+    return -int(item._iPLGetHit) * 1.5
+
+def _dam_score(item):
+    """Damage-% bonus contribution (jewelry only; weapons apply it as a multiplier)."""
+    return int(item._iPLDam) * 0.2
+
+def _res_max_score(item):
+    """Best single resistance (jewelry: rings typically carry one element)."""
+    return max(int(item._iPLFR), int(item._iPLLR), int(item._iPLMR)) * 0.1
+
+def _res_sum_score(item):
+    """Sum of all resistances (armor/helm/shield: can carry multiple elements)."""
+    return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * 0.03
+
+def _weapon_dmg(item):
+    """Effective avg damage for identified weapon: (base_avg + flat_bonus) * (1 + dam%)."""
+    avg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+    return (avg + int(item._iPLDamMod)) * (1 + int(item._iPLDam) / 100)
+
 
 def _item_score_for_warrior(item, player):
     """Scalar score + label for any equippable item (Warrior only)."""
@@ -179,43 +208,47 @@ def _item_score_for_warrior(item, player):
                 if b == 0 and pl_ac != 0:
                     b = 1 if pl_ac > 0 else -1
                 ac += b + _pl_stats_warrior(item)
-            return ac * _AC_WEIGHT, f"score={ac * _AC_WEIGHT:.1f}"
-        # Weapon: avg_dmg + optional shield AC + stat bonus when identified.
+            score = ac * _AC_WEIGHT
+            if identified:
+                score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
+            return score, f"score={score:.1f}"
+        # Weapon: avg_dmg + optional shield AC + identified bonuses.
         # A two-hander displaces the shield so its AC contribution drops to 0.
         hand_r    = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
         shield_ac = (int(hand_r._iAC)
                      if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
         dmg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
         if identified:
-            dmg *= (1 + int(item._iPLDam) / 100)
+            dmg = _weapon_dmg(item)
         keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        stat  = _pl_stats_warrior(item) if identified else 0
-        score = dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0) + stat
+        score = dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0)
+        if identified:
+            score += (_pl_stats_warrior(item)
+                      + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
         return score, f"score={score:.1f}"
 
     if iloc in _ARMOR_ILOC:
         ac = int(item._iAC)
+        score = float(ac)
         if identified:
             # GetBonusAC: _iAC * _iPLAC / 100 (clamped to sign if rounds to 0)
             pl_ac = int(item._iPLAC)
             bonus = ac * pl_ac // 100
             if bonus == 0 and pl_ac != 0:
                 bonus = 1 if pl_ac > 0 else -1
-            ac += bonus + _pl_stats_warrior(item)
-        return ac, f"AC={ac:.1f}"
+            score = (ac + bonus + _pl_stats_warrior(item)
+                     + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
+                     + _res_sum_score(item))
+        return score, f"score={score:.1f}"
 
     if iloc in _JEWELRY_ILOC:
         # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
         # score 0 so they equip into empty slots but never displace identified gear.
         if not identified:
             return 0, "unidentified"
-        fr    = int(item._iPLFR)
-        lr    = int(item._iPLLR)
-        mr    = int(item._iPLMR)
-        hp    = int(item._iPLHP)
-        p_dam = int(item._iPLDam)
         score = (_pl_stats_warrior(item)
-                 + max(fr, lr, mr) * 0.1 + hp * 0.005 + p_dam * 0.2)
+                 + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
+                 + _res_max_score(item) + _dam_score(item))
         return score, f"score={score:.2f}"
     assert False, f"unexpected iloc {iloc} in _item_score_for_warrior"
 
@@ -299,30 +332,34 @@ def _is_combat_spell_scroll(spellid):
 def _identified_label(item):
     """Return a compact string of the revealed magical properties of an item."""
     parts = []
-    pl_dam  = int(item._iPLDam)
-    pl_ac   = int(item._iPLAC)
-    pl_str  = int(item._iPLStr)
-    pl_vit  = int(item._iPLVit)
-    pl_dex  = int(item._iPLDex)
-    pl_mag  = int(item._iPLMag)
-    pl_tohit= int(item._iPLToHit)
-    pl_hp   = int(item._iPLHP)
-    pl_mana = int(item._iPLMana)
-    pl_fr   = int(item._iPLFR)
-    pl_lr   = int(item._iPLLR)
-    pl_mr   = int(item._iPLMR)
-    if pl_dam   != 0: parts.append(f"dmg%={pl_dam:+d}")
-    if pl_tohit != 0: parts.append(f"tohit={pl_tohit:+d}")
-    if pl_ac    != 0: parts.append(f"ac%={pl_ac:+d}")
-    if pl_str   != 0: parts.append(f"str={pl_str:+d}")
-    if pl_vit   != 0: parts.append(f"vit={pl_vit:+d}")
-    if pl_dex   != 0: parts.append(f"dex={pl_dex:+d}")
-    if pl_mag   != 0: parts.append(f"mag={pl_mag:+d}")
-    if pl_hp    != 0: parts.append(f"hp={pl_hp:+d}")
-    if pl_mana  != 0: parts.append(f"mana={pl_mana:+d}")
-    if pl_fr    != 0: parts.append(f"FR={pl_fr:+d}")
-    if pl_lr    != 0: parts.append(f"LR={pl_lr:+d}")
-    if pl_mr    != 0: parts.append(f"MR={pl_mr:+d}")
+    pl_dam    = int(item._iPLDam)
+    pl_dammod = int(item._iPLDamMod)
+    pl_ac     = int(item._iPLAC)
+    pl_str    = int(item._iPLStr)
+    pl_vit    = int(item._iPLVit)
+    pl_dex    = int(item._iPLDex)
+    pl_mag    = int(item._iPLMag)
+    pl_tohit  = int(item._iPLToHit)
+    pl_hp     = int(item._iPLHP)
+    pl_mana   = int(item._iPLMana)
+    pl_fr     = int(item._iPLFR)
+    pl_lr     = int(item._iPLLR)
+    pl_mr     = int(item._iPLMR)
+    pl_gethit = int(item._iPLGetHit)
+    if pl_dam    != 0: parts.append(f"dmg%={pl_dam:+d}")
+    if pl_dammod != 0: parts.append(f"dmg+={pl_dammod:+d}")
+    if pl_tohit  != 0: parts.append(f"tohit={pl_tohit:+d}")
+    if pl_ac     != 0: parts.append(f"ac%={pl_ac:+d}")
+    if pl_str    != 0: parts.append(f"str={pl_str:+d}")
+    if pl_vit    != 0: parts.append(f"vit={pl_vit:+d}")
+    if pl_dex    != 0: parts.append(f"dex={pl_dex:+d}")
+    if pl_mag    != 0: parts.append(f"mag={pl_mag:+d}")
+    if pl_hp     != 0: parts.append(f"hp={pl_hp:+d}")
+    if pl_mana   != 0: parts.append(f"mana={pl_mana:+d}")
+    if pl_fr     != 0: parts.append(f"FR={pl_fr:+d}")
+    if pl_lr     != 0: parts.append(f"LR={pl_lr:+d}")
+    if pl_mr     != 0: parts.append(f"MR={pl_mr:+d}")
+    if pl_gethit != 0: parts.append(f"gethit={pl_gethit:+d}")
     return " ".join(parts) if parts else "no bonuses"
 
 
