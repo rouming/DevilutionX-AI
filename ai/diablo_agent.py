@@ -153,9 +153,10 @@ def _item_body_slot(item):
 
 def _can_equip(item, player):
     # Diablo 1 has no level requirement on items; stat minimums are the gate.
-    return (int(item._iMinStr) <= int(player._pBaseStr) and
-            int(item._iMinMag) <= int(player._pBaseMag) and
-            int(item._iMinDex) <= int(player._pBaseDex))
+    # Use effective stats (_pStrength etc.) not base stats: gear bonuses count.
+    return (int(item._iMinStr) <= int(player._pStrength) and
+            int(item._iMinMag) <= int(player._pMagic) and
+            int(item._iMinDex) <= int(player._pDexterity))
 
 
 def _pl_stats_warrior(item):
