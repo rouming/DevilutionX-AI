@@ -181,14 +181,12 @@ def _item_score(item, hero_class):
                 ac += _pl_stats_warrior(item)
         score = ac
         return score, f"AC={score:.1f}"
-    # Jewelry (and weapons/shields that fall through): stat bonus priority depends on class.
-    # For unidentified items the internal bonus fields (_iPLStr etc.) already hold the true
-    # values - using them for identify-priority is correct (ALGO peeks at item data, not the
-    # ML model). For identified jewelry the full weighted formula including extras is used.
+    assert iloc in _JEWELRY_ILOC, f"unexpected iloc {iloc} in _item_score"
+    # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
+    # score 0 so they equip into empty slots but never displace identified gear.
     if hero_class == dx.HeroClass.Warrior.value:
         if not identified:
-            score = int(item._iPLStr) + int(item._iPLVit)
-            return score, f"str+vit={score}"
+            return 0, "unidentified"
         fr    = int(item._iPLFR)
         lr    = int(item._iPLLR)
         mr    = int(item._iPLMR)
@@ -242,7 +240,13 @@ def _find_unidentified_equipped(player, hero_class):
                 or int(item._iMagical) == quality_normal
                 or item._iIdentified):
             continue
-        score, _ = _item_score(item, hero_class)
+        iloc = int(item._iLoc)
+        if iloc in _ARMOR_ILOC:
+            score = int(item._iAC)
+        elif iloc in _WEAPON_ILOC:
+            score = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+        else:
+            score = 0  # jewelry: no visible stats until identified
         if best is None or score > best[0]:
             best = (score, int(item._iSeed), _item_name(item))
     return (best[1], best[2]) if best is not None else None
