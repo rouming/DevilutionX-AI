@@ -6,6 +6,12 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#if defined(__linux__)
+#include <dirent.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 #include <fmt/format.h>
 
@@ -1593,6 +1599,25 @@ void ApplicationInit()
 		SDL_Init(SDL_INIT_VIDEO);
 #else
 		SDL_Init(SDL_INIT_EVENTS);
+#if defined(__linux__)
+		// SDL2 unconditionally opens D-Bus connections during SDL_Init which
+		// leaves Unix stream sockets open. Close them so CRIU can checkpoint
+		// the process. We scan /proc/self/fd and close any AF_UNIX sockets
+		// that appeared after SDL_Init.
+		if (DIR *fdDir = opendir("/proc/self/fd")) {
+			while (const dirent *entry = readdir(fdDir)) {
+				char *end;
+				const int fd = static_cast<int>(strtol(entry->d_name, &end, 10));
+				if (*end != '\0' || fd <= 2) continue;
+				sockaddr_un addr {};
+				socklen_t len = sizeof(addr);
+				if (getsockname(fd, reinterpret_cast<sockaddr *>(&addr), &len) == 0
+				        && addr.sun_family == AF_UNIX)
+					close(fd);
+			}
+			closedir(fdDir);
+		}
+#endif
 #endif
 	}
 
