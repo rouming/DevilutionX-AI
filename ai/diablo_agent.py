@@ -304,6 +304,10 @@ def _find_unidentified_equipped(player, hero_class):
         if iloc in _ARMOR_ILOC:
             score = int(item._iAC)
         elif iloc in _WEAPON_ILOC:
+            # FIXME: shields fall in _WEAPON_ILOC but have _iMinDam = _iMaxDam = 0,
+            # so they always score 0 here and never win over weapons. Identification
+            # priority for equipped shields is therefore always lowest. Acceptable
+            # in practice since weapons benefit more from revealed affixes.
             score = (int(item._iMinDam) + int(item._iMaxDam)) / 2
         else:
             score = 0  # jewelry: no visible stats until identified
@@ -1779,10 +1783,22 @@ class AgentAI:
             # even without identification. Scoring uses only these base stats so the
             # comparison is valid - fall through to normal scoring.
 
-        # For rings: if left slot occupied, try right slot instead.
-        if (int(item._iLoc) == dx.item_equip_type.ILOC_RING.value and
-                int(player.InvBody[body_cii]._itype) != dx.ItemType.None_.value):
-            body_cii = dx.inv_item.INVITEM_RING_RIGHT.value
+        # For rings: left slot is default; if left occupied try right;
+        # if both occupied pick the weaker slot so a new ring displaces the inferior one.
+        if int(item._iLoc) == dx.item_equip_type.ILOC_RING.value:
+            left_cii  = dx.inv_item.INVITEM_RING_LEFT.value
+            right_cii = dx.inv_item.INVITEM_RING_RIGHT.value
+            left      = player.InvBody[left_cii]
+            right     = player.InvBody[right_cii]
+            if (int(left._itype) != dx.ItemType.None_.value and
+                    int(right._itype) != dx.ItemType.None_.value):
+                lp = self._pending_equip.get(left_cii)
+                rp = self._pending_equip.get(right_cii)
+                ls = lp[1] if lp else _item_score_for_warrior(left, player)[0]
+                rs = rp[1] if rp else _item_score_for_warrior(right, player)[0]
+                body_cii = left_cii if ls <= rs else right_cii
+            elif int(left._itype) != dx.ItemType.None_.value:
+                body_cii = right_cii
 
         pending = self._pending_equip.get(body_cii)
         is_better, new_score, new_label, old_score, old_label, old_name = \
