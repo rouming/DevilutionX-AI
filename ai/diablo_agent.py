@@ -759,6 +759,10 @@ class AgentAI:
         self._body_id_state          = {}
         # True if new InvList seeds were detected this tick; blocks queue execution
         self._inv_changed            = False
+        # equipped_seed -> backup_seed: item stashed in InvList as fallback if the
+        # currently equipped item needs identification and turns out cursed after.
+        # Keyed by the equipped item's seed (stable vs autosort).
+        self._backup_for_item        = {}
 
         self._pathfinder = Pathfinder(game, view_radius)
         # Agent-owned set of masked drop positions (level-specific). Stable across
@@ -877,11 +881,11 @@ class AgentAI:
                          and s not in pending_id}
             if shrine_id:
                 self._log_identified_items(d, shrine_id, inv_curr)
-            # No rescan needed for equipped items identified in body slots: all
-            # inventory gear was already evaluated on pickup and either queued
-            # (seed in _queued_seeds, skipped) or dropped (gone from inv).
-            # New pickups after identification compare against the live InvBody
-            # state which already reflects the identified (possibly cursed) item.
+            # Resolve equipped items revealed this tick: drop harmful, resolve backups.
+            # Covers both scroll-identified body-slot items (pending_id) and shrine ids.
+            if not self.no_gear_management:
+                self._resolve_identified_equipped(d, pending_id | shrine_id)
+                self._cleanup_stale_backups(d)
             if new_seeds and not self.no_gear_management:
                 self._inv_changed = True
                 for seed in new_seeds:
@@ -1546,6 +1550,98 @@ class AgentAI:
             RE.RING_ENTRY_KEY_INV_DROP_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
             data=(cii, 1))
 
+    def _cleanup_stale_backups(self, d):
+        """Scan _backup_for_item for stale entries every tick.
+        - Backup item gone from InvList: remove entry (item was consumed or dropped externally).
+        - Equipped item gone from InvBody: re-evaluate the backup against whatever is there now.
+        - Equipped item now identified: resolve backup vs identified item.
+        """
+        if not self._backup_for_item:
+            return
+        player    = d.player
+        INV_FIRST = dx.inv_item.INVITEM_INV_FIRST.value
+        none_val  = dx.ItemType.None_.value
+        body_by_seed = {int(player.InvBody[i]._iSeed): i
+                        for i in range(INV_FIRST)
+                        if int(player.InvBody[i]._itype) != none_val}
+        inv_seeds = {int(player.InvList[i]._iSeed) for i in range(int(player._pNumInv))}
+        late_id   = set()
+        for eq_seed in list(self._backup_for_item.keys()):
+            bk_seed = self._backup_for_item[eq_seed]
+            if bk_seed not in inv_seeds:
+                del self._backup_for_item[eq_seed]
+                continue
+            bc = body_by_seed.get(eq_seed)
+            if bc is None:
+                bk_seed = self._backup_for_item.pop(eq_seed)
+                self._queued_seeds.discard(bk_seed)
+                self._evaluate_and_queue(d, bk_seed)
+                continue
+            if not _needs_identification(player.InvBody[bc]):
+                late_id.add(eq_seed)
+        if late_id:
+            self._resolve_identified_equipped(d, late_id)
+
+    def _find_inv_by_seed(self, player, seed):
+        """Return (item, cii) for the InvList item with the given seed, or (None, None)."""
+        INV_FIRST = dx.inv_item.INVITEM_INV_FIRST.value
+        for i in range(int(player._pNumInv)):
+            if int(player.InvList[i]._iSeed) == seed:
+                return player.InvList[i], INV_FIRST + i
+        return None, None
+
+    def _resolve_identified_equipped(self, d, identified_seeds):
+        """Handle body-slot items revealed by identification this tick.
+        - Cursed (score < 0): drop immediately; re-evaluate any backup for this slot.
+        - Non-cursed with backup: compare backup vs identified; equip winner, drop loser.
+        InvDropItem accepts body-slot cii so no move-to-inv step is needed for drops.
+        Returns True if a direct drop was submitted this tick."""
+        player    = d.player
+        none_val  = dx.ItemType.None_.value
+        INV_FIRST = dx.inv_item.INVITEM_INV_FIRST.value
+        for bc in range(INV_FIRST):
+            item = player.InvBody[bc]
+            if int(item._itype) == none_val:
+                continue
+            eq_seed = int(item._iSeed)
+            if eq_seed not in identified_seeds:
+                continue
+            if int(item._iLoc) in _SKIP_ILOC:
+                continue
+            score, label = _item_score_for_warrior(item, player)
+            backup_seed  = self._backup_for_item.pop(eq_seed, None)
+            name         = _item_name(item)
+            if score < 0:
+                print(f"agent {self._tick_count}: drop harmful equipped '{name}'"
+                      f" seed={eq_seed} [{label}] bc={bc}", file=self.log)
+                self._drop_and_mask(d, bc)
+                self._inv_changed = True
+                if backup_seed is not None:
+                    self._queued_seeds.discard(backup_seed)
+                    self._evaluate_and_queue(d, backup_seed)
+                return True
+            if backup_seed is None:
+                continue
+            bk_item, _ = self._find_inv_by_seed(player, backup_seed)
+            if bk_item is None:
+                continue
+            bk_score, bk_label = _item_score_for_warrior(bk_item, player)
+            bk_name = _item_name(bk_item)
+            if bk_score > score:
+                print(f"agent {self._tick_count}: backup '{bk_name}' seed={backup_seed}"
+                      f" [{bk_label}] beats '{name}' seed={eq_seed} [{label}]"
+                      f" - equipping backup", file=self.log)
+                self._pending_equip[bc] = (backup_seed, bk_score, bk_name)
+                self._queued_seeds.add(backup_seed)
+                self._action_queue.append(
+                    {'action': 'equip', 'seed': backup_seed, 'name': bk_name, 'body_cii': bc})
+            else:
+                print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={backup_seed}"
+                      f" [{bk_label}] - '{name}' seed={eq_seed} [{label}] is better", file=self.log)
+                self._queued_seeds.add(backup_seed)
+                self._action_queue.append({'action': 'drop', 'seed': backup_seed, 'name': bk_name})
+        return False
+
     def _evaluate_misc_item(self, d, item, seed, name):
         """Evaluate a Misc-type item and queue an action or keep it silently."""
         player       = d.player
@@ -1737,6 +1833,12 @@ class AgentAI:
         if item is None:
             return
 
+        # Backup items are re-evaluated explicitly by _cleanup_stale_backups or
+        # _resolve_identified_equipped after removing the map entry. Any other call
+        # (e.g. the level-change re-evaluation loop) must not touch them.
+        if seed in self._backup_for_item.values():
+            return
+
         name = _item_name(item)
 
         if int(item._itype) == dx.ItemType.Misc.value:
@@ -1817,6 +1919,29 @@ class AgentAI:
             else:
                 print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag}"
                       f" over '{old_name}' [{old_label}]", file=self.log)
+            # Transfer or drop the backup for the item being displaced.
+            # Y beats X_base, and B was stashed because B <= X_base, so Y > B provably.
+            # If Y is also unidentified, re-key B as backup for Y - still useful insurance.
+            # If Y is identified, B is no longer needed and can be dropped.
+            eq_cur  = player.InvBody[body_cii]
+            eq_seed = int(eq_cur._iSeed) if int(eq_cur._itype) != dx.ItemType.None_.value else None
+            if eq_seed and eq_seed in self._backup_for_item:
+                bk_seed = self._backup_for_item.pop(eq_seed)
+                bk_item, _ = self._find_inv_by_seed(player, bk_seed)
+                if bk_item is not None:
+                    bk_name = _item_name(bk_item)
+                    if _needs_identification(item):
+                        print(f"agent {self._tick_count}: transfer backup '{bk_name}' seed={bk_seed}"
+                              f" to unidentified new equip '{name}' seed={seed}", file=self.log)
+                        self._backup_for_item[seed] = bk_seed
+                    else:
+                        print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
+                              f" - new equip '{name}' seed={seed} supersedes it", file=self.log)
+                        self._queued_seeds.add(bk_seed)
+                        self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
+                else:
+                    print(f"agent {self._tick_count}: backup seed={bk_seed} gone from inventory"
+                          f" while displacing eq_seed={eq_seed}", file=self.log)
             # Set _pending_equip at queue-time so subsequent evaluations compare against
             # this winner. Not added to any exclusion set: displaced gear must re-enter evaluation.
             self._pending_equip[body_cii] = (seed, new_score, name)
@@ -1824,6 +1949,32 @@ class AgentAI:
             self._action_queue.append(
                 {'action': 'equip', 'seed': seed, 'name': name, 'body_cii': body_cii})
         else:
+            # Stash as backup - insurance in case the item occupying this slot turns cursed.
+            # Two cases: (a) live unidentified equip; (b) pending unidentified equip.
+            eq      = player.InvBody[body_cii]
+            eq_seed = int(eq._iSeed)
+            if (pending is None
+                    and old_name is not None
+                    and new_score >= 0
+                    and int(eq._itype) != dx.ItemType.None_.value
+                    and _needs_identification(eq)
+                    and eq_seed not in self._backup_for_item):
+                print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
+                      f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
+                self._backup_for_item[eq_seed] = seed
+                return
+            if (pending is not None
+                    and old_name is not None
+                    and new_score >= 0):
+                pend_seed, _, pend_name = pending
+                if pend_seed not in self._backup_for_item:
+                    pend_item, _ = self._find_inv_by_seed(player, pend_seed)
+                    if pend_item is not None and _needs_identification(pend_item):
+                        print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
+                              f" as backup for pending unidentified '{pend_name}'"
+                              f" pend_seed={pend_seed}", file=self.log)
+                        self._backup_for_item[pend_seed] = seed
+                        return
             if old_name is None:
                 print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} - class filter [{new_label}]",
                       file=self.log)
