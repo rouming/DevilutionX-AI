@@ -858,6 +858,20 @@ class AgentAI:
                        for c in range(dx.inv_item.INVITEM_INV_FIRST.value)
                        if int(d.player.InvBody[c]._itype) != none_type}
 
+        # Clear pending equips confirmed by the engine this tick BEFORE evaluating
+        # new/displaced inventory seeds.  Displaced items (e.g. old weapon bumped to
+        # InvList when a new one equips) must see _pending_equip already cleared so
+        # the backup-stash condition (pending is None AND equipped item is unidentified)
+        # fires correctly instead of falling through to a premature drop.
+        if not self.no_gear_management:
+            for bc in list(self._pending_equip.keys()):
+                if int(d.player.InvBody[bc]._iSeed) == self._pending_equip[bc][0]:
+                    seed, score, name = self._pending_equip[bc]
+                    print(f"agent {self._tick_count}: equipped '{name}' seed={seed}"
+                          f" lvl={self.cur_level}"
+                          f" gear: {_player_gear_str(d.player)}", file=self.log)
+                    del self._pending_equip[bc]
+
         if self._inv_prev is not None:
             # Detect new InvList and belt items and evaluate them.
             # Body slots (cii < INVITEM_INV_FIRST) excluded; belt included.
@@ -915,14 +929,6 @@ class AgentAI:
             sr  = self.safe_radius
             pos = diablo_state.player_position(d)
             safe = (sr == 0 or not _monster_within_radius(d, pos, sr))
-            # Resolve pending equips confirmed by engine this tick.
-            for bc in list(self._pending_equip.keys()):
-                if int(d.player.InvBody[bc]._iSeed) == self._pending_equip[bc][0]:
-                    seed, score, name = self._pending_equip[bc]
-                    print(f"agent {self._tick_count}: equipped '{name}' seed={seed}"
-                          f" lvl={self.cur_level}"
-                          f" gear: {_player_gear_str(d.player)}", file=self.log)
-                    del self._pending_equip[bc]
             if safe:
                 self._repair_gear(d)
             if self._action_queue and safe and not self._inv_changed:
