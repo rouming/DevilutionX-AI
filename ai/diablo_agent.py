@@ -1573,6 +1573,10 @@ class AgentAI:
                 continue
             bc = body_by_seed.get(eq_seed)
             if bc is None:
+                # eq_seed not in body: could be a pending equip not yet confirmed.
+                # Skip cleanup until the equip lands or the pending entry is gone.
+                if any(v[0] == eq_seed for v in self._pending_equip.values()):
+                    continue
                 bk_seed = self._backup_for_item.pop(eq_seed)
                 self._queued_seeds.discard(bk_seed)
                 self._evaluate_and_queue(d, bk_seed)
