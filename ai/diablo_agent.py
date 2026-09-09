@@ -222,16 +222,16 @@ def _item_score_for_warrior(item, player):
             if identified:
                 score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
             return score, f"score={score:.1f}"
-        # Weapon: avg_dmg + optional shield AC + identified bonuses.
-        # A two-hander displaces the shield so its AC contribution drops to 0.
-        hand_r    = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
-        shield_ac = (int(hand_r._iAC)
-                     if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
+        # Weapon: avg_dmg + optional shield score + identified bonuses.
+        # A two-hander displaces the shield so its contribution drops to 0.
+        hand_r       = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
+        shield_score = (_item_score_for_warrior(hand_r, player)[0]
+                        if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
         dmg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
         if identified:
             dmg = _weapon_dmg(item)
         keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        score = dmg + (shield_ac * _AC_WEIGHT if keeps_shield else 0)
+        score = dmg + (shield_score if keeps_shield else 0)
         if identified:
             score += (_pl_stats_warrior(item)
                       + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
