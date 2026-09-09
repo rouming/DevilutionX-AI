@@ -97,7 +97,10 @@ def _item_stats_str(item):
     for label, val in (('str', int(item._iPLStr)), ('dex', int(item._iPLDex)),
                        ('mag', int(item._iPLMag)), ('vit', int(item._iPLVit)),
                        ('acp', int(item._iPLAC)),  ('hit', int(item._iPLToHit)),
-                       ('dam', int(item._iPLDam))):
+                       ('dam', int(item._iPLDam)),  ('hp',  int(item._iPLHP)),
+                       ('gethit', int(item._iPLGetHit)),
+                       ('fr', int(item._iPLFR)), ('lr', int(item._iPLLR)),
+                       ('mr', int(item._iPLMR))):
         if val: parts.append(f"{label}={val:+d}")
     return ' '.join(parts) if parts else '-'
 
@@ -115,7 +118,13 @@ def _player_gear_str(p):
     rec = next((t for mask, t in _IFLAGS_REC if flags & mask), 0)
     none_val = dx.ItemType.None_.value
     slots = sum(1 for bc in range(_NUM_INVLOC) if int(p.InvBody[bc]._itype) != none_val)
+    hp_cur = int(p._pHitPoints) >> 6
+    hp_max = int(p._pMaxHP) >> 6
+    gethit = int(p._pIGetHit)
+    gethit_str = f" gethit={gethit}" if gethit != 0 else ""
     return (f"slots={slots}"
+            f" clvl={int(p._pLevel)}"
+            f" hp={hp_cur}/{hp_max}"
             f" str={int(p._pBaseStr)}({int(p._pStrength)-int(p._pBaseStr):+d})"
             f" dex={int(p._pBaseDex)}({int(p._pDexterity)-int(p._pBaseDex):+d})"
             f" mag={int(p._pBaseMag)}({int(p._pMagic)-int(p._pBaseMag):+d})"
@@ -124,6 +133,7 @@ def _player_gear_str(p):
             f" dmin={int(p._pIMinDam)} dmax={int(p._pIMaxDam)}"
             f" bdam={int(p._pIBonusDam)} hit={int(p._pIBonusToHit)}"
             f" fr={int(p._pFireResist)} lr={int(p._pLghtResist)} mr={int(p._pMagResist)}"
+            f"{gethit_str}"
             f" atk={atk} rec={rec}")
 
 
