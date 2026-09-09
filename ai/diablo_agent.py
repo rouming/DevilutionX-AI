@@ -198,6 +198,15 @@ def _res_sum_score(item):
     """Sum of all resistances (armor/helm/shield: can carry multiple elements)."""
     return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * 0.03
 
+def _needs_identification(item):
+    # _iIdentified is only meaningful for non-normal items. Normal items always
+    # have _iIdentified=false (set by SetupItem) but carry no hidden affixes;
+    # CalcPlrItemVals applies their stats unconditionally via the
+    # (_iMagical == NORMAL || _iIdentified) gate. Mirrors engine IdItemOk().
+    return (int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
+            and not bool(item._iIdentified))
+
+
 def _weapon_dmg(item):
     """Effective avg damage for identified weapon: (base_avg + flat_bonus) * (1 + dam%)."""
     avg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
@@ -207,7 +216,7 @@ def _weapon_dmg(item):
 def _item_score_for_warrior(item, player):
     """Scalar score + label for any equippable item (Warrior only)."""
     iloc       = int(item._iLoc)
-    identified = bool(item._iIdentified)
+    identified = not _needs_identification(item)
 
     if iloc in _WEAPON_ILOC:
         if int(item._itype) == dx.ItemType.Shield.value:
@@ -290,15 +299,12 @@ def _find_scroll_of_identify(player):
 
 
 def _find_unidentified_equipped(player, hero_class):
-    """Return (seed, name) of the highest-scoring unidentified magical body item, or None."""
-    none_type      = dx.ItemType.None_.value
-    quality_normal = dx.item_quality.ITEM_QUALITY_NORMAL.value
+    """Return (seed, name) of the highest-scoring unidentified non-normal body item, or None."""
+    none_type = dx.ItemType.None_.value
     best = None  # (score, seed, name)
     for cii in range(dx.inv_item.INVITEM_INV_FIRST.value):
         item = player.InvBody[cii]
-        if (int(item._itype) == none_type
-                or int(item._iMagical) == quality_normal
-                or item._iIdentified):
+        if int(item._itype) == none_type or not _needs_identification(item):
             continue
         iloc = int(item._iLoc)
         if iloc in _ARMOR_ILOC:
@@ -1761,8 +1767,7 @@ class AgentAI:
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
 
-        if (int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
-                and not item._iIdentified):
+        if _needs_identification(item):
             if int(item._iLoc) in _JEWELRY_ILOC:
                 # Jewelry has no base stats; all value is in _iPL* which only apply
                 # after identification. Must identify to know if worth wearing.
@@ -1805,7 +1810,7 @@ class AgentAI:
             is_better_fn(item, player, body_cii, pending)
 
         if is_better:
-            id_tag = "" if item._iIdentified else " unidentified"
+            id_tag = " unidentified" if _needs_identification(item) else ""
             if old_label == "empty":
                 print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag} - empty slot",
                       file=self.log)
