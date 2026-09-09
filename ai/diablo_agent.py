@@ -184,7 +184,7 @@ def _tohit_score(item):
 
 def _gethit_score(item):
     """Damage-taken modifier: negative GetHit = less damage per hit = good."""
-    return -int(item._iPLGetHit) * 1.5
+    return -int(item._iPLGetHit) * 1.0
 
 def _dam_score(item):
     """Damage-% bonus contribution (jewelry only; weapons apply it as a multiplier)."""
