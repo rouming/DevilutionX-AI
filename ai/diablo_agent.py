@@ -1537,7 +1537,7 @@ class AgentAI:
                     RE.RING_ENTRY_KEY_INV_REPAIR_ITEM |
                     RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
                     data=(cii, 0))
-                name = bytes(item._iName).split(b'\x00')[0].decode('ascii', errors='replace')
+                name = _item_name(item)
                 print(f"agent {self._tick_count}: repairing '{name}' {slot_name}, dur {cur_dur}/{max_dur}",
                       file=self.log)
 
