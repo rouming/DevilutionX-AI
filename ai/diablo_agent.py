@@ -63,8 +63,6 @@ _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_HELM.value,
 })
 
-# One point of shield AC counts as this many avg_dmg points when comparing
-# a one-hander+shield configuration against a two-hander.
 _AC_WEIGHT = 0.5
 
 
@@ -231,16 +229,14 @@ def _item_score_for_warrior(item, player):
             if identified:
                 score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
             return score, f"score={score:.1f}"
-        # Weapon: avg_dmg + optional shield score + identified bonuses.
-        # A two-hander displaces the shield so its contribution drops to 0.
+        # Weapon: avg_dmg + current shield score + identified bonuses.
         hand_r       = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
         shield_score = (_item_score_for_warrior(hand_r, player)[0]
                         if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
         dmg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
         if identified:
             dmg = _weapon_dmg(item)
-        keeps_shield = (iloc != dx.item_equip_type.ILOC_TWOHAND.value)
-        score = dmg + (shield_score if keeps_shield else 0)
+        score = dmg + shield_score
         if identified:
             score += (_pl_stats_warrior(item)
                       + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
@@ -397,9 +393,11 @@ def _is_better_for_warrior(item, player, body_cii, pending):
     Returns (is_better, new_score, new_label, old_score, old_label, old_name).
     old_name is None for class-filtered items (no comparison logged).
     """
-    # Warriors do not use bows; ranged weapons are useless for melee fighters.
+    # Warriors do not use bows or two-handed weapons.
     if int(item._itype) == dx.ItemType.Bow.value:
         return False, 0, "bow", 0, "", None
+    if int(item._iLoc) == dx.item_equip_type.ILOC_TWOHAND.value:
+        return False, 0, "two-handed", 0, "", None
 
     new_score, new_label = _item_score_for_warrior(item, player)
 
