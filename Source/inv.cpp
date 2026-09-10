@@ -2174,7 +2174,8 @@ bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii)
 		      && src._itype != ItemType::Shield;
 		break;
 	case INVLOC_HAND_RIGHT:
-		typeOk = srcILoc == ILOC_ONEHAND && src._itype == ItemType::Shield;
+		typeOk = srcILoc == ILOC_ONEHAND && src._itype == ItemType::Shield
+		      && player.GetItemLocation(player.InvBody[INVLOC_HAND_LEFT]) != ILOC_TWOHAND;
 		break;
 	case INVLOC_HEAD:       typeOk = srcILoc == ILOC_HELM;   break;
 	case INVLOC_RING_LEFT:
