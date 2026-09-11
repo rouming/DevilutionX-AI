@@ -2174,8 +2174,7 @@ bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii)
 		      && src._itype != ItemType::Shield;
 		break;
 	case INVLOC_HAND_RIGHT:
-		typeOk = srcILoc == ILOC_ONEHAND && src._itype == ItemType::Shield
-		      && player.GetItemLocation(player.InvBody[INVLOC_HAND_LEFT]) != ILOC_TWOHAND;
+		typeOk = srcILoc == ILOC_ONEHAND && src._itype == ItemType::Shield;
 		break;
 	case INVLOC_HEAD:       typeOk = srcILoc == ILOC_HELM;   break;
 	case INVLOC_RING_LEFT:
@@ -2189,9 +2188,15 @@ bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii)
 	if (!player.InvBody[loc].isEmpty() && !CanFitItemInInventory(player, player.InvBody[loc]))
 		return false;
 
-	// Two-hander: HAND_RIGHT (shield) must also be displaced.
+	// Two-hander to HAND_LEFT: shield in HAND_RIGHT must also be displaced.
 	const bool displaceRight = (srcILoc == ILOC_TWOHAND && !player.InvBody[INVLOC_HAND_RIGHT].isEmpty());
 	if (displaceRight && !CanFitItemInInventory(player, player.InvBody[INVLOC_HAND_RIGHT]))
+		return false;
+
+	// Shield to HAND_RIGHT: two-hander in HAND_LEFT must be displaced (mirrors displaceRight).
+	const bool displace2H = (loc == INVLOC_HAND_RIGHT
+	    && player.GetItemLocation(player.InvBody[INVLOC_HAND_LEFT]) == ILOC_TWOHAND);
+	if (displace2H && !CanFitItemInInventory(player, player.InvBody[INVLOC_HAND_LEFT]))
 		return false;
 
 	// Commit: remove src from inventory.
@@ -2202,9 +2207,13 @@ bool InvSwapBodyItem(Player &player, int inv_cii, int body_cii)
 		AutoPlaceItemInInventory(player, player.InvBody[INVLOC_HAND_RIGHT], false);
 		RemoveEquipment(player, INVLOC_HAND_RIGHT, false);
 	}
+	if (displace2H) {
+		AutoPlaceItemInInventory(player, player.InvBody[INVLOC_HAND_LEFT], false);
+		RemoveEquipment(player, INVLOC_HAND_LEFT, false);
+	}
 	if (!player.InvBody[loc].isEmpty()) {
 		AutoPlaceItemInInventory(player, player.InvBody[loc], false);
-		player.InvBody[loc].clear();
+		RemoveEquipment(player, loc, false);
 	}
 	ChangeEquipment(player, loc, player.HoldItem.pop(), &player == MyPlayer);
 	CalcPlrInv(player, true);
