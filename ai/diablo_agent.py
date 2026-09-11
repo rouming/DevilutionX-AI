@@ -1598,7 +1598,10 @@ class AgentAI:
                     self._evaluate_and_queue(d, s)
                 continue
             if not _needs_identification(player.InvBody[bc]):
-                late_id.add(eq_seed)
+                # Only trigger on the tick identification happens, not every subsequent tick.
+                # _body_id_state holds last tick's state, so False here means "just identified".
+                if not self._body_id_state.get(eq_seed, False):
+                    late_id.add(eq_seed)
         if late_id:
             self._resolve_identified_equipped(d, late_id)
 
@@ -2167,6 +2170,18 @@ class AgentAI:
                         self._action_queue.append(
                             {'action': 'equip', 'seed': bk_other_seed,
                              'name': bk_other_name, 'body_cii': other_body})
+                # Drop the non-partner backup; it is no longer needed after 2H eviction.
+                abandon_idx  = 1 - bk_idx
+                bk_drop_seed = bk_list[abandon_idx] if abandon_idx < len(bk_list) else None
+                if bk_drop_seed is not None:
+                    bk_drop_item, _ = self._find_inv_by_seed(player, bk_drop_seed)
+                    if bk_drop_item is not None:
+                        bk_drop_name = _item_name(bk_drop_item)
+                        print(f"agent {self._tick_count}: drop non-partner backup '{bk_drop_name}'"
+                              f" seed={bk_drop_seed} - 2H evicted", file=self.log)
+                        self._queued_seeds.add(bk_drop_seed)
+                        self._action_queue.append(
+                            {'action': 'drop', 'seed': bk_drop_seed, 'name': bk_drop_name})
 
             if int(item._iLoc) == ILOC_2H and _needs_identification(item):
                 # Unidentified 2H wins: proactively reserve displaced weapon + shield as
