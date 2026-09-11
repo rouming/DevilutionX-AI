@@ -170,7 +170,7 @@ def _can_equip(item, player):
 def _pl_stats_warrior(item):
     """Stat bonus contribution for warrior: STR + VIT + DEX.
     Only meaningful when item is identified; caller is responsible for that check."""
-    return int(item._iPLStr) + int(item._iPLVit) + int(item._iPLDex)
+    return float(int(item._iPLStr) + int(item._iPLVit) + int(item._iPLDex))
 
 def _hp_score(item):
     """Life bonus score. _iPLHP stored *64; coefficient gives 0.3 per actual HP."""
@@ -205,62 +205,93 @@ def _needs_identification(item):
             and not bool(item._iIdentified))
 
 
-def _weapon_dmg(item):
+def _unidentified_weapon_dmg(item):
+    """Base avg damage before identification: (min + max) / 2."""
+    return (int(item._iMinDam) + int(item._iMaxDam)) / 2
+
+
+def _identified_weapon_dmg(item):
     """Effective avg damage for identified weapon: (base_avg + flat_bonus) * (1 + dam%)."""
-    avg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
-    return (avg + int(item._iPLDamMod)) * (1 + int(item._iPLDam) / 100)
+    return (_unidentified_weapon_dmg(item) + int(item._iPLDamMod)) * (1 + int(item._iPLDam) / 100)
 
 
-def _item_score_for_warrior(item, player):
-    """Scalar score + label for any equippable item (Warrior only)."""
+def _weapon_only_score(item):
+    """Damage contribution of a weapon (1H or 2H), excluding any shield."""
+    identified = not _needs_identification(item)
+    dmg   = _identified_weapon_dmg(item) if identified else _unidentified_weapon_dmg(item)
+    score = dmg
+    if identified:
+        score += (_pl_stats_warrior(item)
+                  + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
+    return score
+
+
+def _unidentified_item_ac(item):
+    """Base AC before identification."""
+    return float(int(item._iAC))
+
+
+def _identified_item_ac(item):
+    """Effective AC for identified armor/shield.
+    GetBonusAC: _iAC * _iPLAC / 100 (clamped to sign if rounds to 0)."""
+    ac    = int(item._iAC)
+    pl_ac = int(item._iPLAC)
+    b     = ac * pl_ac // 100
+    if b == 0 and pl_ac != 0:
+        b = 1 if pl_ac > 0 else -1
+    return ac + b + _pl_stats_warrior(item)
+
+
+def _shield_only_score(item):
+    """AC contribution of a shield."""
+    identified = not _needs_identification(item)
+    ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
+    score = ac * _AC_WEIGHT
+    if identified:
+        score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
+    return score
+
+
+def _hand_combo_score(left, right):
+    """Total hand slot score. left=weapon/2H item or None, right=shield item or None."""
+    ws = _weapon_only_score(left)  if left  is not None else 0.0
+    ss = _shield_only_score(right) if right is not None else 0.0
+    return ws + ss
+
+
+def _item_score_for_warrior(item, player, complement=None):
+    """Scalar score + label for any equippable item (Warrior only).
+
+    complement: the other-hand item to pair with, or None (default) for no pairing.
+      For a weapon: complement is the shield (right hand).
+      For a shield: complement is the weapon (left hand).
+      Callers pass the live InvBody item for normal scoring, a backup item for
+      cross-slot backup comparisons (step-2 2H logic), or None for no pairing
+      (2H weapon scored alone, or shield scored alone when weapon cancels).
+    """
     iloc       = int(item._iLoc)
     identified = not _needs_identification(item)
 
     if iloc in _WEAPON_ILOC:
         if int(item._itype) == dx.ItemType.Shield.value:
-            ac = int(item._iAC)
-            if identified:
-                pl_ac = int(item._iPLAC)
-                b = ac * pl_ac // 100
-                if b == 0 and pl_ac != 0:
-                    b = 1 if pl_ac > 0 else -1
-                ac += b + _pl_stats_warrior(item)
-            score = ac * _AC_WEIGHT
-            if identified:
-                score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
+            # Shield: complement is the left-hand weapon (backup or None).
+            score = _hand_combo_score(complement, item)
             return score, f"score={score:.1f}"
-        # Weapon: avg_dmg + current shield score + identified bonuses.
-        hand_r       = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
-        shield_score = (_item_score_for_warrior(hand_r, player)[0]
-                        if int(hand_r._itype) == dx.ItemType.Shield.value else 0)
-        dmg = (int(item._iMinDam) + int(item._iMaxDam)) / 2
-        if identified:
-            dmg = _weapon_dmg(item)
-        score = dmg + shield_score
-        if identified:
-            score += (_pl_stats_warrior(item)
-                      + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
+        # Weapon: complement is the right-hand shield (backup item or None).
+        score = _hand_combo_score(item, complement)
         return score, f"score={score:.1f}"
 
     if iloc in _ARMOR_ILOC:
-        ac = int(item._iAC)
-        score = float(ac)
+        score = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
         if identified:
-            # GetBonusAC: _iAC * _iPLAC / 100 (clamped to sign if rounds to 0)
-            pl_ac = int(item._iPLAC)
-            bonus = ac * pl_ac // 100
-            if bonus == 0 and pl_ac != 0:
-                bonus = 1 if pl_ac > 0 else -1
-            score = (ac + bonus + _pl_stats_warrior(item)
-                     + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
-                     + _res_sum_score(item))
+            score += _tohit_score(item) + _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
         return score, f"score={score:.1f}"
 
     if iloc in _JEWELRY_ILOC:
         # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
         # score 0 so they equip into empty slots but never displace identified gear.
         if not identified:
-            return 0, "unidentified"
+            return 0.0, "unidentified"
         score = (_pl_stats_warrior(item)
                  + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
                  + _res_max_score(item) + _dam_score(item))
@@ -387,48 +418,10 @@ def _dur_ratio(item):
     return int(item._iDurability) / max_dur
 
 
-def _is_better_for_warrior(item, player, body_cii, pending):
-    """Is item an upgrade for warrior at body_cii?
-    pending: (seed, score, name) tuple if an equip is in-flight for this slot, else None.
-    Returns (is_better, new_score, new_label, old_score, old_label, old_name).
-    old_name is None for class-filtered items (no comparison logged).
-    """
-    # Warriors do not use bows or two-handed weapons.
-    if int(item._itype) == dx.ItemType.Bow.value:
-        return False, 0, "bow", 0, "", None
-    if int(item._iLoc) == dx.item_equip_type.ILOC_TWOHAND.value:
-        return False, 0, "two-handed", 0, "", None
-
-    new_score, new_label = _item_score_for_warrior(item, player)
-
-    if pending is not None:
-        _, old_score, old_name = pending
-        return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name
-
-    eq = player.InvBody[body_cii]
-    if int(eq._itype) == dx.ItemType.None_.value:
-        # >= 0: unidentified jewelry scores 0 and should fill empty slots;
-        # identified harmful items (e.g. cursed ring) score negative and must not.
-        return new_score >= 0, new_score, new_label, 0, "empty", ""
-
-    old_score, old_label = _item_score_for_warrior(eq, player)
-    is_better = new_score > old_score or (
-        new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
-    return is_better, new_score, new_label, old_score, old_label, _item_name(eq)
-
-
-def _is_better_for_rogue(item, player, body_cii, pending):
-    assert False, "rogue item evaluation not implemented"
-
-
-def _is_better_for_sorcerer(item, player, body_cii, pending):
-    assert False, "sorcerer item evaluation not implemented"
-
-
 _IS_BETTER_FOR_CLASS = {
-    dx.HeroClass.Warrior.value:  _is_better_for_warrior,
-    dx.HeroClass.Rogue.value:    _is_better_for_rogue,
-    dx.HeroClass.Sorcerer.value: _is_better_for_sorcerer,
+    dx.HeroClass.Warrior.value:  '_is_better_warrior',
+    dx.HeroClass.Rogue.value:    '_is_better_rogue',
+    dx.HeroClass.Sorcerer.value: '_is_better_sorcerer',
 }
 
 
@@ -1604,9 +1597,13 @@ class AgentAI:
         - Non-cursed with backup: compare backup vs identified; equip winner, drop loser.
         InvDropItem accepts body-slot cii so no move-to-inv step is needed for drops.
         Returns True if a direct drop was submitted this tick."""
-        player    = d.player
-        none_val  = dx.ItemType.None_.value
-        INV_FIRST = dx.inv_item.INVITEM_INV_FIRST.value
+        player     = d.player
+        none_val   = dx.ItemType.None_.value
+        INV_FIRST  = dx.inv_item.INVITEM_INV_FIRST.value
+        HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
+        HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+        hand_r      = player.InvBody[HAND_RIGHT]
+        live_shield = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
         for bc in range(INV_FIRST):
             item = player.InvBody[bc]
             if int(item._itype) == none_val:
@@ -1616,7 +1613,8 @@ class AgentAI:
                 continue
             if int(item._iLoc) in _SKIP_ILOC:
                 continue
-            score, label = _item_score_for_warrior(item, player)
+            complement = live_shield if bc == HAND_LEFT else None
+            score, label = _item_score_for_warrior(item, player, complement)
             backup_seed  = self._backup_for_item.pop(eq_seed, None)
             name         = _item_name(item)
             if score < 0:
@@ -1633,7 +1631,7 @@ class AgentAI:
             bk_item, _ = self._find_inv_by_seed(player, backup_seed)
             if bk_item is None:
                 continue
-            bk_score, bk_label = _item_score_for_warrior(bk_item, player)
+            bk_score, bk_label = _item_score_for_warrior(bk_item, player, complement)
             bk_name = _item_name(bk_item)
             if bk_score > score:
                 print(f"agent {self._tick_count}: backup '{bk_name}' seed={backup_seed}"
@@ -1818,6 +1816,80 @@ class AgentAI:
             print(f"agent {self._tick_count}: revealed '{_item_name(item)}'"
                   f" seed={seed} [{_identified_label(item)}]", file=self.log)
 
+    def _is_better_warrior(self, item, player):
+        """Is item an upgrade for warrior?
+        Determines the target body slot (including ring tie-breaking), reads
+        _pending_equip, and returns
+        (is_better, new_score, new_label, old_score, old_label, old_name, body_cii).
+        old_name is None for class-filtered items (no comparison logged).
+        """
+        if int(item._itype) == dx.ItemType.Bow.value:
+            return False, 0.0, "bow", 0.0, "", None, None
+        if int(item._iLoc) == dx.item_equip_type.ILOC_TWOHAND.value:
+            return False, 0.0, "two-handed", 0.0, "", None, None
+
+        body_cii   = _item_body_slot(item)
+        iloc       = int(item._iLoc)
+        ILOC_RING  = dx.item_equip_type.ILOC_RING.value
+        HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
+        HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+
+        if iloc == ILOC_RING:
+            left_cii  = dx.inv_item.INVITEM_RING_LEFT.value
+            right_cii = dx.inv_item.INVITEM_RING_RIGHT.value
+            left      = player.InvBody[left_cii]
+            right     = player.InvBody[right_cii]
+            if int(left._itype) == dx.ItemType.None_.value:
+                body_cii = left_cii   # left empty: fill it
+            elif int(right._itype) == dx.ItemType.None_.value:
+                body_cii = right_cii  # right empty: fill it
+            else:
+                # Both occupied: displace the weaker ring.
+                lp = self._pending_equip.get(left_cii)
+                rp = self._pending_equip.get(right_cii)
+                ls = lp[1] if lp else _item_score_for_warrior(left, player)[0]
+                rs = rp[1] if rp else _item_score_for_warrior(right, player)[0]
+                body_cii = left_cii if ls <= rs else right_cii
+            complement = None
+
+        elif body_cii == HAND_LEFT:
+            # 1H weapon: score as a combo with the live shield.
+            hand_r     = player.InvBody[HAND_RIGHT]
+            complement = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
+
+        elif body_cii == HAND_RIGHT:
+            # Shield: score as a combo with the live weapon.
+            hand_l     = player.InvBody[HAND_LEFT]
+            complement = hand_l if int(hand_l._itype) != dx.ItemType.None_.value else None
+
+        else:
+            # Head, chest, amulet - single slot.
+            complement = None
+
+        new_score, new_label = _item_score_for_warrior(item, player, complement)
+
+        pending = self._pending_equip.get(body_cii)
+        if pending is not None:
+            _, old_score, old_name = pending
+            return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name, body_cii
+
+        eq = player.InvBody[body_cii]
+        if int(eq._itype) == dx.ItemType.None_.value:
+            # >= 0: unidentified jewelry scores 0 and should fill empty slots;
+            # identified harmful items (e.g. cursed ring) score negative and must not.
+            return new_score >= 0.0, new_score, new_label, 0.0, "empty", "", body_cii
+
+        old_score, old_label = _item_score_for_warrior(eq, player, complement)
+        is_better = new_score > old_score or (
+            new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
+        return is_better, new_score, new_label, old_score, old_label, _item_name(eq), body_cii
+
+    def _is_better_rogue(self, item, player):
+        assert False, "rogue item evaluation not implemented"
+
+    def _is_better_sorcerer(self, item, player):
+        assert False, "sorcerer item evaluation not implemented"
+
     def _evaluate_and_queue(self, d, seed):
         """Evaluate one InvList or belt item immediately and enqueue an equip or drop action."""
         player       = d.player
@@ -1825,7 +1897,7 @@ class AgentAI:
         BELT_FIRST   = dx.inv_item.INVITEM_BELT_FIRST.value
         itype_none   = dx.ItemType.None_.value
         hero_class   = int(player._pClass)
-        is_better_fn = _IS_BETTER_FOR_CLASS[hero_class]
+        is_better_fn = getattr(self, _IS_BETTER_FOR_CLASS[hero_class])
 
         item = None
         for i in range(int(player._pNumInv)):
@@ -1898,26 +1970,9 @@ class AgentAI:
             # even without identification. Scoring uses only these base stats so the
             # comparison is valid - fall through to normal scoring.
 
-        # For rings: left slot is default; if left occupied try right;
-        # if both occupied pick the weaker slot so a new ring displaces the inferior one.
-        if int(item._iLoc) == dx.item_equip_type.ILOC_RING.value:
-            left_cii  = dx.inv_item.INVITEM_RING_LEFT.value
-            right_cii = dx.inv_item.INVITEM_RING_RIGHT.value
-            left      = player.InvBody[left_cii]
-            right     = player.InvBody[right_cii]
-            if (int(left._itype) != dx.ItemType.None_.value and
-                    int(right._itype) != dx.ItemType.None_.value):
-                lp = self._pending_equip.get(left_cii)
-                rp = self._pending_equip.get(right_cii)
-                ls = lp[1] if lp else _item_score_for_warrior(left, player)[0]
-                rs = rp[1] if rp else _item_score_for_warrior(right, player)[0]
-                body_cii = left_cii if ls <= rs else right_cii
-            elif int(left._itype) != dx.ItemType.None_.value:
-                body_cii = right_cii
-
+        is_better, new_score, new_label, old_score, old_label, old_name, body_cii = \
+            is_better_fn(item, player)
         pending = self._pending_equip.get(body_cii)
-        is_better, new_score, new_label, old_score, old_label, old_name = \
-            is_better_fn(item, player, body_cii, pending)
 
         if is_better:
             id_tag = " unidentified" if _needs_identification(item) else ""
@@ -1963,7 +2018,7 @@ class AgentAI:
             eq_seed = int(eq._iSeed)
             if (pending is None
                     and old_name is not None
-                    and new_score >= 0
+                    and new_score >= 0.0
                     and int(eq._itype) != dx.ItemType.None_.value
                     and _needs_identification(eq)
                     and eq_seed not in self._backup_for_item):
@@ -1973,7 +2028,7 @@ class AgentAI:
                 return
             if (pending is not None
                     and old_name is not None
-                    and new_score >= 0):
+                    and new_score >= 0.0):
                 pend_seed, _, pend_name = pending
                 if pend_seed not in self._backup_for_item:
                     pend_item, _ = self._find_inv_by_seed(player, pend_seed)
