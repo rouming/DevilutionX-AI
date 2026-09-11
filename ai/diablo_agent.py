@@ -253,7 +253,9 @@ def _shield_only_score(item):
 
 
 def _hand_combo_score(left, right):
-    """Total hand slot score. left=weapon/2H item or None, right=shield item or None."""
+    """Total hand slot score for two KNOWN-GOOD items. left=weapon or None, right=shield or None.
+    Only call this when both inputs are guaranteed non-cursed (e.g. the 2H backup comparison);
+    for scoring a main item against a live complement use _item_score_for_warrior instead."""
     ws = _weapon_only_score(left)  if left  is not None else 0.0
     ss = _shield_only_score(right) if right is not None else 0.0
     return ws + ss
@@ -268,17 +270,29 @@ def _item_score_for_warrior(item, player, complement=None):
       Callers pass the live InvBody item for normal scoring, a backup item for
       cross-slot backup comparisons (step-2 2H logic), or None for no pairing
       (2H weapon scored alone, or shield scored alone when weapon cancels).
+
+    Harm propagation: a cursed main item (score < 0) always returns negative even
+    when the complement is good.  A cursed complement is clamped to 0 so it cannot
+    make an innocent main item appear harmful.
     """
     iloc       = int(item._iLoc)
     identified = not _needs_identification(item)
 
     if iloc in _WEAPON_ILOC:
         if int(item._itype) == dx.ItemType.Shield.value:
-            # Shield: complement is the left-hand weapon (backup or None).
-            score = _hand_combo_score(complement, item)
+            # Shield is the main item; propagate only its own harm.
+            ss = _shield_only_score(item)
+            if ss < 0:
+                return ss, f"score={ss:.1f}"
+            ws = _weapon_only_score(complement) if complement is not None else 0.0
+            score = ss + max(0.0, ws)
             return score, f"score={score:.1f}"
-        # Weapon: complement is the right-hand shield (backup item or None).
-        score = _hand_combo_score(item, complement)
+        # Weapon is the main item; propagate only its own harm.
+        ws = _weapon_only_score(item)
+        if ws < 0:
+            return ws, f"score={ws:.1f}"
+        ss = _shield_only_score(complement) if complement is not None else 0.0
+        score = ws + max(0.0, ss)
         return score, f"score={score:.1f}"
 
     if iloc in _ARMOR_ILOC:
@@ -1564,19 +1578,24 @@ class AgentAI:
         inv_seeds = {int(player.InvList[i]._iSeed) for i in range(int(player._pNumInv))}
         late_id   = set()
         for eq_seed in list(self._backup_for_item.keys()):
-            bk_seed = self._backup_for_item[eq_seed]
-            if bk_seed not in inv_seeds:
+            # Include body-slot seeds so proactively-stored backups (e.g. the weapon+shield
+            # still in InvBody on the tick before a 2H equip fires) are not prematurely dropped.
+            bk_seeds = [s for s in self._backup_for_item[eq_seed]
+                        if s in inv_seeds or s in body_by_seed]
+            if not bk_seeds:
                 del self._backup_for_item[eq_seed]
                 continue
+            self._backup_for_item[eq_seed] = bk_seeds
             bc = body_by_seed.get(eq_seed)
             if bc is None:
                 # eq_seed not in body: could be a pending equip not yet confirmed.
                 # Skip cleanup until the equip lands or the pending entry is gone.
                 if any(v[0] == eq_seed for v in self._pending_equip.values()):
                     continue
-                bk_seed = self._backup_for_item.pop(eq_seed)
-                self._queued_seeds.discard(bk_seed)
-                self._evaluate_and_queue(d, bk_seed)
+                bk_seeds = self._backup_for_item.pop(eq_seed)
+                for s in bk_seeds:
+                    self._queued_seeds.discard(s)
+                    self._evaluate_and_queue(d, s)
                 continue
             if not _needs_identification(player.InvBody[bc]):
                 late_id.add(eq_seed)
@@ -1602,6 +1621,7 @@ class AgentAI:
         INV_FIRST  = dx.inv_item.INVITEM_INV_FIRST.value
         HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
         HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+        ILOC_2H     = dx.item_equip_type.ILOC_TWOHAND.value
         hand_r      = player.InvBody[HAND_RIGHT]
         live_shield = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
         for bc in range(INV_FIRST):
@@ -1613,39 +1633,95 @@ class AgentAI:
                 continue
             if int(item._iLoc) in _SKIP_ILOC:
                 continue
-            complement = live_shield if bc == HAND_LEFT else None
+            complement   = live_shield if bc == HAND_LEFT else None
             score, label = _item_score_for_warrior(item, player, complement)
-            backup_seed  = self._backup_for_item.pop(eq_seed, None)
+            backup_seeds = self._backup_for_item.pop(eq_seed, None)  # list[seed] or None
             name         = _item_name(item)
             if score < 0:
                 print(f"agent {self._tick_count}: drop harmful equipped '{name}'"
                       f" seed={eq_seed} [{label}] bc={bc}", file=self.log)
                 self._drop_and_mask(d, bc)
                 self._inv_changed = True
-                if backup_seed is not None:
-                    self._queued_seeds.discard(backup_seed)
-                    self._evaluate_and_queue(d, backup_seed)
+                for bk_seed in (backup_seeds or []):
+                    self._queued_seeds.discard(bk_seed)
+                    self._evaluate_and_queue(d, bk_seed)
                 return True
-            if backup_seed is None:
+            if not backup_seeds:
                 continue
-            bk_item, _ = self._find_inv_by_seed(player, backup_seed)
-            if bk_item is None:
-                continue
-            bk_score, bk_label = _item_score_for_warrior(bk_item, player, complement)
-            bk_name = _item_name(bk_item)
-            if bk_score > score:
-                print(f"agent {self._tick_count}: backup '{bk_name}' seed={backup_seed}"
-                      f" [{bk_label}] beats '{name}' seed={eq_seed} [{label}]"
-                      f" - equipping backup", file=self.log)
-                self._pending_equip[bc] = (backup_seed, bk_score, bk_name)
-                self._queued_seeds.add(backup_seed)
-                self._action_queue.append(
-                    {'action': 'equip', 'seed': backup_seed, 'name': bk_name, 'body_cii': bc})
+            if bc == HAND_LEFT and int(item._iLoc) == ILOC_2H:
+                # 2H identified: compare backup combo (weapon + shield) vs 2H weapon-only.
+                bk_weapon_seed = backup_seeds[0] if len(backup_seeds) > 0 else None
+                bk_shield_seed = backup_seeds[1] if len(backup_seeds) > 1 else None
+                bk_weapon = self._find_inv_by_seed(player, bk_weapon_seed)[0] if bk_weapon_seed else None
+                bk_shield = self._find_inv_by_seed(player, bk_shield_seed)[0] if bk_shield_seed else None
+                bk_score  = _hand_combo_score(bk_weapon, bk_shield)
+                bk_label  = f"score={bk_score:.1f}"
+                if bk_score > score:
+                    bk_wname = _item_name(bk_weapon) if bk_weapon is not None else None
+                    bk_sname = _item_name(bk_shield) if bk_shield is not None else None
+                    parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
+                           + [f"shield '{bk_sname}'" if bk_sname else None])
+                    print(f"agent {self._tick_count}: backup combo {bk_label}"
+                          f" beats 2H '{name}' [{label}] - restoring"
+                          f" {', '.join(p for p in parts if p)}", file=self.log)
+                    if bk_weapon is not None:
+                        self._pending_equip[HAND_LEFT] = (bk_weapon_seed, bk_score, bk_wname)
+                        self._queued_seeds.add(bk_weapon_seed)
+                        self._action_queue.append(
+                            {'action': 'equip', 'seed': bk_weapon_seed,
+                             'name': bk_wname, 'body_cii': HAND_LEFT})
+                    if bk_shield is not None:
+                        self._pending_equip[HAND_RIGHT] = (bk_shield_seed, bk_score, bk_sname)
+                        self._queued_seeds.add(bk_shield_seed)
+                        self._action_queue.append(
+                            {'action': 'equip', 'seed': bk_shield_seed,
+                             'name': bk_sname, 'body_cii': HAND_RIGHT})
+                else:
+                    # 2H beats backup combo - keep backups as eviction insurance.
+                    # If a better 1H later displaces the 2H, _cleanup_stale_backups
+                    # frees them: shield re-evaluates to HAND_RIGHT, old weapon drops.
+                    labeled = [("weapon", bk_weapon_seed, bk_weapon),
+                               ("shield", bk_shield_seed, bk_shield)]
+                    valid = [(role, s, it) for role, s, it in labeled
+                             if s is not None and it is not None]
+                    if valid:
+                        self._backup_for_item[eq_seed] = [s for _, s, _ in valid]
+                        parts = [f"{role} '{_item_name(it)}'" for role, _, it in valid]
+                        print(f"agent {self._tick_count}: 2H '{name}' [{label}] beats backup"
+                              f" {bk_label} - keeping as eviction insurance:"
+                              f" {', '.join(parts)}", file=self.log)
             else:
-                print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={backup_seed}"
-                      f" [{bk_label}] - '{name}' seed={eq_seed} [{label}] is better", file=self.log)
-                self._queued_seeds.add(backup_seed)
-                self._action_queue.append({'action': 'drop', 'seed': backup_seed, 'name': bk_name})
+                # Normal: single backup item competing for the same slot.
+                # backup_seeds may have len > 1 when a 1H inherited a 2H backup list
+                # via the transfer chain (index 0 = weapon, index 1 = shield).
+                bk_seed = backup_seeds[0]
+                bk_item, _ = self._find_inv_by_seed(player, bk_seed)
+                if bk_item is None:
+                    # Backup already gone (dropped by another path); nothing to compare.
+                    continue
+                bk_score, bk_label = _item_score_for_warrior(bk_item, player, complement)
+                bk_name = _item_name(bk_item)
+                if bk_score > score:
+                    print(f"agent {self._tick_count}: backup '{bk_name}' seed={bk_seed}"
+                          f" [{bk_label}] beats '{name}' seed={eq_seed} [{label}]"
+                          f" - equipping backup", file=self.log)
+                    self._pending_equip[bc] = (bk_seed, bk_score, bk_name)
+                    self._queued_seeds.add(bk_seed)
+                    # The equip action swaps backup into body; main moves to InvList
+                    # and is dropped on the next tick via _evaluate_and_queue.
+                    self._action_queue.append(
+                        {'action': 'equip', 'seed': bk_seed, 'name': bk_name, 'body_cii': bc})
+                else:
+                    print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
+                          f" [{bk_label}] - '{name}' seed={eq_seed} [{label}] is better", file=self.log)
+                    self._queued_seeds.add(bk_seed)
+                    self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
+                # Free any extra backups (e.g. a shield stranded when a 1H inherited a 2H
+                # backup list via the transfer chain). Re-evaluate them now that the slot
+                # context is correct (identified item is in InvBody).
+                for extra_seed in backup_seeds[1:]:
+                    self._queued_seeds.discard(extra_seed)
+                    self._evaluate_and_queue(d, extra_seed)
         return False
 
     def _evaluate_misc_item(self, d, item, seed, name):
@@ -1825,14 +1901,13 @@ class AgentAI:
         """
         if int(item._itype) == dx.ItemType.Bow.value:
             return False, 0.0, "bow", 0.0, "", None, None
-        if int(item._iLoc) == dx.item_equip_type.ILOC_TWOHAND.value:
-            return False, 0.0, "two-handed", 0.0, "", None, None
 
-        body_cii   = _item_body_slot(item)
-        iloc       = int(item._iLoc)
+        ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
         ILOC_RING  = dx.item_equip_type.ILOC_RING.value
         HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
         HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+        iloc       = int(item._iLoc)
+        body_cii   = _item_body_slot(item)
 
         if iloc == ILOC_RING:
             left_cii  = dx.inv_item.INVITEM_RING_LEFT.value
@@ -1852,14 +1927,89 @@ class AgentAI:
                 body_cii = left_cii if ls <= rs else right_cii
             complement = None
 
+        elif iloc == ILOC_2H:
+            # New item is 2H: score weapon-only (2H cannot pair with a shield).
+            # Old score is the full combo (1H+shield) or weapon-only if 2H is equipped.
+            new_score = _weapon_only_score(item)
+            new_label = f"score={new_score:.1f}"
+            pending   = self._pending_equip.get(HAND_LEFT)
+            if pending is not None:
+                _, old_score, old_name = pending
+                return (new_score > old_score, new_score, new_label,
+                        old_score, f"score={old_score:.1f}", old_name, HAND_LEFT)
+            eq = player.InvBody[HAND_LEFT]
+            if int(eq._itype) == dx.ItemType.None_.value:
+                return new_score >= 0.0, new_score, new_label, 0.0, "empty", "", HAND_LEFT
+            if int(eq._iLoc) == ILOC_2H:
+                old_score = _weapon_only_score(eq)
+            else:
+                # 1H in left: compare against full 1H+shield combo.
+                hand_r = player.InvBody[HAND_RIGHT]
+                live_shield = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
+                if live_shield is None:
+                    # A shield equip may be queued but not yet confirmed by the engine
+                    # (e.g. backup-shield restore in flight). Include it so the 2H is
+                    # not re-equipping against a temporarily bare 1H.
+                    pend_r = self._pending_equip.get(HAND_RIGHT)
+                    if pend_r is not None:
+                        live_shield, _ = self._find_inv_by_seed(player, pend_r[0])
+                old_score, _ = _item_score_for_warrior(eq, player, live_shield)
+            old_label = f"score={old_score:.1f}"
+            is_better = new_score > old_score or (
+                new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
+            return is_better, new_score, new_label, old_score, old_label, _item_name(eq), HAND_LEFT
+
         elif body_cii == HAND_LEFT:
-            # 1H weapon: score as a combo with the live shield.
-            hand_r     = player.InvBody[HAND_RIGHT]
+            # 1H weapon: score as combo with live shield.
+            # When 2H is equipped, pair with backup shield (if any) for combo comparison.
+            hand_l_eq = player.InvBody[HAND_LEFT]
+            hand_r    = player.InvBody[HAND_RIGHT]
+            if (int(hand_l_eq._itype) != dx.ItemType.None_.value
+                    and int(hand_l_eq._iLoc) == ILOC_2H):
+                bk_sh_item = None
+                bk_list = self._backup_for_item.get(int(hand_l_eq._iSeed), [])
+                if len(bk_list) > 1:
+                    bk_sh_item = self._find_inv_by_seed(player, bk_list[1])[0]
+                new_score, new_label = _item_score_for_warrior(item, player, bk_sh_item)
+                pending = self._pending_equip.get(HAND_LEFT)
+                if pending is not None:
+                    _, old_score, old_name = pending
+                    return (new_score > old_score, new_score, new_label,
+                            old_score, f"score={old_score:.1f}", old_name, HAND_LEFT)
+                old_score = _weapon_only_score(hand_l_eq)
+                old_label = f"score={old_score:.1f}"
+                is_better = new_score > old_score or (
+                    new_score == old_score and _dur_ratio(item) > _dur_ratio(hand_l_eq))
+                return (is_better, new_score, new_label, old_score, old_label,
+                        _item_name(hand_l_eq), HAND_LEFT)
             complement = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
 
         elif body_cii == HAND_RIGHT:
-            # Shield: score as a combo with the live weapon.
-            hand_l     = player.InvBody[HAND_LEFT]
+            # Shield: when 2H occupies HAND_LEFT, try combo (new shield + backup weapon) vs 2H.
+            # If no backup weapon available, shield can't fill a hand alone - drop it.
+            hand_l = player.InvBody[HAND_LEFT]
+            if (int(hand_l._itype) != dx.ItemType.None_.value
+                    and int(hand_l._iLoc) == ILOC_2H):
+                bk_wp_item = None
+                bk_list = self._backup_for_item.get(int(hand_l._iSeed), [])
+                if len(bk_list) > 0:
+                    bk_wp_item = self._find_inv_by_seed(player, bk_list[0])[0]
+                if bk_wp_item is None:
+                    # No backup weapon: shield can't evict 2H without a weapon partner.
+                    # new_score carries shield-only score for the backup-upgrade comparison.
+                    return (False, _shield_only_score(item), "shield-blocked-by-2h",
+                            0.0, "", None, HAND_RIGHT)
+                sh_score   = _shield_only_score(item)
+                combo_score = sh_score + max(0.0, _weapon_only_score(bk_wp_item))
+                old_score  = _weapon_only_score(hand_l)
+                old_label  = f"score={old_score:.1f}"
+                if combo_score > old_score:
+                    combo_label = f"combo={combo_score:.1f}"
+                    return (True, combo_score, combo_label,
+                            old_score, old_label, _item_name(hand_l), HAND_RIGHT)
+                # Combo loses: return shield-only score so backup-upgrade comparison is correct.
+                return (False, sh_score, f"score={sh_score:.1f}",
+                        old_score, old_label, _item_name(hand_l), HAND_RIGHT)
             complement = hand_l if int(hand_l._itype) != dx.ItemType.None_.value else None
 
         else:
@@ -1916,7 +2066,7 @@ class AgentAI:
         # Backup items are re-evaluated explicitly by _cleanup_stale_backups or
         # _resolve_identified_equipped after removing the map entry. Any other call
         # (e.g. the level-change re-evaluation loop) must not touch them.
-        if seed in self._backup_for_item.values():
+        if any(seed in lst for lst in self._backup_for_item.values()):
             return
 
         name = _item_name(item)
@@ -1982,29 +2132,101 @@ class AgentAI:
             else:
                 print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag}"
                       f" over '{old_name}' [{old_label}]", file=self.log)
-            # Transfer or drop the backup for the item being displaced.
-            # Y beats X_base, and B was stashed because B <= X_base, so Y > B provably.
-            # If Y is also unidentified, re-key B as backup for Y - still useful insurance.
-            # If Y is identified, B is no longer needed and can be dropped.
+            # Handle the item(s) displaced by this equip.
+            ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
+            HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
+            HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
             eq_cur  = player.InvBody[body_cii]
             eq_seed = int(eq_cur._iSeed) if int(eq_cur._itype) != dx.ItemType.None_.value else None
-            if eq_seed and eq_seed in self._backup_for_item:
-                bk_seed = self._backup_for_item.pop(eq_seed)
-                bk_item, _ = self._find_inv_by_seed(player, bk_seed)
-                if bk_item is not None:
-                    bk_name = _item_name(bk_item)
-                    if _needs_identification(item):
-                        print(f"agent {self._tick_count}: transfer backup '{bk_name}' seed={bk_seed}"
-                              f" to unidentified new equip '{name}' seed={seed}", file=self.log)
-                        self._backup_for_item[seed] = bk_seed
-                    else:
-                        print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
-                              f" - new equip '{name}' seed={seed} supersedes it", file=self.log)
-                        self._queued_seeds.add(bk_seed)
-                        self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
+
+            # 2H eviction: new 1H weapon or shield evicts the 2H from HAND_LEFT.
+            # Engine now handles the physical eviction; here we queue the backup partner
+            # for the other hand and release the backup list.
+            hand_l = player.InvBody[HAND_LEFT]
+            if (body_cii in (HAND_LEFT, HAND_RIGHT)
+                    and int(item._iLoc) != ILOC_2H
+                    and int(hand_l._itype) != dx.ItemType.None_.value
+                    and int(hand_l._iLoc) == ILOC_2H):
+                two_h_seed = int(hand_l._iSeed)
+                bk_list    = self._backup_for_item.pop(two_h_seed, [])
+                # body_cii=HAND_LEFT (1H weapon): pair with backup shield (index 1)
+                # body_cii=HAND_RIGHT (shield):   pair with backup weapon (index 0)
+                bk_idx        = 1 if body_cii == HAND_LEFT else 0
+                other_body    = HAND_RIGHT if body_cii == HAND_LEFT else HAND_LEFT
+                bk_other_seed = bk_list[bk_idx] if bk_idx < len(bk_list) else None
+                if bk_other_seed is not None:
+                    bk_other_item, _ = self._find_inv_by_seed(player, bk_other_seed)
+                    if bk_other_item is not None:
+                        bk_other_name = _item_name(bk_other_item)
+                        role = 'shield' if body_cii == HAND_LEFT else 'weapon'
+                        print(f"agent {self._tick_count}: also equip {role}"
+                              f" '{bk_other_name}' seed={bk_other_seed}"
+                              f" alongside '{name}'", file=self.log)
+                        self._pending_equip[other_body] = (bk_other_seed, new_score, bk_other_name)
+                        self._queued_seeds.add(bk_other_seed)
+                        self._action_queue.append(
+                            {'action': 'equip', 'seed': bk_other_seed,
+                             'name': bk_other_name, 'body_cii': other_body})
+
+            if int(item._iLoc) == ILOC_2H and _needs_identification(item):
+                # Unidentified 2H wins: proactively reserve displaced weapon + shield as
+                # backups. The guard check in _evaluate_and_queue will protect them from
+                # re-evaluation until the 2H is identified.
+                # Drop any prior backup the displaced weapon had first.
+                if eq_seed and eq_seed in self._backup_for_item:
+                    prior_seeds = self._backup_for_item.pop(eq_seed)
+                    for ps in prior_seeds:
+                        pi, _ = self._find_inv_by_seed(player, ps)
+                        if pi is not None:
+                            pn = _item_name(pi)
+                            print(f"agent {self._tick_count}: drop prior backup '{pn}' seed={ps}"
+                                  f" - 2H '{name}' takes over", file=self.log)
+                            self._queued_seeds.add(ps)
+                            self._action_queue.append({'action': 'drop', 'seed': ps, 'name': pn})
+                backups = []
+                bk_wname = bk_sname = None
+                if eq_seed:
+                    backups.append(eq_seed)
+                    bk_wname = _item_name(eq_cur)
+                hand_r = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
+                if int(hand_r._itype) != dx.ItemType.None_.value:
+                    backups.append(int(hand_r._iSeed))
+                    bk_sname = _item_name(hand_r)
+                if backups:
+                    parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
+                           + [f"shield '{bk_sname}'" if bk_sname else None])
+                    print(f"agent {self._tick_count}: reserve"
+                          f" {', '.join(p for p in parts if p)}"
+                          f" for unidentified 2H '{name}' seed={seed}", file=self.log)
+                    self._backup_for_item[seed] = backups
+            elif eq_seed and eq_seed in self._backup_for_item:
+                if int(eq_cur._iLoc) == ILOC_2H:
+                    # 2H backup list contains weapon+shield for two different slots.
+                    # Leave bfi intact; _cleanup_stale_backups re-evaluates them
+                    # individually the tick after the 2H reaches InvList.
+                    pass
                 else:
-                    print(f"agent {self._tick_count}: backup seed={bk_seed} gone from inventory"
-                          f" while displacing eq_seed={eq_seed}", file=self.log)
+                    # Normal: transfer or drop the displaced item's prior backup.
+                    # Y beats X_base, and B was stashed because B <= X_base, so Y > B provably.
+                    # If Y is also unidentified, re-key B as backup for Y.
+                    # If Y is identified, B is no longer needed.
+                    bk_seeds = self._backup_for_item.pop(eq_seed)
+                    for bk_seed in bk_seeds:
+                        bk_item, _ = self._find_inv_by_seed(player, bk_seed)
+                        if bk_item is not None:
+                            bk_name = _item_name(bk_item)
+                            if _needs_identification(item):
+                                print(f"agent {self._tick_count}: transfer backup '{bk_name}' seed={bk_seed}"
+                                      f" to unidentified new equip '{name}' seed={seed}", file=self.log)
+                                self._backup_for_item.setdefault(seed, []).append(bk_seed)
+                            else:
+                                print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
+                                      f" - new equip '{name}' seed={seed} supersedes it", file=self.log)
+                                self._queued_seeds.add(bk_seed)
+                                self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
+                        else:
+                            print(f"agent {self._tick_count}: backup seed={bk_seed} gone from inventory"
+                                  f" while displacing eq_seed={eq_seed}", file=self.log)
             # Set _pending_equip at queue-time so subsequent evaluations compare against
             # this winner. Not added to any exclusion set: displaced gear must re-enter evaluation.
             self._pending_equip[body_cii] = (seed, new_score, name)
@@ -2024,7 +2246,7 @@ class AgentAI:
                     and eq_seed not in self._backup_for_item):
                 print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
                       f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
-                self._backup_for_item[eq_seed] = seed
+                self._backup_for_item[eq_seed] = [seed]
                 return
             if (pending is not None
                     and old_name is not None
@@ -2036,11 +2258,59 @@ class AgentAI:
                         print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
                               f" as backup for pending unidentified '{pend_name}'"
                               f" pend_seed={pend_seed}", file=self.log)
-                        self._backup_for_item[pend_seed] = seed
+                        self._backup_for_item[pend_seed] = [seed]
+                        return
+            # Item found while unidentified 2H is active: try to upgrade the backup list
+            # before dropping. Weapons (body_cii=HAND_LEFT) compare vs backup[0]; shields
+            # (body_cii=HAND_RIGHT, slot empty) compare vs backup[1] or fill it if absent.
+            # Solo scores are used (weapon-only / shield-only), not the full combo.
+            ILOC_2H_v    = dx.item_equip_type.ILOC_TWOHAND.value
+            HAND_LEFT_v  = dx.inv_item.INVITEM_HAND_LEFT.value
+            HAND_RIGHT_v = dx.inv_item.INVITEM_HAND_RIGHT.value
+            eq_2h = player.InvBody[HAND_LEFT_v]
+            if (new_score >= 0.0
+                    and body_cii in (HAND_LEFT_v, HAND_RIGHT_v)
+                    and int(eq_2h._itype) != dx.ItemType.None_.value
+                    and int(eq_2h._iLoc) == ILOC_2H_v
+                    and _needs_identification(eq_2h)):
+                hl_seed   = int(eq_2h._iSeed)
+                bk_list   = self._backup_for_item.get(hl_seed)
+                is_shield = (body_cii == HAND_RIGHT_v)
+                bk_idx    = 1 if is_shield else 0
+                if bk_list is not None:
+                    if bk_idx < len(bk_list):
+                        existing_seed = bk_list[bk_idx]
+                        existing_item, _ = self._find_inv_by_seed(player, existing_seed)
+                        if existing_item is not None:
+                            e_score   = (_shield_only_score(existing_item) if is_shield
+                                         else _weapon_only_score(existing_item))
+                            new_cmp   = (_shield_only_score(item) if is_shield
+                                         else _weapon_only_score(item))
+                            if new_cmp > e_score:
+                                bk_list[bk_idx] = seed
+                                old_bk = _item_name(existing_item)
+                                print(f"agent {self._tick_count}: upgrade 2H backup[{bk_idx}]"
+                                      f" '{old_bk}' seed={existing_seed} ->"
+                                      f" '{name}' seed={seed} [{new_label}]"
+                                      f" for 2H seed={hl_seed}", file=self.log)
+                                self._queued_seeds.add(existing_seed)
+                                self._action_queue.append(
+                                    {'action': 'drop', 'seed': existing_seed, 'name': old_bk})
+                                return
+                    elif bk_idx == 1:
+                        # No shield backup yet; stash this one.
+                        bk_list.append(seed)
+                        print(f"agent {self._tick_count}: add shield backup"
+                              f" '{name}' seed={seed} [{new_label}]"
+                              f" for unidentified 2H seed={hl_seed}", file=self.log)
                         return
             if old_name is None:
-                print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} - class filter [{new_label}]",
-                      file=self.log)
+                if new_label == "shield-blocked-by-2h":
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - shield blocked by active 2H", file=self.log)
+                else:
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - class filter [{new_label}]", file=self.log)
             elif new_score == old_score:
                 print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} [{new_label}]"
                       f" - tied with '{old_name}' [{old_label}]", file=self.log)
