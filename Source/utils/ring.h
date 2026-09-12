@@ -33,7 +33,7 @@ enum ring_entry_type {
 	/* Inventory operations: cii uses inv_item addressing (0-6 body, 7-46 inv, 47-54 belt) */
 	RING_ENTRY_KEY_INV_USE_ITEM    = 1<<16, /* data1 = cii */
 	RING_ENTRY_KEY_INV_MOVE_ITEM   = 1<<17, /* data1 = src_cii, data2 = dst_cii */
-	RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18, /* data1 = cii */
+	RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18, /* data1 = cii; data2 bit0 = mask, bit1 = destroy */
 	RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19,
 	RING_ENTRY_KEY_INV_REPAIR_ITEM   = 1<<22, /* data1 = cii */
 	RING_ENTRY_KEY_INV_IDENTIFY_ITEM = 1<<23, /* data1 = scroll_cii, data2 = target_cii */

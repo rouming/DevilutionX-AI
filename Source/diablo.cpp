@@ -987,13 +987,30 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 		} else if (bit == RING_ENTRY_KEY_INV_DROP_ITEM) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
-				bool ok = InvDropItem(*MyPlayer, static_cast<int>(data1));
-				// data2=1: AI agent requests masking. ItemLimbo holds the dropped item
-				// pending placement; OnPutItem will std::move(ItemLimbo) to the floor
-				// item, carrying _iMasked through. All pickup paths check this flag.
-				if (ok && data2)
-					ItemLimbo._iMasked = true;
-				printf(">> %s: INV_DROP_ITEM cii=%u mask=%u ok=%d\n", __func__, data1, data2, ok);
+				const int cii = static_cast<int>(data1);
+				if (data2 & 2) {
+					// Destroy mode (test harness): remove from inventory without
+					// placing on the floor. Avoids exhausting adjacent floor tiles
+					// when the hero is stationary during inventory logic testing.
+					Player &player = *MyPlayer;
+					if (cii < INVITEM_INV_FIRST) {
+						RemoveEquipment(player, static_cast<inv_body_loc>(cii), false);
+					} else if (cii <= INVITEM_INV_LAST) {
+						player.RemoveInvItem(cii - INVITEM_INV_FIRST);
+					} else {
+						player.RemoveSpdBarItem(cii - INVITEM_BELT_FIRST);
+					}
+					CalcPlrInv(player, false);
+					printf(">> %s: INV_DROP_ITEM cii=%u DESTROYED\n", __func__, cii);
+				} else {
+					bool ok = InvDropItem(*MyPlayer, cii);
+					// data2 bit 0: AI agent requests masking. ItemLimbo holds the dropped
+					// item pending placement; OnPutItem will std::move(ItemLimbo) to the
+					// floor item, carrying _iMasked through. All pickup paths check this.
+					if (ok && (data2 & 1))
+						ItemLimbo._iMasked = true;
+					printf(">> %s: INV_DROP_ITEM cii=%u mask=%u ok=%d\n", __func__, cii, data2 & 1, ok);
+				}
 			}
 			continue;
 
