@@ -57,10 +57,11 @@ class RingEntryType:
     # Inventory operations: item_slot uses inv_item addressing (0-6 body, 7-46 inv, 47-54 belt)
     RING_ENTRY_KEY_INV_USE_ITEM    = 1<<16  # data1 = item_slot
     RING_ENTRY_KEY_INV_MOVE_ITEM   = 1<<17  # data1 = src_slot, data2 = dst_slot
-    RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18  # data1 = item_slot
+    RING_ENTRY_KEY_INV_DROP_ITEM   = 1<<18  # data1 = cii; data2 bit0=mask, bit1=destroy
     RING_ENTRY_KEY_INV_REORGANIZE  = 1<<19
     RING_ENTRY_KEY_INV_REPAIR_ITEM   = 1<<22
     RING_ENTRY_KEY_INV_IDENTIFY_ITEM = 1<<23  # data1 = scroll_cii, data2 = target_cii
+    RING_ENTRY_KEY_INV_GIFT_ITEM     = 1<<24  # place GiftItem into player inventory
 
     # Spell cast: auto-targets via the gamepad QuickCast path on the engine side.
     RING_ENTRY_KEY_CAST_SPELL      = 1<<20  # data1 = SpellID

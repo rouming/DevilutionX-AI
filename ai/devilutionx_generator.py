@@ -44,6 +44,7 @@ DEVILUTIONX_VARS = [
     "devilution::ActiveItems",
     "devilution::Items",
     "devilution::dItem",
+    "devilution::GiftItem",
 
     # Automap
 

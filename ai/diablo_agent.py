@@ -747,6 +747,9 @@ class AgentAI:
         self._pending_item_at        = None
         self._pathfind_stall_logged  = 0.0  # time.time() of last stall log
         self._tick_count             = 0     # monotonically increasing tick counter for logging
+        # When True: INV_DROP_ITEM uses destroy bit (data2|=2) instead of floor drop.
+        # Set by test harness so floor tiles are never exhausted around a stationary hero.
+        self._test_mode              = False
         self._inv_prev               = None  # previous tick full snapshot (cii,seed,name)
         # body_cii -> (seed, score, name): set at queue-time so subsequent evaluations
         # for the same slot compare against the queued winner, not the live InvBody item.
@@ -1554,12 +1557,14 @@ class AgentAI:
 
 
     def _drop_and_mask(self, d, cii):
-        """Drop inventory item cii. data2=1 tells the engine to set _iMasked on the
-        floor item after a successful drop."""
+        """Drop inventory item cii. Normally data2 bit0 tells the engine to set _iMasked
+        on the floor item. In test mode data2 bit1 destroys the item instead of dropping
+        it on the floor, so adjacent floor tiles are never exhausted."""
         RE = ring.RingEntryType
+        data2 = 2 if self._test_mode else 1
         self.game.submit_key(
             RE.RING_ENTRY_KEY_INV_DROP_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
-            data=(cii, 1))
+            data=(cii, data2))
 
     def _cleanup_stale_backups(self, d):
         """Scan _backup_for_item for stale entries every tick.

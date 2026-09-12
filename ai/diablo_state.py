@@ -1783,27 +1783,20 @@ class DiabloGame:
         # Submit key
         ring.submit(self.state.input_queue)
 
-        feedback_events = [
-            # Released keys event
-            key & ~ring.RingEntryType.RING_ENTRY_FLAGS,
-            # `STEP_FINISHED` - only if `game_ticks_per_step` is not 0
-            ring.RingEntryType.RING_ENTRY_EVENT_STEP_FINISHED,
-        ]
-        # Wait for feedback events that come one after another
-        event_idx = 0
-        while event_idx < len(feedback_events):
+        # Collect the released-keys event and (in step mode) STEP_FINISHED.
+        # The order of these two events depends on game_ticks_per_step:
+        # with 1 tick/step they arrive as [STEP_FINISHED, release]; with more
+        # ticks the release fires first. Use a set to stay order-independent.
+        pending = {key & ~ring.RingEntryType.RING_ENTRY_FLAGS}
+        if self.game_ticks_per_step:
+            pending.add(ring.RingEntryType.RING_ENTRY_EVENT_STEP_FINISHED)
+        while pending:
             ring.wait_any_submitted(self.state.events_queue, read_idx)
             entry = ring.get_entry_to_retrieve(self.state.events_queue, read_idx)
             read_idx += 1
             assert entry != None
             if entry.en_tag == request_tag:
-                event_type = feedback_events[event_idx]
-                event_idx += 1
-                assert entry.en_type == event_type
-
-                if not self.game_ticks_per_step:
-                    # We receive only release event
-                    break
+                pending.discard(entry.en_type)
 
     def find_restore_item(self, candidates):
         """Search belt then inventory for the first matching item; return its
