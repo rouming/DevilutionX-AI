@@ -1028,6 +1028,21 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 			}
 			continue;
 
+		} else if (bit == RING_ENTRY_KEY_INV_GIFT_ITEM) {
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN && MyPlayer) {
+				Player &player = *MyPlayer;
+				GiftItem._iCreateInfo &= ~CF_PREGEN;
+				GiftItem.updateRequiredStatsCacheForPlayer(player);
+				bool done = AutoEquipEnabled(player, GiftItem)
+				    && AutoEquip(player, GiftItem, true, true);
+				if (!done) done = AutoPlaceItemInBelt(player, GiftItem, true, true);
+				if (!done) done = AutoPlaceItemInInventory(player, GiftItem, true);
+				printf(">> %s: INV_GIFT_ITEM '%s' done=%d\n", __func__,
+				       GiftItem._iName, done);
+			}
+			continue;
+
 		} else if (bit == RING_ENTRY_KEY_CAST_SPELL) {
 			injected = true;
 			if (sdl_type == SDL_KEYDOWN && MyPlayer) {

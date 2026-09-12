@@ -486,6 +486,8 @@ struct CornerStoneStruct {
 extern Item Items[MAXITEMS + 1];
 extern uint8_t ActiveItems[MAXITEMS];
 extern uint8_t ActiveItemCount;
+/** Staging slot written by the AI ring command INV_GIFT_ITEM before triggering placement. */
+extern Item GiftItem;
 /** Contains the location of dropped items. */
 extern int8_t dItem[MAXDUNX][MAXDUNY];
 extern bool ShowUniqueItemInfoBox;
