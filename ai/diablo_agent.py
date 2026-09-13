@@ -771,6 +771,7 @@ class AgentAI:
         # currently equipped item needs identification and turns out cursed after.
         # Keyed by the equipped item's seed (stable vs autosort).
         self._backup_for_item        = {}
+        self._backup_resolved        = set()  # eq_seeds resolved via _resolve_identified_equipped
 
         self._pathfinder = Pathfinder(game, view_radius)
         # Agent-owned set of masked drop positions (level-specific). Stable across
@@ -873,7 +874,11 @@ class AgentAI:
         # fires correctly instead of falling through to a premature drop.
         if not self.no_gear_management:
             for bc in list(self._pending_equip.keys()):
-                if int(d.player.InvBody[bc]._iSeed) == self._pending_equip[bc][0]:
+                slot = d.player.InvBody[bc]
+                # Guard against stale _iSeed: Item::clear() only zeroes _itype,
+                # leaving _iSeed from the previously-cleared item. Check _itype first.
+                if (int(slot._itype) != dx.ItemType.None_.value
+                        and int(slot._iSeed) == self._pending_equip[bc][0]):
                     seed, score, name = self._pending_equip[bc]
                     print(f"agent {self._tick_count}: equipped '{name}' seed={seed}"
                           f" lvl={self.cur_level}"
@@ -1588,8 +1593,12 @@ class AgentAI:
             bk_seeds = [s for s in self._backup_for_item[eq_seed]
                         if s in inv_seeds or s in body_by_seed]
             if not bk_seeds:
+                self._backup_resolved.discard(eq_seed)
                 del self._backup_for_item[eq_seed]
                 continue
+            if len(bk_seeds) < len(self._backup_for_item[eq_seed]):
+                # A backup item disappeared; re-enable evaluation for this seed.
+                self._backup_resolved.discard(eq_seed)
             self._backup_for_item[eq_seed] = bk_seeds
             bc = body_by_seed.get(eq_seed)
             if bc is None:
@@ -1597,15 +1606,17 @@ class AgentAI:
                 # Skip cleanup until the equip lands or the pending entry is gone.
                 if any(v[0] == eq_seed for v in self._pending_equip.values()):
                     continue
+                self._backup_resolved.discard(eq_seed)
                 bk_seeds = self._backup_for_item.pop(eq_seed)
                 for s in bk_seeds:
                     self._queued_seeds.discard(s)
                     self._evaluate_and_queue(d, s)
                 continue
             if not _needs_identification(player.InvBody[bc]):
-                # Only trigger on the tick identification happens, not every subsequent tick.
-                # _body_id_state holds last tick's state, so False here means "just identified".
-                if not self._body_id_state.get(eq_seed, False):
+                # Trigger once when the item is first resolved (identified or NORMAL on first
+                # equip). _backup_resolved suppresses repeat calls on subsequent ticks.
+                if (not self._body_id_state.get(eq_seed, False)
+                        and eq_seed not in self._backup_resolved):
                     late_id.add(eq_seed)
         if late_id:
             self._resolve_identified_equipped(d, late_id)
@@ -1694,6 +1705,7 @@ class AgentAI:
                              if s is not None and it is not None]
                     if valid:
                         self._backup_for_item[eq_seed] = [s for _, s, _ in valid]
+                        self._backup_resolved.add(eq_seed)
                         parts = [f"{role} '{_item_name(it)}'" for role, _, it in valid]
                         print(f"agent {self._tick_count}: 2H '{name}' [{label}] beats backup"
                               f" {bk_label} - keeping as eviction insurance:"
@@ -2002,8 +2014,10 @@ class AgentAI:
                 bk_list = self._backup_for_item.get(int(hand_l._iSeed), [])
                 if len(bk_list) > 0:
                     bk_wp_item = self._find_inv_by_seed(player, bk_list[0])[0]
-                if bk_wp_item is None:
-                    # No backup weapon: shield can't evict 2H without a weapon partner.
+                if (bk_wp_item is None
+                        or int(bk_wp_item._iClass) != dx.item_class.ICLASS_WEAPON.value):
+                    # No backup weapon (or stale entry holds a shield at index 0):
+                    # shield can't evict 2H without a weapon partner.
                     # new_score carries shield-only score for the backup-upgrade comparison.
                     return (False, _shield_only_score(item), "shield-blocked-by-2h",
                             0.0, "", None, HAND_RIGHT)
@@ -2175,50 +2189,70 @@ class AgentAI:
                         self._action_queue.append(
                             {'action': 'equip', 'seed': bk_other_seed,
                              'name': bk_other_name, 'body_cii': other_body})
-                # Drop the non-partner backup; it is no longer needed after 2H eviction.
+                # Non-partner backup: inherit as backup for new unidentified item,
+                # or drop it if the new item is already identified.
                 abandon_idx  = 1 - bk_idx
                 bk_drop_seed = bk_list[abandon_idx] if abandon_idx < len(bk_list) else None
                 if bk_drop_seed is not None:
                     bk_drop_item, _ = self._find_inv_by_seed(player, bk_drop_seed)
                     if bk_drop_item is not None:
                         bk_drop_name = _item_name(bk_drop_item)
-                        print(f"agent {self._tick_count}: drop non-partner backup '{bk_drop_name}'"
-                              f" seed={bk_drop_seed} - 2H evicted", file=self.log)
-                        self._queued_seeds.add(bk_drop_seed)
-                        self._action_queue.append(
-                            {'action': 'drop', 'seed': bk_drop_seed, 'name': bk_drop_name})
+                        if _needs_identification(item):
+                            print(f"agent {self._tick_count}: inherit non-partner backup"
+                                  f" '{bk_drop_name}' seed={bk_drop_seed}"
+                                  f" for unidentified '{name}' seed={seed}", file=self.log)
+                            self._backup_for_item[seed] = [bk_drop_seed]
+                        else:
+                            print(f"agent {self._tick_count}: drop non-partner backup '{bk_drop_name}'"
+                                  f" seed={bk_drop_seed} - 2H evicted", file=self.log)
+                            self._queued_seeds.add(bk_drop_seed)
+                            self._action_queue.append(
+                                {'action': 'drop', 'seed': bk_drop_seed, 'name': bk_drop_name})
 
-            if int(item._iLoc) == ILOC_2H and _needs_identification(item):
-                # Unidentified 2H wins: proactively reserve displaced weapon + shield as
-                # backups. The guard check in _evaluate_and_queue will protect them from
-                # re-evaluation until the 2H is identified.
-                # Drop any prior backup the displaced weapon had first.
+            if int(item._iLoc) == ILOC_2H:
+                # 2H wins: proactively reserve displaced weapon + shield as eviction insurance.
+                # The early-exit guard in _evaluate_and_queue protects them from re-evaluation.
+                # For identified 2H, _resolve_identified_equipped re-validates and re-stores
+                # the backup on the next tick if the 2H still wins.
+                inherited = False
                 if eq_seed and eq_seed in self._backup_for_item:
                     prior_seeds = self._backup_for_item.pop(eq_seed)
-                    for ps in prior_seeds:
-                        pi, _ = self._find_inv_by_seed(player, ps)
-                        if pi is not None:
-                            pn = _item_name(pi)
-                            print(f"agent {self._tick_count}: drop prior backup '{pn}' seed={ps}"
-                                  f" - 2H '{name}' takes over", file=self.log)
-                            self._queued_seeds.add(ps)
-                            self._action_queue.append({'action': 'drop', 'seed': ps, 'name': pn})
-                backups = []
-                bk_wname = bk_sname = None
-                if eq_seed:
-                    backups.append(eq_seed)
-                    bk_wname = _item_name(eq_cur)
-                hand_r = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
-                if int(hand_r._itype) != dx.ItemType.None_.value:
-                    backups.append(int(hand_r._iSeed))
-                    bk_sname = _item_name(hand_r)
-                if backups:
-                    parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
-                           + [f"shield '{bk_sname}'" if bk_sname else None])
-                    print(f"agent {self._tick_count}: reserve"
-                          f" {', '.join(p for p in parts if p)}"
-                          f" for unidentified 2H '{name}' seed={seed}", file=self.log)
-                    self._backup_for_item[seed] = backups
+                    if int(eq_cur._iLoc) == ILOC_2H:
+                        # New 2H evicts old 2H: inherit its backups (eviction insurance carries
+                        # over). Old 2H goes to InvList and scores lower, so it gets dropped.
+                        print(f"agent {self._tick_count}: inherit backups"
+                              f" {[f'{s:#010x}' for s in prior_seeds]}"
+                              f" from old 2H seed={eq_seed:#010x}"
+                              f" for new 2H '{name}' seed={seed}", file=self.log)
+                        self._backup_for_item[seed] = list(prior_seeds)
+                        inherited = True
+                    else:
+                        # Old equipped had a 1H backup: drop it (2H reserves from body instead).
+                        for ps in prior_seeds:
+                            pi, _ = self._find_inv_by_seed(player, ps)
+                            if pi is not None:
+                                pn = _item_name(pi)
+                                print(f"agent {self._tick_count}: drop prior backup '{pn}' seed={ps}"
+                                      f" - 2H '{name}' takes over", file=self.log)
+                                self._queued_seeds.add(ps)
+                                self._action_queue.append({'action': 'drop', 'seed': ps, 'name': pn})
+                if not inherited:
+                    backups = []
+                    bk_wname = bk_sname = None
+                    if eq_seed:
+                        backups.append(eq_seed)
+                        bk_wname = _item_name(eq_cur)
+                    hand_r = player.InvBody[dx.inv_item.INVITEM_HAND_RIGHT.value]
+                    if int(hand_r._itype) != dx.ItemType.None_.value:
+                        backups.append(int(hand_r._iSeed))
+                        bk_sname = _item_name(hand_r)
+                    if backups:
+                        parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
+                               + [f"shield '{bk_sname}'" if bk_sname else None])
+                        print(f"agent {self._tick_count}: reserve"
+                              f" {', '.join(p for p in parts if p)}"
+                              f" for unidentified 2H '{name}' seed={seed}", file=self.log)
+                        self._backup_for_item[seed] = backups
             elif eq_seed and eq_seed in self._backup_for_item:
                 if int(eq_cur._iLoc) == ILOC_2H:
                     # 2H backup list contains weapon+shield for two different slots.
@@ -2226,27 +2260,26 @@ class AgentAI:
                     # individually the tick after the 2H reaches InvList.
                     pass
                 else:
-                    # Normal: transfer or drop the displaced item's prior backup.
-                    # Y beats X_base, and B was stashed because B <= X_base, so Y > B provably.
-                    # If Y is also unidentified, re-key B as backup for Y.
-                    # If Y is identified, B is no longer needed.
+                    # Displaced item was itself unidentified (had a prior backup).
+                    # Drop the old backup; make the old main the backup for the new item.
                     bk_seeds = self._backup_for_item.pop(eq_seed)
                     for bk_seed in bk_seeds:
                         bk_item, _ = self._find_inv_by_seed(player, bk_seed)
                         if bk_item is not None:
                             bk_name = _item_name(bk_item)
-                            if _needs_identification(item):
-                                print(f"agent {self._tick_count}: transfer backup '{bk_name}' seed={bk_seed}"
-                                      f" to unidentified new equip '{name}' seed={seed}", file=self.log)
-                                self._backup_for_item.setdefault(seed, []).append(bk_seed)
-                            else:
-                                print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
-                                      f" - new equip '{name}' seed={seed} supersedes it", file=self.log)
-                                self._queued_seeds.add(bk_seed)
-                                self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
+                            print(f"agent {self._tick_count}: drop old backup '{bk_name}' seed={bk_seed}"
+                                  f" - displaced '{old_name}' eq_seed={eq_seed} takes its place",
+                                  file=self.log)
+                            self._queued_seeds.add(bk_seed)
+                            self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
                         else:
                             print(f"agent {self._tick_count}: backup seed={bk_seed} gone from inventory"
                                   f" while displacing eq_seed={eq_seed}", file=self.log)
+                    if _needs_identification(item):
+                        # Old main becomes the backup for the new unidentified item.
+                        print(f"agent {self._tick_count}: set displaced '{old_name}' seed={eq_seed}"
+                              f" as backup for unidentified '{name}' seed={seed}", file=self.log)
+                        self._backup_for_item[seed] = [eq_seed]
             # Set _pending_equip at queue-time so subsequent evaluations compare against
             # this winner. Not added to any exclusion set: displaced gear must re-enter evaluation.
             self._pending_equip[body_cii] = (seed, new_score, name)
@@ -2256,18 +2289,21 @@ class AgentAI:
         else:
             # Stash as backup - insurance in case the item occupying this slot turns cursed.
             # Two cases: (a) live unidentified equip; (b) pending unidentified equip.
-            eq      = player.InvBody[body_cii]
-            eq_seed = int(eq._iSeed)
+            # body_cii can be None for class-filtered items (e.g. bows for warrior);
+            # guard before indexing InvBody to avoid numpy axis-expansion on None.
             if (pending is None
                     and old_name is not None
-                    and new_score >= 0.0
-                    and int(eq._itype) != dx.ItemType.None_.value
-                    and _needs_identification(eq)
-                    and eq_seed not in self._backup_for_item):
-                print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
-                      f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
-                self._backup_for_item[eq_seed] = [seed]
-                return
+                    and body_cii is not None
+                    and new_score >= 0.0):
+                eq      = player.InvBody[body_cii]
+                eq_seed = int(eq._iSeed)
+                if (int(eq._itype) != dx.ItemType.None_.value
+                        and _needs_identification(eq)
+                        and eq_seed not in self._backup_for_item):
+                    print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
+                          f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
+                    self._backup_for_item[eq_seed] = [seed]
+                    return
             if (pending is not None
                     and old_name is not None
                     and new_score >= 0.0):
@@ -2280,7 +2316,7 @@ class AgentAI:
                               f" pend_seed={pend_seed}", file=self.log)
                         self._backup_for_item[pend_seed] = [seed]
                         return
-            # Item found while unidentified 2H is active: try to upgrade the backup list
+            # 2H active and has eviction-insurance backups: try to upgrade the backup list
             # before dropping. Weapons (body_cii=HAND_LEFT) compare vs backup[0]; shields
             # (body_cii=HAND_RIGHT, slot empty) compare vs backup[1] or fill it if absent.
             # Solo scores are used (weapon-only / shield-only), not the full combo.
@@ -2290,9 +2326,9 @@ class AgentAI:
             eq_2h = player.InvBody[HAND_LEFT_v]
             if (new_score >= 0.0
                     and body_cii in (HAND_LEFT_v, HAND_RIGHT_v)
+                    and int(item._iLoc) != ILOC_2H_v
                     and int(eq_2h._itype) != dx.ItemType.None_.value
-                    and int(eq_2h._iLoc) == ILOC_2H_v
-                    and _needs_identification(eq_2h)):
+                    and int(eq_2h._iLoc) == ILOC_2H_v):
                 hl_seed   = int(eq_2h._iSeed)
                 bk_list   = self._backup_for_item.get(hl_seed)
                 is_shield = (body_cii == HAND_RIGHT_v)
@@ -2302,6 +2338,16 @@ class AgentAI:
                         existing_seed = bk_list[bk_idx]
                         existing_item, _ = self._find_inv_by_seed(player, existing_seed)
                         if existing_item is not None:
+                            # Weapon arrives but bfi[0] holds a lone shield (weapon was
+                            # removed, shield slid to index 0): restore the pair by
+                            # inserting the weapon without dropping the shield.
+                            if (not is_shield
+                                    and int(existing_item._iClass) != dx.item_class.ICLASS_WEAPON.value):
+                                bk_list.insert(0, seed)
+                                print(f"agent {self._tick_count}: restore weapon backup"
+                                      f" '{name}' seed={seed} [{new_label}]"
+                                      f" for 2H seed={hl_seed}", file=self.log)
+                                return
                             e_score   = (_shield_only_score(existing_item) if is_shield
                                          else _weapon_only_score(existing_item))
                             new_cmp   = (_shield_only_score(item) if is_shield
@@ -2317,13 +2363,32 @@ class AgentAI:
                                 self._action_queue.append(
                                     {'action': 'drop', 'seed': existing_seed, 'name': old_bk})
                                 return
-                    elif bk_idx == 1:
-                        # No shield backup yet; stash this one.
-                        bk_list.append(seed)
-                        print(f"agent {self._tick_count}: add shield backup"
-                              f" '{name}' seed={seed} [{new_label}]"
-                              f" for unidentified 2H seed={hl_seed}", file=self.log)
-                        return
+                    elif bk_idx == 1 and bk_list:
+                        bk0_seed  = bk_list[0]
+                        bk0_item, _ = self._find_inv_by_seed(player, bk0_seed)
+                        if bk0_item is not None:
+                            if int(bk0_item._iClass) == dx.item_class.ICLASS_WEAPON.value:
+                                # Normal: weapon at bfi[0], stash this shield as bfi[1].
+                                bk_list.append(seed)
+                                print(f"agent {self._tick_count}: add shield backup"
+                                      f" '{name}' seed={seed} [{new_label}]"
+                                      f" for unidentified 2H seed={hl_seed}", file=self.log)
+                                return
+                            else:
+                                # Weapon gone; lone shield at bfi[0]. Upgrade if incoming is better.
+                                e_score = _shield_only_score(bk0_item)
+                                new_cmp = _shield_only_score(item)
+                                if new_cmp > e_score:
+                                    bk_list[0] = seed
+                                    old_bk = _item_name(bk0_item)
+                                    print(f"agent {self._tick_count}: upgrade 2H lone-shield backup"
+                                          f" '{old_bk}' seed={bk0_seed} ->"
+                                          f" '{name}' seed={seed} [{new_label}]"
+                                          f" for 2H seed={hl_seed}", file=self.log)
+                                    self._queued_seeds.add(bk0_seed)
+                                    self._action_queue.append(
+                                        {'action': 'drop', 'seed': bk0_seed, 'name': old_bk})
+                                    return
             if old_name is None:
                 if new_label == "shield-blocked-by-2h":
                     print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
