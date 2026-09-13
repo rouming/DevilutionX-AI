@@ -2404,6 +2404,9 @@ class AgentAI:
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 self._identify_pending_seeds.add(seed)
+                # Force one more tick so pending_id resolves against the
+                # now-identified item (cursed detection, backup compare, etc.).
+                self._inv_changed = True
                 RE = ring.RingEntryType
                 self.game.submit_key(
                     RE.RING_ENTRY_KEY_INV_IDENTIFY_ITEM | RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
