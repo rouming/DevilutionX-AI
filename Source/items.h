@@ -272,6 +272,7 @@ struct Item {
 	DVL_REINITIALIZES void clear()
 	{
 		this->_itype = ItemType::None;
+		this->_iSeed = 0;
 	}
 
 	/**
