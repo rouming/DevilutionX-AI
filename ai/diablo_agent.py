@@ -1773,16 +1773,8 @@ class AgentAI:
                 return
 
             if spellid == spellid_identify:
-                cap = 2
-                if _count_scroll_spellid(player, spellid) > cap:
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
-                          f" - scroll surplus (>{cap})", file=self.log)
-                    self._queued_seeds.add(seed)
-                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
-                else:
-                    # New identify scroll: immediately identify an equipped unidentified
-                    # item if any, so magical bonuses take effect right away.
-                    self._try_identify_with_new_scroll(d)
+                # Keep all - scarce and valuable, never drop.
+                self._try_identify_with_new_scroll(d)
                 return
 
             if spellid == spellid_portal:
