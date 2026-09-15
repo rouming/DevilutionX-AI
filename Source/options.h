@@ -710,6 +710,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryInt<int> heroPotionsMax;
 	/** @brief Disable door open/close on primary action; doors require secondary action */
 	OptionEntryBoolean noPrimaryActionDoors;
+	/** @brief Force-identify all non-normal items on creation (unfair play for AI training) */
+	OptionEntryBoolean allItemsIdentified;
 };
 
 struct ControllerOptions : OptionCategoryBase {

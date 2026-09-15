@@ -3184,7 +3184,8 @@ void GetItemAttrs(Item &item, _item_indexes itemData, int lvl)
 void SetupItem(Item &item)
 {
 	item.setNewAnimation(MyPlayer != nullptr && MyPlayer->pLvlLoad == 0);
-	item._iIdentified = false;
+	item._iIdentified = *GetOptions().Gameplay.allItemsIdentified
+	    && item._iMagical != ITEM_QUALITY_NORMAL;
 }
 
 Item *SpawnUnique(_unique_items uid, Point position, std::optional<int> level /*= std::nullopt*/, bool sendmsg /*= true*/, bool exactPosition /*= false*/)

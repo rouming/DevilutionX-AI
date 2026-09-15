@@ -948,6 +948,7 @@ GameplayOptions::GameplayOptions()
     , heroPotionsMin("Hero potions min", OptionEntryFlags::Invisible, "", "", 2)
     , heroPotionsMax("Hero potions max", OptionEntryFlags::Invisible, "", "", 20)
     , noPrimaryActionDoors("Disable doors on primary action", OptionEntryFlags::Invisible, "", "", false)
+    , allItemsIdentified("All items identified", OptionEntryFlags::Invisible, "", "", false)
 {
 }
 
@@ -1023,6 +1024,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&heroPotionsMin,
 		&heroPotionsMax,
 		&noPrimaryActionDoors,
+		&allItemsIdentified,
 	};
 }
 
