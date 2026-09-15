@@ -205,6 +205,11 @@ def _needs_identification(item):
             and not bool(item._iIdentified))
 
 
+def _is_magic(item):
+    """True when item has magic quality (MAGIC, UNIQUE, etc.) - has hidden or visible affixes."""
+    return int(item._iMagical) != dx.item_quality.ITEM_QUALITY_NORMAL.value
+
+
 def _unidentified_weapon_dmg(item):
     """Base avg damage before identification: (min + max) / 2."""
     return (int(item._iMinDam) + int(item._iMaxDam)) / 2
@@ -215,9 +220,9 @@ def _identified_weapon_dmg(item):
     return (_unidentified_weapon_dmg(item) + int(item._iPLDamMod)) * (1 + int(item._iPLDam) / 100)
 
 
-def _weapon_only_score(item):
+def _weapon_only_score(item, force_basic=False):
     """Damage contribution of a weapon (1H or 2H), excluding any shield."""
-    identified = not _needs_identification(item)
+    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
     dmg   = _identified_weapon_dmg(item) if identified else _unidentified_weapon_dmg(item)
     score = dmg
     if identified:
@@ -242,9 +247,9 @@ def _identified_item_ac(item):
     return ac + b + _pl_stats_warrior(item)
 
 
-def _shield_only_score(item):
+def _shield_only_score(item, force_basic=False):
     """AC contribution of a shield."""
-    identified = not _needs_identification(item)
+    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
     ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
     score = ac * _AC_WEIGHT
     if identified:
@@ -261,7 +266,7 @@ def _hand_combo_score(left, right):
     return ws + ss
 
 
-def _item_score_for_warrior(item, player, complement=None):
+def _item_score_for_warrior(item, player, complement=None, force_basic=False):
     """Scalar score + label for any equippable item (Warrior only).
 
     complement: the other-hand item to pair with, or None (default) for no pairing.
@@ -271,24 +276,29 @@ def _item_score_for_warrior(item, player, complement=None):
       cross-slot backup comparisons (step-2 2H logic), or None for no pairing
       (2H weapon scored alone, or shield scored alone when weapon cancels).
 
+    force_basic: when True, score using base stats only (no magic bonuses).
+      Passed to _weapon_only_score / _shield_only_score for the main item; the
+      complement is always scored at its natural level.
+      Not applied to jewelry (comparing basic jewelry scores, all 0, is meaningless).
+
     Harm propagation: a cursed main item (score < 0) always returns negative even
     when the complement is good.  A cursed complement is clamped to 0 so it cannot
     make an innocent main item appear harmful.
     """
     iloc       = int(item._iLoc)
-    identified = not _needs_identification(item)
+    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
 
     if iloc in _WEAPON_ILOC:
         if int(item._itype) == dx.ItemType.Shield.value:
             # Shield is the main item; propagate only its own harm.
-            ss = _shield_only_score(item)
+            ss = _shield_only_score(item, force_basic)
             if ss < 0:
                 return ss, f"score={ss:.1f}"
             ws = _weapon_only_score(complement) if complement is not None else 0.0
             score = ss + max(0.0, ws)
             return score, f"score={score:.1f}"
         # Weapon is the main item; propagate only its own harm.
-        ws = _weapon_only_score(item)
+        ws = _weapon_only_score(item, force_basic)
         if ws < 0:
             return ws, f"score={ws:.1f}"
         ss = _shield_only_score(complement) if complement is not None else 0.0
@@ -304,7 +314,8 @@ def _item_score_for_warrior(item, player, complement=None):
     if iloc in _JEWELRY_ILOC:
         # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
         # score 0 so they equip into empty slots but never displace identified gear.
-        if not identified:
+        # force_basic is NOT applied: comparing basic jewelry scores (all 0) is meaningless.
+        if _needs_identification(item):
             return 0.0, "unidentified"
         score = (_pl_stats_warrior(item)
                  + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
@@ -1621,6 +1632,9 @@ class AgentAI:
                 if (not self._body_id_state.get(eq_seed, False)
                         and eq_seed not in self._backup_resolved):
                     late_id.add(eq_seed)
+            else:
+                # Item still unidentified: try to identify using any available scroll.
+                self._try_identify_with_new_scroll(d)
         if late_id:
             self._resolve_identified_equipped(d, late_id)
 
@@ -2058,6 +2072,15 @@ class AgentAI:
             return new_score >= 0.0, new_score, new_label, 0.0, "empty", "", body_cii
 
         old_score, old_label = _item_score_for_warrior(eq, player, complement)
+        # Either item is unidentified magic: re-score both at basic level so hidden
+        # bonuses on either side cannot skew the comparison.  NORMAL items are exempt
+        # (not _is_magic -> identified=True in score functions regardless of force_basic).
+        if ((_needs_identification(item) or _needs_identification(eq))
+                and _is_magic(item) and _is_magic(eq)):
+            new_score, new_label = _item_score_for_warrior(
+                item, player, complement, force_basic=True)
+            old_score, old_label = _item_score_for_warrior(
+                eq, player, complement, force_basic=True)
         is_better = new_score > old_score or (
             new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
         return is_better, new_score, new_label, old_score, old_label, _item_name(eq), body_cii
@@ -2145,14 +2168,39 @@ class AgentAI:
                          'scroll_cii': scroll_cii})
                 return
             # Non-jewelry: _unidentified_weapon_dmg/_unidentified_item_ac apply even
-            # without identification. Scoring uses only these base stats so the
-            # comparison is valid - fall through to normal scoring.
+            # without identification. Scoring uses only base stats so the comparison
+            # is valid - fall through to normal scoring.
 
         is_better, new_score, new_label, old_score, old_label, old_name, body_cii = \
             is_better_fn(item, player)
         pending = self._pending_equip.get(body_cii)
 
         if is_better:
+            # Basic comparison cleared the bar; now check if identification is needed
+            # before committing to the equip.  Only when incoming is unidentified magic
+            # and the equipped item is already identified magic: scroll -> identify first
+            # so the final decision uses full scores; no scroll -> drop.
+            if (pending is None
+                    and _needs_identification(item)
+                    and old_label != "empty"):
+                eq_cur = player.InvBody[body_cii]
+                if _is_magic(eq_cur) and not _needs_identification(eq_cur):
+                    scroll_cii = _find_scroll_of_identify(player)
+                    if scroll_cii is None:
+                        print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                              f" - unidentified magic, no scroll to identify vs magic",
+                              file=self.log)
+                        self._queued_seeds.add(seed)
+                        self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+                    else:
+                        print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}"
+                              f" - basic beat identified magic, identifying before equip",
+                              file=self.log)
+                        self._queued_seeds.add(seed)
+                        self._action_queue.append(
+                            {'action': 'identify', 'seed': seed, 'name': name,
+                             'scroll_cii': scroll_cii})
+                    return
             id_tag = " unidentified" if _needs_identification(item) else ""
             if old_label == "empty":
                 print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag} - empty slot",
