@@ -349,13 +349,13 @@ def _find_unidentified_equipped(player, hero_class):
             continue
         iloc = int(item._iLoc)
         if iloc in _ARMOR_ILOC:
-            score = int(item._iAC)
+            score = _unidentified_item_ac(item)
         elif iloc in _WEAPON_ILOC:
             # FIXME: shields fall in _WEAPON_ILOC but have _iMinDam = _iMaxDam = 0,
             # so they always score 0 here and never win over weapons. Identification
             # priority for equipped shields is therefore always lowest. Acceptable
             # in practice since weapons benefit more from revealed affixes.
-            score = (int(item._iMinDam) + int(item._iMaxDam)) / 2
+            score = _unidentified_weapon_dmg(item)
         else:
             score = 0  # jewelry: no visible stats until identified
         if best is None or score > best[0]:
@@ -2116,8 +2116,8 @@ class AgentAI:
                         {'action': 'identify', 'seed': seed, 'name': name,
                          'scroll_cii': scroll_cii})
                 return
-            # Non-jewelry: base damage (_iMinDam/_iMaxDam) and base AC (_iAC) apply
-            # even without identification. Scoring uses only these base stats so the
+            # Non-jewelry: _unidentified_weapon_dmg/_unidentified_item_ac apply even
+            # without identification. Scoring uses only these base stats so the
             # comparison is valid - fall through to normal scoring.
 
         is_better, new_score, new_label, old_score, old_label, old_name, body_cii = \
