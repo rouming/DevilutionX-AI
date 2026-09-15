@@ -1053,8 +1053,9 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 				GiftItem.updateRequiredStatsCacheForPlayer(player);
 				bool done = AutoEquipEnabled(player, GiftItem)
 				    && AutoEquip(player, GiftItem, true, true);
-				if (!done) done = AutoPlaceItemInBelt(player, GiftItem, true, true);
 				if (!done) done = AutoPlaceItemInInventory(player, GiftItem, true);
+				if (!done && !GiftItem.isEquipment())
+					done = AutoPlaceItemInBelt(player, GiftItem, true, true);
 				printf(">> %s: INV_GIFT_ITEM '%s' done=%d\n", __func__,
 				       GiftItem._iName, done);
 			}
