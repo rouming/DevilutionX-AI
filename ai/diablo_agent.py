@@ -927,6 +927,7 @@ class AgentAI:
             if not self.no_gear_management:
                 self._resolve_identified_equipped(d, pending_id | shrine_id)
                 self._cleanup_stale_backups(d)
+                self._try_identify_with_new_scroll(d)
             if new_seeds and not self.no_gear_management:
                 self._inv_changed = True
                 for seed in new_seeds:
@@ -2150,26 +2151,9 @@ class AgentAI:
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
 
-        if _needs_identification(item):
-            if int(item._iLoc) in _JEWELRY_ILOC:
-                # Jewelry has no base stats; all value is in _iPL* which only apply
-                # after identification. Must identify to know if worth wearing.
-                scroll_cii = _find_scroll_of_identify(player)
-                if scroll_cii is None:
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
-                          f" - jewelry not identified, no scroll", file=self.log)
-                    self._queued_seeds.add(seed)
-                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
-                else:
-                    print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}", file=self.log)
-                    self._queued_seeds.add(seed)
-                    self._action_queue.append(
-                        {'action': 'identify', 'seed': seed, 'name': name,
-                         'scroll_cii': scroll_cii})
-                return
-            # Non-jewelry: _unidentified_weapon_dmg/_unidentified_item_ac apply even
-            # without identification. Scoring uses only base stats so the comparison
-            # is valid - fall through to normal scoring.
+        # Unidentified jewelry: score = 0 so it fills empty slots and yields to identified
+        # gear; identification happens in-place after equipping once a scroll is available.
+        # Non-jewelry unidentified items use base stats for scoring, so fall through too.
 
         is_better, new_score, new_label, old_score, old_label, old_name, body_cii = \
             is_better_fn(item, player)
@@ -2353,7 +2337,8 @@ class AgentAI:
                 eq_seed = int(eq._iSeed)
                 if (int(eq._itype) != dx.ItemType.None_.value
                         and _needs_identification(eq)
-                        and eq_seed not in self._backup_for_item):
+                        and eq_seed not in self._backup_for_item
+                        and int(eq._iLoc) not in _JEWELRY_ILOC):
                     print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
                           f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
                     self._backup_for_item[eq_seed] = [seed]
