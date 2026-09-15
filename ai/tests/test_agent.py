@@ -28,6 +28,8 @@ _ICURS_BUCKLER            = 83
 _ICURS_TWO_HANDED_SWORD   = 110
 _ICURS_POTION_OF_HEALING  = 32
 _ICURS_SCROLL_OF          = 1
+_ICURS_RING               = 12
+_ICURS_AMULET             = 45
 
 # item_index values counted from IDI_GOLD=0
 _IDI_HEAL     = 24
@@ -87,7 +89,7 @@ def _reset_game(game):
 
 def _gift(game, seed, itype, iloc, iclass, icurs, name, mindam, maxdam, ac=0,
           minstr=0, mindex=0, imiscid=0, ididx=0, identified=1, imagical=0,
-          pldam_mod=0, ispell=0, durability=255, maxdur=255):
+          pldam_mod=0, plhp=0, ispell=0, durability=255, maxdur=255):
     """Fill GiftItem and trigger INV_GIFT_ITEM ring command."""
     g = game.state.GiftItem
     # Explicit field assignment avoids slice issues on nested struct fields
@@ -126,8 +128,8 @@ def _gift(game, seed, itype, iloc, iclass, icurs, name, mindam, maxdam, ac=0,
     g['_iPLLR']       = 0
     g['_iPLMR']       = 0
     g['_iPLMana']     = 0
-    g['_iPLHP']       = 0
     g['_iPLDamMod']   = pldam_mod
+    g['_iPLHP']       = plhp
     g['_iPLGetHit']   = 0
     g['_iPLLight']    = 0
     g['_iSplLvlAdd']  = 0
@@ -2080,6 +2082,156 @@ class InvUnidentifiedUpgradeTests:
         return passed, 0
 
 
+class InvJewelryTests:
+    """Unidentified jewelry: equip into empty body slot without a scroll,
+    drop when no slot is available.  After identification: keep items that
+    score >= 0, drop cursed items (score < 0)."""
+
+    _RING_SEED_1  = 0xEEFF0001
+    _RING_SEED_2  = 0xEEFF0002
+    _RING_SEED_3  = 0xEEFF0003
+    _AMULET_SEED  = 0xEEFF0004
+    _AMULET_SEED2 = 0xEEFF0005
+    _SCROLL_SEED1 = 0xEEFF0011
+    _SCROLL_SEED2 = 0xEEFF0012
+    _SCROLL_SEED3 = 0xEEFF0013
+
+    def __init__(self, game):
+        self.game  = game
+        stand      = _StandModel()
+        runners    = {lvl: stand for lvl in range(1, 17)}
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent._test_mode = True
+        self._RL = None   # INVITEM_RING_LEFT cii
+        self._RR = None   # INVITEM_RING_RIGHT cii
+        self._AM = None   # INVITEM_AMULET cii
+
+    def _settle(self, max_ticks=_SETTLE_MAX_TICKS):
+        _settle(self.agent, max_ticks)
+
+    def _state(self):
+        return _FullState(self.game.safe_state.player)
+
+    def _gift_ring(self, seed, name, cursed=False):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Ring.value,
+              iloc=dx.item_equip_type.ILOC_RING.value,
+              iclass=dx.item_class.ICLASS_MISC.value,
+              icurs=_ICURS_RING,
+              name=name, mindam=0, maxdam=0,
+              identified=0,
+              imagical=dx.item_quality.ITEM_QUALITY_MAGIC.value,
+              plhp=-1000 if cursed else 0)
+
+    def _gift_amulet(self, seed, name, cursed=False):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Amulet.value,
+              iloc=dx.item_equip_type.ILOC_AMULET.value,
+              iclass=dx.item_class.ICLASS_MISC.value,
+              icurs=_ICURS_AMULET,
+              name=name, mindam=0, maxdam=0,
+              identified=0,
+              imagical=dx.item_quality.ITEM_QUALITY_MAGIC.value,
+              plhp=-1000 if cursed else 0)
+
+    def _gift_scroll_of_identify(self, seed):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Misc.value,
+              iloc=dx.item_equip_type.ILOC_NONE.value,
+              iclass=dx.item_class.ICLASS_NONE.value,
+              icurs=_ICURS_SCROLL_OF,
+              name="Scroll of Identify",
+              mindam=0, maxdam=0,
+              imiscid=dx.item_misc_id.IMISC_SCROLL.value,
+              ididx=_IDI_IDENTIFY,
+              ispell=dx.SpellID.Identify.value)
+
+    def test_01_initial_state(self):
+        """Verify clean start: weapon + shield, all jewelry slots empty."""
+        self._RL = dx.inv_item.INVITEM_RING_LEFT.value
+        self._RR = dx.inv_item.INVITEM_RING_RIGHT.value
+        self._AM = dx.inv_item.INVITEM_AMULET.value
+        self._settle()
+        s = self._state()
+        assert self._RL not in s.body, "RING_LEFT should be empty initially"
+        assert self._RR not in s.body, "RING_RIGHT should be empty initially"
+        assert self._AM not in s.body, "AMULET should be empty initially"
+
+    def test_02_ring1_equips_ring_left(self):
+        """Unidentified ring, no scroll: occupies RING_LEFT to wait for scroll."""
+        self._gift_ring(self._RING_SEED_1, "Ring 1")
+        self._settle()
+        s = self._state()
+        s.assert_body(self._RL, self._RING_SEED_1, "ring1 in RING_LEFT")
+        assert self._RR not in s.body, "RING_RIGHT still empty"
+
+    def test_03_ring2_equips_ring_right(self):
+        """Second unidentified ring, no scroll: occupies RING_RIGHT."""
+        self._gift_ring(self._RING_SEED_2, "Ring 2")
+        self._settle()
+        s = self._state()
+        s.assert_body(self._RL, self._RING_SEED_1, "ring1 still in RING_LEFT")
+        s.assert_body(self._RR, self._RING_SEED_2, "ring2 in RING_RIGHT")
+
+    def test_04_ring3_no_space_dropped(self):
+        """Third unidentified ring, both ring slots taken: dropped."""
+        self._gift_ring(self._RING_SEED_3, "Ring 3")
+        self._settle()
+        s = self._state()
+        s.assert_body(self._RL, self._RING_SEED_1, "ring1 still in RING_LEFT")
+        s.assert_body(self._RR, self._RING_SEED_2, "ring2 still in RING_RIGHT")
+        s.assert_absent(self._RING_SEED_3, "ring3 dropped - no ring slot available")
+
+    def test_05_cursed_amulet_equips(self):
+        """Unidentified cursed amulet, no scroll: occupies AMULET slot
+        (agent cannot know it is cursed until identified)."""
+        self._gift_amulet(self._AMULET_SEED, "Cursed Amulet", cursed=True)
+        self._settle()
+        s = self._state()
+        s.assert_body(self._AM, self._AMULET_SEED, "cursed amulet in AMULET slot")
+
+    def test_06_amulet2_no_space_dropped(self):
+        """Second unidentified amulet, AMULET slot already taken: dropped."""
+        self._gift_amulet(self._AMULET_SEED2, "Amulet 2")
+        self._settle()
+        s = self._state()
+        s.assert_body(self._AM, self._AMULET_SEED, "cursed amulet still in slot")
+        s.assert_absent(self._AMULET_SEED2, "second amulet dropped - no amulet slot")
+
+    def test_07_scrolls_rings_stay_cursed_amulet_dropped(self):
+        """Three identify scrolls arrive: agent identifies all equipped jewelry.
+        Rings score >= 0 after identification: stay.
+        Cursed amulet scores < 0: dropped from body."""
+        self._gift_scroll_of_identify(self._SCROLL_SEED1)
+        self._gift_scroll_of_identify(self._SCROLL_SEED2)
+        self._gift_scroll_of_identify(self._SCROLL_SEED3)
+        self._settle(max_ticks=30)
+        s = self._state()
+        s.assert_body(self._RL, self._RING_SEED_1, "ring1 stays after identification")
+        s.assert_body(self._RR, self._RING_SEED_2, "ring2 stays after identification")
+        s.assert_absent(self._AMULET_SEED, "cursed amulet dropped after identification")
+
+    def run_all(self):
+        print(f"\n--- InvJewelryTests ---")
+        tests = [m for m in dir(self) if m.startswith('test_')]
+        passed = 0
+        for name in sorted(tests):
+            try:
+                print(f"\n[RUN] {name}")
+                getattr(self, name)()
+                print(f"[OK]  {name}")
+                passed += 1
+            except Exception as e:
+                import traceback
+                tag = "FAIL" if isinstance(e, AssertionError) else "ERR"
+                print(f"[{tag}] {name}: {e}")
+                traceback.print_exc()
+                print(f"\n{passed} passed, 1 failed (stopped)")
+                return passed, 1
+        print(f"\n{passed} passed, 0 failed")
+        return passed, 0
+
+
 def _load_config():
     ini = configparser.ConfigParser()
     ini.read('diablo-ai.ini')
@@ -2170,6 +2322,7 @@ def main():
         Inv2HOscillationTests,
         lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=False),
         lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=True),
+        InvJewelryTests,
     ]
 
     total_passed = total_failed = 0
