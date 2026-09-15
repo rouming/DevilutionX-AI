@@ -698,7 +698,8 @@ class AgentAI:
     def __init__(self, game, model_runners, view_radius=10,
                  kill_threshold=0.5, repair_threshold=0.25,
                  max_steps_per_level=3000, no_gear_management=False,
-                 keep_mana_potions=False,
+                 keep_mana_potions=False, use_two_hand_weapon=False,
+                 all_items_identified=False,
                  safe_radius=2, pause=0.0, log=None, stat_strategy='dex-rush'):
         self.game          = game
         # model_runners: dict mapping dungeon level (1-16) -> ModelRunner.
@@ -715,7 +716,9 @@ class AgentAI:
         self.max_steps_per_level = max_steps_per_level
         self.no_gear_management  = no_gear_management
         self.keep_mana_potions   = keep_mana_potions
-        self.safe_radius         = safe_radius
+        self.use_two_hand_weapon  = use_two_hand_weapon
+        self.all_items_identified = all_items_identified
+        self.safe_radius          = safe_radius
         self.pause       = pause
         self.log         = log or sys.stdout
 
@@ -1921,6 +1924,9 @@ class AgentAI:
         """
         if int(item._itype) == dx.ItemType.Bow.value:
             return False, 0.0, "bow", 0.0, "", None, None
+        if (not self.use_two_hand_weapon
+                and int(item._iLoc) == dx.item_equip_type.ILOC_TWOHAND.value):
+            return False, 0.0, "two-handed", 0.0, "", None, None
 
         ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
         ILOC_RING  = dx.item_equip_type.ILOC_RING.value

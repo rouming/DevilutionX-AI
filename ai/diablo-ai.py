@@ -340,6 +340,9 @@ def make_diablo_parser():
         "--no-butcher", action="store_true",
         help="Skip placing The Butcher on level 2")
     common_parser.add_argument(
+        "--use-two-hand-weapon", action="store_true", default=False,
+        help="Allow agent to equip two-handed weapons (default: off)")
+    common_parser.add_argument(
         "--all-items-identified", action="store_true",
         help="Force-identify all non-normal items on creation (unfair play for AI upper-bound experiments)")
     common_parser.add_argument(
@@ -2921,6 +2924,8 @@ def agent_ai(args, gameconfig):
         repair_threshold=args.repair_threshold,
         max_steps_per_level=args.max_steps_per_level,
         no_gear_management=args.no_gear_management,
+        use_two_hand_weapon=args.use_two_hand_weapon,
+        all_items_identified=args.all_items_identified,
         safe_radius=args.safe_radius,
         pause=args.pause,
         stat_strategy=args.stat_strategy)

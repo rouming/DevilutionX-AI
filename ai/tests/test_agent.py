@@ -180,7 +180,7 @@ class InvTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._s0 = None  # full state after test_01 (reference baseline)
 
@@ -492,7 +492,7 @@ class Inv2HBackupTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL = None   # HAND_LEFT cii
         self._HR = None   # HAND_RIGHT cii
@@ -665,7 +665,7 @@ class InvIdentifyTests:
         self._cursed = cursed
         stand        = _StandModel()
         runners      = {lvl: stand for lvl in range(1, 17)}
-        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL = None
         self._HR = None
@@ -803,7 +803,7 @@ class Inv2HIdentifyTests:
         self._cursed = cursed
         stand        = _StandModel()
         runners      = {lvl: stand for lvl in range(1, 17)}
-        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL = None
         self._HR = None
@@ -930,7 +930,7 @@ class _Inv2HWithBackupBase:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1096,7 +1096,7 @@ class _Inv1HWithBackupBase:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1249,7 +1249,7 @@ class _Inv1HShWithBackupBase:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1405,7 +1405,7 @@ class InvDurabilityTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
 
     def _settle(self):
@@ -1504,7 +1504,7 @@ class Inv2HStaleBackupTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
@@ -1678,7 +1678,7 @@ class InvBeatBackupSpamTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
@@ -1807,7 +1807,7 @@ class Inv2HOscillationTests:
         self.game  = game
         stand      = _StandModel()
         runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout)
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
