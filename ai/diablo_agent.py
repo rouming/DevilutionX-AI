@@ -1773,6 +1773,14 @@ class AgentAI:
                 return
 
             if spellid == spellid_identify:
+                if self.all_items_identified:
+                    # Items are pre-identified by the engine; scrolls serve no
+                    # purpose, so drop in order not to fill the inventory.
+                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                          f" - unused scroll", file=self.log)
+                    self._queued_seeds.add(seed)
+                    self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
+                    return
                 # Keep all - scarce and valuable, never drop.
                 self._try_identify_with_new_scroll(d)
                 return

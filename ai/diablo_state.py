@@ -1860,6 +1860,8 @@ class DiabloGame:
                          1 if config["no-auto-walk-on-seconday-action"] else 0,
                          no_primary_action_doors=
                          1 if config.get("no-primary-action-doors") else 0,
+                         all_items_identified=
+                         1 if config.get("all-items-identified") else 0,
                          hero_hp_min_pct=config.get("hero-hp-min-pct", 100),
                          hero_hp_max_pct=config.get("hero-hp-max-pct", 100),
                          hero_mana_min_pct=config.get("hero-mana-min-pct", 100),

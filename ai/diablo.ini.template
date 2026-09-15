@@ -110,6 +110,7 @@ Disable explosive barrels, urns, or pods={harmless_barrels}
 Disable auto-walk when pressing the secondary action={no_auto_walk_on_seconday_action}
 Disable doors on primary action={no_primary_action_doors}
 Enable invincible player mode={invincible_player}
+All items identified={all_items_identified}
 Spell potency={spell_potency}
 No spells={no_spells}
 Stats scale pct={stats_scale_pct}

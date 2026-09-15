@@ -340,6 +340,9 @@ def make_diablo_parser():
         "--no-butcher", action="store_true",
         help="Skip placing The Butcher on level 2")
     common_parser.add_argument(
+        "--all-items-identified", action="store_true",
+        help="Force-identify all non-normal items on creation (unfair play for AI upper-bound experiments)")
+    common_parser.add_argument(
         "--enable-quests", action="store_true",
         help="Enable quests (default: quests are disabled; use this to re-enable them)")
     common_parser.add_argument(
@@ -3066,6 +3069,7 @@ def main():
         "hero-potions-max":   args.hero_potions_at_start[1],
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "no-primary-action-doors": args.no_primary_action_doors,
+        "all-items-identified": args.all_items_identified,
         "view-radius": args.view_radius,
         "game-ticks-per-step": args.game_ticks_per_step,
         "step-mode": not args.real_time,
