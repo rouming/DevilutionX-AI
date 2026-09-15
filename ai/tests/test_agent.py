@@ -1916,6 +1916,170 @@ class Inv2HOscillationTests:
         return passed, 0
 
 
+class InvUnidentifiedUpgradeTests:
+    """Bug: unidentified incoming weapon is compared against the equipped weapon's
+    IDENTIFIED score, not its basic score.  When the equipped item is an identified
+    magic sword, its old_score includes magic bonuses.  An incoming unidentified sword
+    with higher base damage but lower base-than-identified score is incorrectly dropped.
+
+    Fix: when the incoming item is unidentified, compare new_basic_score vs old_basic_score.
+    - has_identify_scroll=True : scroll present; agent identifies and re-evaluates;
+      identified score wins -> new sword equips, old dropped.  test_04 FAILS with
+      current code because the sword is dropped before identification is attempted.
+    - has_identify_scroll=False: no scroll; cannot identify -> new sword dropped in both
+      old and new code (sanity check only, passes with current code)."""
+
+    _MAGIC_SWORD_SEED = 0xB0000001   # identified magic 1H  (equips in test_02)
+    _SCROLL_SEED      = 0xB0000002   # identify scroll       (gifted in test_03 when applicable)
+    _UNID_SWORD_SEED  = 0xB0000003   # unidentified magic 1H (subject of the bug)
+
+    def __init__(self, game, has_identify_scroll=True):
+        self.game               = game
+        self.has_identify_scroll = has_identify_scroll
+        stand                   = _StandModel()
+        runners                 = {lvl: stand for lvl in range(1, 17)}
+        self.agent              = AgentAI(game, model_runners=runners, log=sys.stdout,
+                                          use_two_hand_weapon=True)
+        self.agent._test_mode   = True
+        self._HL      = None
+        self._HR      = None
+        self._ss_seed = None   # starting sword seed (destroyed in test_02)
+        self._bk_seed = None   # buckler seed (stays throughout)
+
+    def _settle(self, max_ticks=_SETTLE_MAX_TICKS):
+        _settle(self.agent, max_ticks)
+
+    def _state(self):
+        return _FullState(self.game.safe_state.player)
+
+    def _gift_1h_identified_magic(self, seed, name, mindam, maxdam, pldam_mod):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Sword.value,
+              iloc=dx.item_equip_type.ILOC_ONEHAND.value,
+              iclass=dx.item_class.ICLASS_WEAPON.value,
+              icurs=_ICURS_LONG_SWORD,
+              name=name, mindam=mindam, maxdam=maxdam,
+              identified=1,
+              imagical=dx.item_quality.ITEM_QUALITY_MAGIC.value,
+              pldam_mod=pldam_mod)
+
+    def _gift_1h_unidentified_magic(self, seed, name, mindam, maxdam, pldam_mod):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Sword.value,
+              iloc=dx.item_equip_type.ILOC_ONEHAND.value,
+              iclass=dx.item_class.ICLASS_WEAPON.value,
+              icurs=_ICURS_LONG_SWORD,
+              name=name, mindam=mindam, maxdam=maxdam,
+              identified=0,
+              imagical=dx.item_quality.ITEM_QUALITY_MAGIC.value,
+              pldam_mod=pldam_mod)
+
+    def _gift_scroll_of_identify(self, seed):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Misc.value,
+              iloc=dx.item_equip_type.ILOC_NONE.value,
+              iclass=dx.item_class.ICLASS_NONE.value,
+              icurs=_ICURS_SCROLL_OF,
+              name="Scroll of Identify",
+              mindam=0, maxdam=0,
+              imiscid=dx.item_misc_id.IMISC_SCROLL.value,
+              ididx=_IDI_IDENTIFY,
+              ispell=dx.SpellID.Identify.value)
+
+    def test_01_initial_state(self):
+        """Verify clean start: short sword + buckler."""
+        self._HL = dx.inv_item.INVITEM_HAND_LEFT.value
+        self._HR = dx.inv_item.INVITEM_HAND_RIGHT.value
+        self._settle()
+        s = self._state()
+        assert self._HL in s.body, "HAND_LEFT should have a weapon"
+        assert self._HR in s.body, "HAND_RIGHT should have a shield"
+        self._ss_seed = s.body[self._HL]
+        self._bk_seed = s.body[self._HR]
+        print(f"  ss={self._ss_seed:#010x}  bk={self._bk_seed:#010x}")
+
+    def test_02_identified_magic_sword_equips(self):
+        """Identified magic sword (basic_avg=10.0, identified_avg=15.0) beats starting
+        short sword.  Agent uses full identified score -> equips, short sword destroyed."""
+        HL = self._HL
+        HR = self._HR
+        # basic_avg = (8+12)/2 = 10.0; identified_avg = 10.0 + 5 = 15.0
+        self._gift_1h_identified_magic(
+            self._MAGIC_SWORD_SEED, "Magic Sword", mindam=8, maxdam=12, pldam_mod=5)
+        self._settle()
+        s = self._state()
+        s.assert_body(HL, self._MAGIC_SWORD_SEED, "magic sword equipped")
+        s.assert_body(HR, self._bk_seed,           "buckler unchanged")
+        s.assert_absent(self._ss_seed,             "starting sword destroyed")
+
+    def test_03_scroll_gifted_or_skipped(self):
+        """If has_identify_scroll: gift scroll.  Equipped sword is already identified so
+        _try_identify_with_new_scroll finds nothing to do; scroll kept in inventory.
+        If not has_identify_scroll: nothing gifted (no scroll available for test_04)."""
+        if not self.has_identify_scroll:
+            return
+        self._gift_scroll_of_identify(self._SCROLL_SEED)
+        self._settle()
+        s = self._state()
+        s.assert_present(self._SCROLL_SEED, "scroll kept (nothing to identify)")
+        s.assert_body(self._HL, self._MAGIC_SWORD_SEED, "magic sword still equipped")
+
+    def test_04_unidentified_sword_decision(self):
+        """Gift unidentified magic sword: basic_avg=14.0, pldam_mod=+3 (identified_avg=17.0).
+        Scores against currently equipped identified magic sword (basic=10, identified=15):
+
+          new_basic=14 vs old_basic=10     -> new wins  (correct comparison)
+          new_basic=14 vs old_identified=15 -> new LOSES (current bug: wrong comparison)
+          new_identified=17 vs old_identified=15 -> new wins after identification
+
+        has_identify_scroll=True (FAILS with current code):
+          - BUG: drops new sword (14 < 15); test asserts it equips after identification.
+          - FIX: keeps sword, identifies (17 > 15), new sword equips, old dropped.
+        has_identify_scroll=False (passes with current code):
+          - No scroll -> new sword dropped in both old and new code."""
+        HL = self._HL
+        HR = self._HR
+        # basic_avg = (12+16)/2 = 14.0; identified_avg = 14 + 3 = 17.0
+        self._gift_1h_unidentified_magic(
+            self._UNID_SWORD_SEED, "Better Unid Sword", mindam=12, maxdam=16, pldam_mod=3)
+        self._settle(max_ticks=30)
+        s = self._state()
+        if self.has_identify_scroll:
+            # FIX: identified (17 > 15) -> new sword equips, old dropped.
+            # BUG: new sword dropped immediately (14 < 15); this assertion fails.
+            s.assert_body(HL, self._UNID_SWORD_SEED,  "new sword equipped after identification")
+            s.assert_body(HR, self._bk_seed,           "buckler unchanged")
+            s.assert_absent(self._MAGIC_SWORD_SEED,   "old magic sword dropped")
+            s.assert_absent(self._SCROLL_SEED,        "scroll consumed by identification")
+        else:
+            # No scroll: new sword dropped regardless (cannot identify to compare properly).
+            s.assert_body(HL, self._MAGIC_SWORD_SEED, "magic sword still equipped")
+            s.assert_body(HR, self._bk_seed,           "buckler unchanged")
+            s.assert_absent(self._UNID_SWORD_SEED,    "unidentified sword dropped (no scroll)")
+
+    def run_all(self):
+        label = ("InvUnidentifiedUpgradeTests "
+                 f"({'with' if self.has_identify_scroll else 'without'} scroll)")
+        print(f"\n--- {label} ---")
+        tests = [m for m in dir(self) if m.startswith('test_')]
+        passed = 0
+        for name in sorted(tests):
+            try:
+                print(f"\n[RUN] {name}")
+                getattr(self, name)()
+                print(f"[OK]  {name}")
+                passed += 1
+            except Exception as e:
+                import traceback
+                tag = "FAIL" if isinstance(e, AssertionError) else "ERR"
+                print(f"[{tag}] {name}: {e}")
+                traceback.print_exc()
+                print(f"\n{passed} passed, 1 failed (stopped)")
+                return passed, 1
+        print(f"\n{passed} passed, 0 failed")
+        return passed, 0
+
+
 def _load_config():
     ini = configparser.ConfigParser()
     ini.read('diablo-ai.ini')
@@ -2004,6 +2168,8 @@ def main():
         Inv1HShToShInheritanceTests,
         InvBeatBackupSpamTests,
         Inv2HOscillationTests,
+        lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=False),
+        lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=True),
     ]
 
     total_passed = total_failed = 0
