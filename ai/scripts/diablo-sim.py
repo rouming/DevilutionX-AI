@@ -183,26 +183,35 @@ C_AGENT = [
 ]
 
 
-def _score_item_c(it, bonuses, slot, C):
+def _apply_acp(ac, acp):
+    """Apply ACP% bonus with engine integer arithmetic (Source/items.cpp GetBonusAC)."""
+    b = ac * acp // 100
+    if b == 0 and acp != 0 and ac > 0:
+        b = 1 if acp > 0 else -1
+    return ac + b
+
+
+def _score_item_c(it, bonuses, slot, C, rolled_ac=0):
     """Parameterized item score used for gear selection in the optimizer."""
+    # ALLRES sets _iPLFR + _iPLLR + _iPLMR all to the same value, so counts 3x.
     res_sum = (bonuses.get('FIRERES', 0) + bonuses.get('LIGHTRES', 0) +
-               bonuses.get('MAGICRES', 0) + bonuses.get('ALLRES', 0))
+               bonuses.get('MAGICRES', 0) + 3 * bonuses.get('ALLRES', 0))
+    # TARGAC (enemy AC reduction) adds to attack rating just like TOHIT.
     bonus = (bonuses.get('STR',    0) * C[CI_STR]    +
              bonuses.get('VIT',    0) * C[CI_VIT]    +
              bonuses.get('DEX',    0) * C[CI_DEX]    +
-             bonuses.get('TOHIT',  0) * C[CI_TOHIT]  +
+             (bonuses.get('TOHIT', 0) + bonuses.get('TARGAC', 0)) * C[CI_TOHIT] +
              bonuses.get('LIFE',   0) * C[CI_LIFE]   +
              bonuses.get('GETHIT', 0) * C[CI_GETHIT] +
              res_sum                  * C[CI_RES])
     if slot == 'weapon':
         avg_dam = (it['min_dam'] + it['max_dam']) / 2.0
-        return avg_dam * (1 + bonuses.get('DAMP', 0) / 100.0) + bonus
+        # DAMMOD is flat damage added before the % multiplier (mirrors _identified_weapon_dmg).
+        return (avg_dam + bonuses.get('DAMMOD', 0)) * (1 + bonuses.get('DAMP', 0) / 100.0) + bonus
     if slot in ('armor', 'helm'):
-        avg_ac = (it['min_ac'] + it['max_ac']) / 2.0
-        return avg_ac * (1 + bonuses.get('ACP', 0) / 100.0) * C[CI_ARMOR_AC] + bonus
+        return _apply_acp(rolled_ac, bonuses.get('ACP', 0)) * C[CI_ARMOR_AC] + bonus
     if slot == 'shield':
-        avg_ac = (it['min_ac'] + it['max_ac']) / 2.0
-        return avg_ac * (1 + bonuses.get('ACP', 0) / 100.0) * C[CI_SHIELD_AC] + bonus
+        return _apply_acp(rolled_ac, bonuses.get('ACP', 0)) * C[CI_SHIELD_AC] + bonus
     # misc (jewelry): stat, bonus, and damage-%
     return bonus + bonuses.get('DAMP', 0) * C[CI_DAM_PCT]
 
@@ -326,19 +335,14 @@ def _xp_for_kill(player_level, monster):
 
 def _affix_pool(affixes, itype, lvl_lo, lvl_hi, is_prefix):
     # Source: Source/items.cpp:1182-1203 GetItemPowerPrefixAndSuffix()
-    # Prefix eligibility: minlvl <= lvl_hi (no lower bound in engine).
-    # Suffix eligibility: lvl_lo <= minlvl <= lvl_hi (both bounds checked).
+    # Both prefix and suffix require lvl_lo <= minlvl <= lvl_hi.
     # Prefixes with PLDouble=true are appended twice (2x probability).
     result = []
     for a in affixes:
         if itype not in a['types']:
             continue
-        if is_prefix:
-            if a['minlvl'] > lvl_hi:
-                continue
-        else:
-            if not (lvl_lo <= a['minlvl'] <= lvl_hi):
-                continue
+        if not (lvl_lo <= a['minlvl'] <= lvl_hi):
+            continue
         result.append(a)
         if is_prefix and a['double']:
             result.append(a)
@@ -354,8 +358,8 @@ def _build_caches(prefixes, suffixes, slot_pools):
             pool = [it for it in slot_pools[slot] if it['mlvl'] <= floor]
             weights = [it['drop_rate'] for it in pool]
             item_cache[(slot, floor)] = (pool, weights)
-            lvl_lo = max(1, floor // 2)
-            lvl_hi = floor
+            lvl_lo = floor
+            lvl_hi = 2 * floor
             key = (itype, lvl_lo, lvl_hi)
             if key not in affix_cache:
                 pre_all  = _affix_pool(prefixes, itype, lvl_lo, lvl_hi, is_prefix=True)
@@ -369,13 +373,28 @@ def _build_caches(prefixes, suffixes, slot_pools):
     return item_cache, affix_cache
 
 
+# Source: Source/items.cpp:670-698 CalculateToHitBonus()
+# Maps TOHIT_DAMP prefix param1 (v1) to the (lo, hi) range for the TOHIT roll.
+_TOHIT_DAMP_TOHIT = {
+    20:  (1,   5),
+    36:  (6,   10),
+    51:  (11,  15),
+    66:  (16,  20),
+    81:  (21,  30),
+    96:  (31,  40),
+    111: (41,  50),
+    126: (51,  75),
+    151: (76,  100),
+}
+
+
 def _p_magic(floor, always_magic):
     # Source: Source/items.cpp:1501-1504 GetItemBLevel()
     # P(magic) = 1 - P(first rnd > 10) * P(second rnd > floor)
     # Rings, amulets, staves are always magic (IMISC_RING/AMULET path).
     if always_magic:
         return 1.0
-    return 1.0 - (89.0 / 100.0) * ((100.0 - floor) / 100.0)
+    return 1.0 - (89.0 / 100.0) * ((100.0 - 2 * floor) / 100.0)
 
 
 def _roll_affixes(rng, affix_cache, itype, lvl_lo, lvl_hi, floor):
@@ -396,7 +415,20 @@ def _roll_affixes(rng, affix_cache, itype, lvl_lo, lvl_hi, floor):
     for pool, prob in ((pre_pool, P_PREFIX), (suf_pool, P_SUFFIX)):
         if pool and rng.random() < prob:
             a = rng.choice(pool)   # pre_pool has doubles duplicated for prefixes
-            bonuses[a['power']] = rng.randint(a['v1'], a['v2'])
+            r = rng.randint(a['v1'], a['v2'])
+            if a['power'] == 'TOHIT_DAMP':
+                # Source: Source/items.cpp:727-731 IPL_TOHIT_DAMP
+                # _iPLDam += roll; _iPLToHit += CalculateToHitBonus(param1)
+                bonuses['DAMP'] += r
+                bonuses['TOHIT'] += rng.randint(*_TOHIT_DAMP_TOHIT[a['v1']])
+            elif a['power'] == 'ATTRIBS':
+                # Source: Source/items.cpp:814-818 IPL_ATTRIBS
+                # _iPLStr += r; _iPLMag += r; _iPLDex += r; _iPLVit += r
+                bonuses['STR'] += r
+                bonuses['DEX'] += r
+                bonuses['VIT'] += r
+            else:
+                bonuses[a['power']] += r
     return bonuses
 
 
@@ -417,7 +449,7 @@ def _score_item(it, bonuses, score_by):
 def _empty_slot():
     return {'score': -1.0, 'stats': {}, 'ac': 0,
             'min_dam': 0, 'max_dam': 0, 'tohit': 0,
-            'dam_pct': 0, 'resist': 0, 'atk_tier': 0, 'rec_tier': 0}
+            'dam_pct': 0, 'dam_mod': 0, 'resist': 0, 'atk_tier': 0, 'rec_tier': 0}
 
 
 def _gear_stat_totals(slots):
@@ -523,16 +555,15 @@ def _floor_combat_efficiency(clvl, eff, base_vit, slots, floor_monsters, floor):
     has_shield   = slots['shield']['ac'] > 0
     wpn          = slots['weapon']
     item_tohit   = sum(slots[s]['tohit'] for s in slots)
-    item_en_ac   = 0    # sim does not track _iPLEnAc; EnAc affixes uncommon
 
     warrior_hp = _warrior_hp(clvl, eff['vit'], base_vit)
 
     total = 0.0
     for m in floor_monsters:
-        hit_pct   = _warrior_melee_tohit_pct(clvl, eff['dex'], item_tohit, item_en_ac, m['ac'])
+        hit_pct   = _warrior_melee_tohit_pct(clvl, eff['dex'], item_tohit, 0, m['ac'])
         exp_dam   = _warrior_expected_damage(clvl, eff['str'],
                                              wpn['min_dam'], wpn['max_dam'],
-                                             wpn['dam_pct'], 0)
+                                             wpn['dam_pct'], wpn['dam_mod'])
         warrior_dps = exp_dam * hit_pct / 100.0
 
         mon_hit_pct  = _monster_tohit_player_pct(m['toHit'], m['mlevel'], clvl, player_ac, floor)
@@ -640,8 +671,8 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
             )
 
             # Draw items for this floor
-            lvl_lo = max(1, floor // 2)
-            lvl_hi = floor
+            lvl_lo = floor
+            lvl_hi = 2 * floor
             n = round(items_per_floor.get(floor, 2.0))
             candidates = []
             for _ in range(n):
@@ -650,10 +681,11 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                 pool, weights = item_cache[(slot, floor)]
                 if not pool:
                     continue
-                it = rng.choices(pool, weights=weights, k=1)[0]
+                it        = rng.choices(pool, weights=weights, k=1)[0]
                 bonuses   = _roll_affixes(rng, affix_cache, itype, lvl_lo, lvl_hi, floor)
-                score     = _score_item_c(it, bonuses, slot, C)
-                candidates.append((slot, it, bonuses, score))
+                rolled_ac = rng.randint(it['min_ac'], it['max_ac']) if it['max_ac'] > 0 else 0
+                score     = _score_item_c(it, bonuses, slot, C, rolled_ac=rolled_ac)
+                candidates.append((slot, it, bonuses, score, rolled_ac))
 
             # Stat-boosting items first so their bonuses may unlock requirement-gated items
             candidates.sort(
@@ -661,7 +693,7 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                 reverse=True,
             )
 
-            for slot, it, bonuses, new_score in candidates:
+            for slot, it, bonuses, new_score, rolled_ac in candidates:
                 itype, _ = _SLOT_INFO[slot]
                 req_tot += 1
                 if not _meets_req(it, eff):
@@ -669,21 +701,16 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                     continue
                 if new_score <= slots[slot]['score']:
                     continue
-                # Roll actual AC (random within item range)
-                base_ac = rng.randint(it['min_ac'], it['max_ac']) if it['max_ac'] > 0 else 0
-                ac_pct  = bonuses.get('ACP', 0)
-                ac_b    = base_ac * ac_pct // 100
-                if ac_b == 0 and ac_pct > 0 and base_ac > 0:
-                    ac_b = 1
                 stat_map = {p.lower(): bonuses[p] for p in STAT_POWERS if bonuses.get(p, 0) != 0}
                 slots[slot] = {
                     'score':    new_score,
                     'stats':    stat_map,
-                    'ac':       base_ac + ac_b,
+                    'ac':       _apply_acp(rolled_ac, bonuses.get('ACP', 0)),
                     'min_dam':  it['min_dam'],
                     'max_dam':  it['max_dam'],
-                    'tohit':    bonuses.get('TOHIT', 0),
+                    'tohit':    bonuses.get('TOHIT', 0) + bonuses.get('TARGAC', 0),
                     'dam_pct':  bonuses.get('DAMP', 0),
+                    'dam_mod':  bonuses.get('DAMMOD', 0),
                     'resist':   max(bonuses.get('FIRERES', 0), bonuses.get('MAGICRES', 0),
                                     bonuses.get('LIGHTRES', 0), bonuses.get('ALLRES', 0)),
                     'atk_tier': bonuses.get('FASTATTACK', 0) if itype == 'Weapon' else 0,
