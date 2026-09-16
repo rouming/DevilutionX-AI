@@ -63,7 +63,7 @@ _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_HELM.value,
 })
 
-_AC_WEIGHT = 0.5
+_ARMOR_AC_WEIGHT = 0.5
 
 
 def _item_name(item):
@@ -244,17 +244,40 @@ def _identified_item_ac(item):
     b     = ac * pl_ac // 100
     if b == 0 and pl_ac != 0:
         b = 1 if pl_ac > 0 else -1
-    return ac + b + _pl_stats_warrior(item)
+    return ac + b
 
 
 def _shield_only_score(item, force_basic=False):
     """AC contribution of a shield."""
     identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
     ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
-    score = ac * _AC_WEIGHT
+    score = ac
     if identified:
-        score += _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
+        score += (_pl_stats_warrior(item) +
+                  _hp_score(item) + _gethit_score(item) + _res_sum_score(item))
     return score
+
+
+def _armor_only_score(item, force_basic=False):
+    """AC + combat bonuses for helms and chest armor."""
+    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
+    ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
+    # Armor AC values are large (Full Plate Mail Godly ~192 total) and would dominate stat
+    # bonuses (best suffix "of the stars" ~33) without a discount. 0.5 gives "2 AC == 1 stat".
+    score = ac * _ARMOR_AC_WEIGHT
+    if identified:
+        score += (_pl_stats_warrior(item) + _tohit_score(item) + _hp_score(item) +
+                  _gethit_score(item) + _res_sum_score(item))
+    return score
+
+
+def _jewelry_score(item):
+    """Stat score for identified jewelry; 0.0 if unidentified."""
+    if _needs_identification(item):
+        return 0.0
+    return (_pl_stats_warrior(item) + _tohit_score(item) + _hp_score(item) +
+            _gethit_score(item) + _res_max_score(item) +
+            _dam_score(item))
 
 
 def _hand_combo_score(left, right):
@@ -306,21 +329,14 @@ def _item_score_for_warrior(item, player, complement=None, force_basic=False):
         return score, f"score={score:.1f}"
 
     if iloc in _ARMOR_ILOC:
-        score = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
-        if identified:
-            score += _tohit_score(item) + _hp_score(item) + _gethit_score(item) + _res_sum_score(item)
+        score = _armor_only_score(item, force_basic)
         return score, f"score={score:.1f}"
 
     if iloc in _JEWELRY_ILOC:
-        # Jewelry: stat bonus scored only when identified; unidentified rings/amulets
-        # score 0 so they equip into empty slots but never displace identified gear.
+        # Unidentified: score 0 so jewelry fills empty slots but never displaces identified gear.
         # force_basic is NOT applied: comparing basic jewelry scores (all 0) is meaningless.
-        if _needs_identification(item):
-            return 0.0, "unidentified"
-        score = (_pl_stats_warrior(item)
-                 + _tohit_score(item) + _hp_score(item) + _gethit_score(item)
-                 + _res_max_score(item) + _dam_score(item))
-        return score, f"score={score:.2f}"
+        score = _jewelry_score(item)
+        return score, "unidentified" if _needs_identification(item) else f"score={score:.2f}"
     assert False, f"unexpected iloc {iloc} in _item_score_for_warrior"
 
 
