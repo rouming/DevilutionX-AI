@@ -63,7 +63,20 @@ _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_HELM.value,
 })
 
-_ARMOR_AC_WEIGHT = 0.5
+# Scoring coefficients - paste optimizer output here to update.
+# Units match engine values (_iPLHP is HP*64; see comment on 'life').
+_SCORE_COEFF = {
+    'str':       1.0,   # score per STR affix point
+    'vit':       1.0,   # score per VIT affix point
+    'dex':       1.0,   # score per DEX affix point
+    'tohit':     0.1,   # score per (TOHIT + EnAc) point
+    'life':      0.005, # score per _iPLHP engine unit (_iPLHP = real_HP * 64, so 0.32/real HP)
+    'gethit':    1.0,   # score per _iPLGetHit magnitude
+    'res':       0.03,  # score per resistance point (FR + LR + MR summed)
+    'dam_pct':   0.2,   # score per damage-% point (jewelry only)
+    'armor_ac':  0.5,   # AC multiplier for armor and helm slots
+    'shield_ac': 1.0,   # AC multiplier for shield slot
+}
 
 
 def _item_name(item):
@@ -168,29 +181,30 @@ def _can_equip(item, player):
 
 
 def _pl_stats_warrior(item):
-    """Stat bonus contribution for warrior: STR + VIT + DEX.
-    Only meaningful when item is identified; caller is responsible for that check."""
-    return float(int(item._iPLStr) + int(item._iPLVit) + int(item._iPLDex))
+    """Stat bonus contribution for warrior: STR + VIT + DEX."""
+    return (int(item._iPLStr) * _SCORE_COEFF['str'] +
+            int(item._iPLVit) * _SCORE_COEFF['vit'] +
+            int(item._iPLDex) * _SCORE_COEFF['dex'])
 
 def _hp_score(item):
-    """Life bonus score. _iPLHP stored *64; coefficient gives 0.3 per actual HP."""
-    return int(item._iPLHP) * 0.005
+    """Life bonus score. _iPLHP stored *64; 'life' coeff is per engine unit."""
+    return int(item._iPLHP) * _SCORE_COEFF['life']
 
 def _tohit_score(item):
     """To-hit contribution: attack-rating bonus + enemy-AC reduction."""
-    return (int(item._iPLToHit) + int(item._iPLEnAc)) * 0.1
+    return (int(item._iPLToHit) + int(item._iPLEnAc)) * _SCORE_COEFF['tohit']
 
 def _gethit_score(item):
     """Damage-taken modifier: negative GetHit = less damage per hit = good."""
-    return -int(item._iPLGetHit) * 1.0
+    return -int(item._iPLGetHit) * _SCORE_COEFF['gethit']
 
 def _dam_score(item):
     """Damage-% bonus contribution (jewelry only; weapons apply it as a multiplier)."""
-    return int(item._iPLDam) * 0.2
+    return int(item._iPLDam) * _SCORE_COEFF['dam_pct']
 
 def _res_sum_score(item):
     """Sum of all resistances (armor/helm/shield: can carry multiple elements)."""
-    return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * 0.03
+    return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * _SCORE_COEFF['res']
 
 def _needs_identification(item):
     # _iIdentified is only meaningful for non-normal items. Normal items always
@@ -248,7 +262,7 @@ def _shield_only_score(item, force_basic=False):
     """AC contribution of a shield."""
     identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
     ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
-    score = ac
+    score = ac * _SCORE_COEFF['shield_ac']
     if identified:
         score += (_pl_stats_warrior(item) + _tohit_score(item) +
                   _hp_score(item) + _gethit_score(item) +
@@ -261,8 +275,8 @@ def _armor_only_score(item, force_basic=False):
     identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
     ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
     # Armor AC values are large (Full Plate Mail Godly ~192 total) and would dominate stat
-    # bonuses (best suffix "of the stars" ~33) without a discount. 0.5 gives "2 AC == 1 stat".
-    score = ac * _ARMOR_AC_WEIGHT
+    # bonuses (best suffix "of the stars" ~33) without a discount. 'armor_ac' coeff calibrates this.
+    score = ac * _SCORE_COEFF['armor_ac']
     if identified:
         score += (_pl_stats_warrior(item) + _tohit_score(item) +
                   _hp_score(item) + _gethit_score(item) +
