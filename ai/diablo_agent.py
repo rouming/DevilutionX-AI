@@ -188,10 +188,6 @@ def _dam_score(item):
     """Damage-% bonus contribution (jewelry only; weapons apply it as a multiplier)."""
     return int(item._iPLDam) * 0.2
 
-def _res_max_score(item):
-    """Best single resistance (jewelry: rings typically carry one element)."""
-    return max(int(item._iPLFR), int(item._iPLLR), int(item._iPLMR)) * 0.1
-
 def _res_sum_score(item):
     """Sum of all resistances (armor/helm/shield: can carry multiple elements)."""
     return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * 0.03
@@ -226,8 +222,9 @@ def _weapon_only_score(item, force_basic=False):
     dmg   = _identified_weapon_dmg(item) if identified else _unidentified_weapon_dmg(item)
     score = dmg
     if identified:
-        score += (_pl_stats_warrior(item)
-                  + _tohit_score(item) + _hp_score(item) + _gethit_score(item))
+        score += (_pl_stats_warrior(item) + _tohit_score(item) +
+                  _hp_score(item) + _gethit_score(item) +
+                  _res_sum_score(item))
     return score
 
 
@@ -253,8 +250,9 @@ def _shield_only_score(item, force_basic=False):
     ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
     score = ac
     if identified:
-        score += (_pl_stats_warrior(item) +
-                  _hp_score(item) + _gethit_score(item) + _res_sum_score(item))
+        score += (_pl_stats_warrior(item) + _tohit_score(item) +
+                  _hp_score(item) + _gethit_score(item) +
+                  _res_sum_score(item))
     return score
 
 
@@ -266,8 +264,9 @@ def _armor_only_score(item, force_basic=False):
     # bonuses (best suffix "of the stars" ~33) without a discount. 0.5 gives "2 AC == 1 stat".
     score = ac * _ARMOR_AC_WEIGHT
     if identified:
-        score += (_pl_stats_warrior(item) + _tohit_score(item) + _hp_score(item) +
-                  _gethit_score(item) + _res_sum_score(item))
+        score += (_pl_stats_warrior(item) + _tohit_score(item) +
+                  _hp_score(item) + _gethit_score(item) +
+                  _res_sum_score(item))
     return score
 
 
@@ -275,9 +274,9 @@ def _jewelry_score(item):
     """Stat score for identified jewelry; 0.0 if unidentified."""
     if _needs_identification(item):
         return 0.0
-    return (_pl_stats_warrior(item) + _tohit_score(item) + _hp_score(item) +
-            _gethit_score(item) + _res_max_score(item) +
-            _dam_score(item))
+    return (_pl_stats_warrior(item) + _tohit_score(item) +
+            _hp_score(item) + _gethit_score(item) +
+            _res_sum_score(item) + _dam_score(item))
 
 
 def _hand_combo_score(left, right):
