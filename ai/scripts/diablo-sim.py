@@ -152,7 +152,7 @@ CI_GETHIT       = 5   # score per GETHIT tier (fast hit recovery)
 CI_RES          = 6   # score per resistance affix point (fire/magic/light/all summed)
 CI_ARMOR_AC     = 7   # multiplier on avg_ac for armor and helm slots
 CI_SHIELD_AC    = 8   # multiplier on avg_ac for shield slot
-CI_SHIELD_WPN   = 9   # shield avg_ac contribution to weapon slot score
+CI_DAM_PCT      = 9   # score per damage-% point on jewelry (maps to agent dam_pct)
 
 C_DEFAULT = [
     1.0,   # CI_STR    - old sim used STR+VIT only
@@ -164,7 +164,7 @@ C_DEFAULT = [
     0.0,   # CI_RES    - old sim did not use resistances
     1.0,   # CI_ARMOR_AC - old sim: avg_ac * 1.0
     1.0,   # CI_SHIELD_AC
-    _AC_WEIGHT,  # CI_SHIELD_WPN = 0.3
+    0.0,   # CI_DAM_PCT  - old sim did not score jewelry damage %
 ]
 
 # Agent's current hardcoded constants from diablo_agent.py.
@@ -181,7 +181,7 @@ C_AGENT = [
     0.03,  # CI_RES   (_res_sum_score coefficient)
     0.5,   # CI_ARMOR_AC  (_ARMOR_AC_WEIGHT)
     1.0,   # CI_SHIELD_AC (no discount for shield)
-    1.0,   # CI_SHIELD_WPN (shield AC in weapon slot)
+    0.2,   # CI_DAM_PCT   (agent dam_pct)
 ]
 
 
@@ -198,15 +198,15 @@ def _score_item_c(it, bonuses, slot, C, shield_ac=0):
              res_sum                  * C[CI_RES])
     if slot == 'weapon':
         avg_dam = (it['min_dam'] + it['max_dam']) / 2.0
-        return avg_dam * (1 + bonuses.get('DAMP', 0) / 100.0) + shield_ac * C[CI_SHIELD_WPN] + bonus
+        return avg_dam * (1 + bonuses.get('DAMP', 0) / 100.0) + shield_ac * _AC_WEIGHT + bonus
     if slot in ('armor', 'helm'):
         avg_ac = (it['min_ac'] + it['max_ac']) / 2.0
         return avg_ac * (1 + bonuses.get('ACP', 0) / 100.0) * C[CI_ARMOR_AC] + bonus
     if slot == 'shield':
         avg_ac = (it['min_ac'] + it['max_ac']) / 2.0
         return avg_ac * (1 + bonuses.get('ACP', 0) / 100.0) * C[CI_SHIELD_AC] + bonus
-    # misc (jewelry): stat and bonus only
-    return bonus
+    # misc (jewelry): stat, bonus, and damage-%
+    return bonus + bonuses.get('DAMP', 0) * C[CI_DAM_PCT]
 
 
 # --- data loading ---
@@ -587,7 +587,7 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
         slots = {s: _empty_slot() for s, *_ in _SLOT_DEFS}
         # Warrior starting gear: Short Sword (2-6 dam) + Buckler (3 AC)
         # Short Sword avg_dam=4.0; initial score uses starting C weights.
-        slots['weapon'] = dict(_empty_slot(), score=4.0 + 3.0 * C[CI_SHIELD_WPN], min_dam=2, max_dam=6)
+        slots['weapon'] = dict(_empty_slot(), score=4.0 + 3.0 * _AC_WEIGHT, min_dam=2, max_dam=6)
         # Buckler avg_ac=3.0; use ac-slot score so replacements are apples-to-apples
         slots['shield'] = dict(_empty_slot(), score=3.0 * C[CI_SHIELD_AC], ac=3)
         # Free strategy: track base stats cumulatively across floors.
@@ -790,7 +790,7 @@ def _parse_items(spec):
 # --- coefficient optimizer ---
 
 _C_NAMES = ['str', 'vit', 'dex', 'tohit', 'life', 'gethit', 'res',
-            'armor_ac', 'shield_ac', 'shield_wpn']
+            'armor_ac', 'shield_ac', 'dam_pct']
 
 # Bounds for differential_evolution: (lo, hi) per coefficient.
 # Upper bound ~4x the agent values; lower bound 0.
@@ -804,7 +804,7 @@ _C_BOUNDS = [
     (0.0, 0.2),   # CI_RES
     (0.0, 2.0),   # CI_ARMOR_AC
     (0.0, 2.0),   # CI_SHIELD_AC
-    (0.0, 2.0),   # CI_SHIELD_WPN
+    (0.0, 1.0),   # CI_DAM_PCT
 ]
 
 
@@ -1096,13 +1096,8 @@ def main():
         print()
         print("# Paste into diablo_agent.py _SCORE_COEFF:")
         print("_SCORE_COEFF = {")
-        _agent_keys = ['str', 'vit', 'dex', 'tohit', 'life', 'gethit',
-                       'res', 'dam_pct', 'armor_ac', 'shield_ac']
-        _sim_to_agent = dict(zip(_C_NAMES, coeff_agent))
-        for k in _agent_keys:
-            v = _sim_to_agent.get(k, None)
-            if v is not None:
-                print(f"    '{k}':{' ' * (10 - len(k))}{v:.4f},")
+        for name, v in zip(_C_NAMES, coeff_agent):
+            print(f"    '{name}':{' ' * (10 - len(name))}{v:.4f},")
         print("}")
 
         # Print optimal stat strategy if free mode
