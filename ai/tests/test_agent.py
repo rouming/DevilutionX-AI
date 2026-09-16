@@ -298,13 +298,13 @@ class InvTests:
 
     def test_05_2h_sword_equips_keeps_insurance(self):
         """Stronger 2H sword equips; old 1H and shield kept as eviction insurance.
-        State after test_04: HAND_LEFT=0xDEAD0001 (score 15), HAND_RIGHT=0xDEAD0002 (score 25).
-        2H avg=60 > combo 40 -> equips. Old 1H and shield stored as bfi eviction insurance."""
+        State after test_04: HAND_LEFT=0xDEAD0001 (score 15), HAND_RIGHT=0xDEAD0002 (score 50).
+        2H avg=100 > combo 65 -> equips. Old 1H and shield stored as bfi eviction insurance."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=50, maxdam=70 -> avg=60 > current combo score of 40
-        self._gift_2h_sword(seed=0xDEAD0003, name="Test 2H Sword", mindam=50, maxdam=70)
+        # mindam=90, maxdam=110 -> avg=100 > current combo score of 65
+        self._gift_2h_sword(seed=0xDEAD0003, name="Test 2H Sword", mindam=90, maxdam=110)
         self._settle()
         s = self._state()
 
@@ -315,12 +315,12 @@ class InvTests:
 
     def test_06_weaker_sword_dropped(self):
         """A sword weaker than the active 2H is dropped immediately.
-        State after test_05: HAND_LEFT=0xDEAD0003 (2H score 60), HAND_RIGHT=empty,
+        State after test_05: HAND_LEFT=0xDEAD0003 (2H score 100), HAND_RIGHT=empty,
         bfi=[0xDEAD0001, 0xDEAD0002] as eviction insurance."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=5, maxdam=10 -> avg=7.5 << 60 -> not better -> dropped
+        # mindam=5, maxdam=10 -> avg=7.5 << 100 -> not better -> dropped
         self._gift_sword(seed=0xDEAD0004, name="Weak Sword", mindam=5, maxdam=10)
         self._settle()
         s = self._state()
@@ -334,14 +334,14 @@ class InvTests:
 
     def test_07_better_1h_upgrades_backup(self):
         """A 1H better than backup[0] but worse than the 2H upgrades backup[0].
-        State after test_06: HAND_LEFT=0xDEAD0003 (2H score 60),
-        bfi=[0xDEAD0001(score 15), 0xDEAD0002(score 25)].
-        New 1H avg=20 (score 20) > backup score 15 but combo(20+25)=45 < 60 -> upgrades backup.
+        State after test_06: HAND_LEFT=0xDEAD0003 (2H score 100),
+        bfi=[0xDEAD0001(score 15), 0xDEAD0002(score 50)].
+        New 1H avg=20 (score 20) > backup score 15 but combo(20+50)=70 < 100 -> upgrades backup.
         Old 0xDEAD0001 dropped, 0xDEAD000A becomes backup[0]."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # avg=20 > backup weapon score 15, combo(20+25)=45 < 60 -> upgrade backup[0]
+        # avg=20 > backup weapon score 15, combo(20+50)=70 < 100 -> upgrade backup[0]
         self._gift_sword(seed=0xDEAD000A, name="Mid Sword", mindam=15, maxdam=25)
         self._settle()
         s = self._state()
@@ -357,14 +357,14 @@ class InvTests:
 
     def test_08_shield_upgrades_backup(self):
         """A shield better than backup[1] but not strong enough to evict upgrades backup[1].
-        State after test_07: HAND_LEFT=0xDEAD0003 (2H score 60),
-        bfi=[0xDEAD000A(score 20), 0xDEAD0002(score 25)].
-        Shield ac=70 -> score 35 > backup[1] score 25. combo(20+35)=55 < 60 -> upgrades backup[1].
+        State after test_07: HAND_LEFT=0xDEAD0003 (2H score 100),
+        bfi=[0xDEAD000A(score 20), 0xDEAD0002(score 50)].
+        Shield ac=70 -> score 70 > backup[1] score 50. combo(20+70)=90 < 100 -> upgrades backup[1].
         Old 0xDEAD0002 dropped, 0xDEAD000C becomes backup[1]."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # ac=70 -> score=35 > backup[1] score=25, combo(20+35)=55 < 60 -> upgrade backup[1]
+        # ac=70 -> score=70 > backup[1] score=50, combo(20+70)=90 < 100 -> upgrade backup[1]
         self._gift_shield(seed=0xDEAD000C, name="Better Shield", ac=70)
         self._settle()
         s = self._state()
@@ -380,9 +380,9 @@ class InvTests:
 
     def test_09_shield_blocked_by_2h(self):
         """A shield too weak to beat the 2H via combo is dropped.
-        State after test_08: HAND_LEFT=0xDEAD0003 (2H score 60),
-        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 35)].
-        Shield ac=10 -> score 5. combo(20 + 5) = 25 < 60 -> shield dropped."""
+        State after test_08: HAND_LEFT=0xDEAD0003 (2H score 100),
+        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 70)].
+        Shield ac=10 -> score 10. combo(20 + 10) = 30 < 100 -> shield dropped."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
@@ -398,9 +398,9 @@ class InvTests:
 
     def test_10_shield_evicts_2h_via_insurance(self):
         """A shield stronger than the 2H+insurance combo evicts the 2H.
-        State after test_09: HAND_LEFT=0xDEAD0003 (2H score 60),
-        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 35)].
-        Shield ac=100 -> score 50. combo(0xDEAD000A + shield) = 70 > 60 -> evicts 2H.
+        State after test_09: HAND_LEFT=0xDEAD0003 (2H score 100),
+        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 70)].
+        Shield ac=100 -> score 100. combo(0xDEAD000A + shield) = 120 > 100 -> evicts 2H.
         0xDEAD000A equips to HAND_LEFT, shield to HAND_RIGHT, 0xDEAD000C and 2H dropped."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
@@ -416,12 +416,12 @@ class InvTests:
 
     def test_11_1h_replaces_1h(self):
         """A stronger 1H sword equips over the existing 1H; old 1H dropped.
-        State after test_10: HAND_LEFT=0xDEAD000A (score 20), HAND_RIGHT=0xDEAD0005 (score 50).
-        combo(new 1H avg=75 + shield 50) = 125 > combo(20 + 50) = 70 -> equips."""
+        State after test_10: HAND_LEFT=0xDEAD000A (score 20), HAND_RIGHT=0xDEAD0005 (score 100).
+        combo(new 1H avg=75 + shield 100) = 175 > combo(20 + 100) = 120 -> equips."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=65, maxdam=85 -> avg=75; combo 75+50=125 > 20+50=70
+        # mindam=65, maxdam=85 -> avg=75; combo 75+100=175 > 20+100=120
         self._gift_sword(seed=0xDEAD0006, name="Strong 1H", mindam=65, maxdam=85)
         self._settle()
         s = self._state()
