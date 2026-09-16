@@ -136,8 +136,6 @@ _SLOT_DEFS = [
 _SLOT_POP  = [s for s, _, _, w in _SLOT_DEFS for _ in range(w)]
 _SLOT_INFO = {s: (itype, score_by) for s, itype, score_by, _ in _SLOT_DEFS}
 
-# Shield AC weight in weapon slot score (from agent _is_better_for_warrior).
-_AC_WEIGHT = 0.3
 
 # --- scoring coefficient vector ---
 # Each index corresponds to one scoring component used in _score_item_c().
@@ -185,7 +183,7 @@ C_AGENT = [
 ]
 
 
-def _score_item_c(it, bonuses, slot, C, shield_ac=0):
+def _score_item_c(it, bonuses, slot, C):
     """Parameterized item score used for gear selection in the optimizer."""
     res_sum = (bonuses.get('FIRERES', 0) + bonuses.get('LIGHTRES', 0) +
                bonuses.get('MAGICRES', 0) + bonuses.get('ALLRES', 0))
@@ -198,7 +196,7 @@ def _score_item_c(it, bonuses, slot, C, shield_ac=0):
              res_sum                  * C[CI_RES])
     if slot == 'weapon':
         avg_dam = (it['min_dam'] + it['max_dam']) / 2.0
-        return avg_dam * (1 + bonuses.get('DAMP', 0) / 100.0) + shield_ac * _AC_WEIGHT + bonus
+        return avg_dam * (1 + bonuses.get('DAMP', 0) / 100.0) + bonus
     if slot in ('armor', 'helm'):
         avg_ac = (it['min_ac'] + it['max_ac']) / 2.0
         return avg_ac * (1 + bonuses.get('ACP', 0) / 100.0) * C[CI_ARMOR_AC] + bonus
@@ -408,12 +406,12 @@ def _meets_req(it, eff):
             eff['dex'] >= it['req_dex'])
 
 
-def _score_item(it, bonuses, score_by, shield_ac=0):
+def _score_item(it, bonuses, score_by):
     """Legacy score - kept so C_DEFAULT produces identical output to the old sim."""
     return _score_item_c(it, bonuses,
                          'weapon' if score_by == 'damage' else
                          ('armor'  if score_by == 'ac'     else 'misc'),
-                         C_DEFAULT, shield_ac=shield_ac)
+                         C_DEFAULT)
 
 
 def _empty_slot():
@@ -587,7 +585,7 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
         slots = {s: _empty_slot() for s, *_ in _SLOT_DEFS}
         # Warrior starting gear: Short Sword (2-6 dam) + Buckler (3 AC)
         # Short Sword avg_dam=4.0; initial score uses starting C weights.
-        slots['weapon'] = dict(_empty_slot(), score=4.0 + 3.0 * _AC_WEIGHT, min_dam=2, max_dam=6)
+        slots['weapon'] = dict(_empty_slot(), score=4.0, min_dam=2, max_dam=6)
         # Buckler avg_ac=3.0; use ac-slot score so replacements are apples-to-apples
         slots['shield'] = dict(_empty_slot(), score=3.0 * C[CI_SHIELD_AC], ac=3)
         # Free strategy: track base stats cumulatively across floors.
@@ -654,8 +652,7 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                     continue
                 it = rng.choices(pool, weights=weights, k=1)[0]
                 bonuses   = _roll_affixes(rng, affix_cache, itype, lvl_lo, lvl_hi, floor)
-                shield_ac = slots['shield']['ac'] if slot == 'weapon' else 0
-                score     = _score_item_c(it, bonuses, slot, C, shield_ac=shield_ac)
+                score     = _score_item_c(it, bonuses, slot, C)
                 candidates.append((slot, it, bonuses, score))
 
             # Stat-boosting items first so their bonuses may unlock requirement-gated items
