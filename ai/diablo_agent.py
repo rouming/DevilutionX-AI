@@ -80,6 +80,27 @@ _SCORE_COEFF = {
     'shield_ac': 1.0,   # AC multiplier for shield slot
 }
 
+# Per-floor average monster stats derived from monstdat.tsv (Always-available monsters only).
+# Used by the direct combat efficiency scorer to evaluate item candidates.
+_FLOOR_MON_AVG = {
+    1:  {'ac':  6, 'tohit':  17, 'mlvl':  1, 'hp':   4, 'mind': 1, 'maxd':  5},
+    2:  {'ac':  7, 'tohit':  22, 'mlvl':  3, 'hp':   9, 'mind': 2, 'maxd':  6},
+    3:  {'ac': 11, 'tohit':  27, 'mlvl':  4, 'hp':  15, 'mind': 3, 'maxd':  8},
+    4:  {'ac': 17, 'tohit':  34, 'mlvl':  6, 'hp':  24, 'mind': 3, 'maxd': 10},
+    5:  {'ac': 20, 'tohit':  38, 'mlvl':  7, 'hp':  28, 'mind': 4, 'maxd': 11},
+    6:  {'ac': 29, 'tohit':  46, 'mlvl':  9, 'hp':  33, 'mind': 4, 'maxd': 13},
+    7:  {'ac': 35, 'tohit':  50, 'mlvl': 13, 'hp':  28, 'mind': 4, 'maxd': 16},
+    8:  {'ac': 35, 'tohit':  50, 'mlvl': 13, 'hp':  28, 'mind': 4, 'maxd': 16},
+    9:  {'ac': 45, 'tohit':  65, 'mlvl': 15, 'hp':  87, 'mind': 7, 'maxd': 18},
+    10: {'ac': 48, 'tohit':  73, 'mlvl': 18, 'hp':  99, 'mind': 9, 'maxd': 20},
+    11: {'ac': 51, 'tohit':  83, 'mlvl': 20, 'hp': 108, 'mind':10, 'maxd': 22},
+    12: {'ac': 55, 'tohit':  92, 'mlvl': 22, 'hp': 129, 'mind':11, 'maxd': 22},
+    13: {'ac': 59, 'tohit': 104, 'mlvl': 24, 'hp': 143, 'mind':13, 'maxd': 24},
+    14: {'ac': 58, 'tohit': 109, 'mlvl': 26, 'hp': 148, 'mind':13, 'maxd': 25},
+    15: {'ac': 59, 'tohit': 118, 'mlvl': 27, 'hp': 159, 'mind':12, 'maxd': 29},
+    16: {'ac': 52, 'tohit': 119, 'mlvl': 29, 'hp': 164, 'mind':12, 'maxd': 30},
+}
+
 
 def _item_name(item):
     return bytes(item._iIName).split(b'\x00')[0].decode('ascii', errors='replace')
@@ -302,6 +323,237 @@ def _hand_combo_score(left, right):
     ws = _weapon_only_score(left)  if left  is not None else 0.0
     ss = _shield_only_score(right) if right is not None else 0.0
     return ws + ss
+
+
+def _warrior_combat_eff(clvl, str_, dex, player_ac, hp,
+                        wpn_min, wpn_max, dam_pct, dam_mod, tohit,
+                        has_shield, dlvl):
+    """Combat efficiency for warrior vs the average floor monster.
+
+    Returns hp * warrior_dps / (mon_hp * mon_dps).  Higher is better.
+    Callers pass real engine values; identification filtering is their responsibility.
+    """
+    mon = _FLOOR_MON_AVG.get(dlvl, _FLOOR_MON_AVG[16])
+
+    # Warrior hits monster
+    hit_pct   = min(95, max(5, 50 + tohit + dex // 2 - mon['ac'])) / 100.0
+    avg_base  = (wpn_min + wpn_max) / 2.0
+    avg_dam   = avg_base * (1.0 + dam_pct / 100.0) + dam_mod + clvl * str_ / 100.0
+    crit      = 1.0 + clvl / 100.0
+    warrior_dps = max(0.0, avg_dam) * crit * hit_pct
+
+    # Monster hits warrior
+    base_pct  = min(95, max(5, mon['tohit'] + 2 * (mon['mlvl'] - clvl) + 30 - player_ac))
+    if has_shield:
+        base_pct = base_pct * 2 // 3
+    mon_dps   = (mon['mind'] + mon['maxd']) / 2.0 * (base_pct / 100.0)
+
+    if mon_dps < 1e-3:
+        return float(hp) * warrior_dps
+    return float(hp) * warrior_dps / (float(mon['hp']) * mon_dps)
+
+
+def _warrior_current_eff(player, dlvl):
+    """Combat efficiency for warrior given current equipped gear (all live player totals)."""
+    HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+    none_val   = dx.ItemType.None_.value
+    right      = player.InvBody[HAND_RIGHT]
+    has_shield = (int(right._itype) != none_val
+                  and int(right._itype) == dx.ItemType.Shield.value
+                  and int(right._iAC) > 0)
+    clvl = int(player._pLevel)
+    dex  = int(player._pDexterity)
+    return _warrior_combat_eff(
+        clvl,
+        int(player._pStrength),
+        dex,
+        int(player._pIAC) + int(player._pIBonusAC) + dex // 5,
+        max(1, int(player._pMaxHP) >> 6),
+        int(player._pIMinDam),
+        int(player._pIMaxDam),
+        int(player._pIBonusDam),
+        int(player._pIBonusDamMod),
+        int(player._pIBonusToHit),
+        has_shield,
+        dlvl)
+
+
+def _warrior_eff_with_swap(player, new_item, old_item, dlvl):
+    """Combat efficiency after virtually equipping new_item in place of old_item.
+
+    new_item is None to compute efficiency after removing old_item (empty slot).
+    old_item is None when the target slot is currently empty.
+    Applies only visible stats: identified items expose PL* affixes; unidentified
+    items expose only base AC and base weapon damage, mirroring the engine gate
+    (_iMagical == NORMAL || _iIdentified) in CalcPlrItemVals.
+    All deltas are applied on top of the live player totals (which already reflect
+    the old item's visible contribution).
+    """
+    none_val   = dx.ItemType.None_.value
+    HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+    ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
+
+    new_id = new_item is not None and not _needs_identification(new_item)
+    old_id = old_item is None or not _needs_identification(old_item)
+
+    def _vis(attr, item, identified):
+        if item is None or not identified:
+            return 0
+        return int(getattr(item, attr))
+
+    d_str   = _vis('_iPLStr',    new_item, new_id) - _vis('_iPLStr',    old_item, old_id)
+    d_dex   = _vis('_iPLDex',    new_item, new_id) - _vis('_iPLDex',    old_item, old_id)
+    d_vit   = _vis('_iPLVit',    new_item, new_id) - _vis('_iPLVit',    old_item, old_id)
+    d_hp    = _vis('_iPLHP',     new_item, new_id) - _vis('_iPLHP',     old_item, old_id)
+    d_tohit = _vis('_iPLToHit',  new_item, new_id) - _vis('_iPLToHit',  old_item, old_id)
+    d_enac  = _vis('_iPLEnAc',   new_item, new_id) - _vis('_iPLEnAc',   old_item, old_id)
+    d_dpct  = _vis('_iPLDam',    new_item, new_id) - _vis('_iPLDam',    old_item, old_id)
+    d_dmod  = _vis('_iPLDamMod', new_item, new_id) - _vis('_iPLDamMod', old_item, old_id)
+
+    new_dex = int(player._pDexterity) + d_dex
+    new_str = int(player._pStrength)  + d_str
+
+    # HP: warrior +2 per VIT; _iPLHP stored as HP*64
+    new_hp = max(1, (int(player._pMaxHP) >> 6) + 2 * d_vit + (d_hp >> 6))
+
+    # Visible AC: identified item -> base + ACP bonus; unidentified -> base AC only.
+    # Engine applies ACP only for identified items (_pIBonusAC excludes unidentified).
+    def _vis_ac(item, identified):
+        if item is None:
+            return 0
+        return _identified_item_ac(item) if identified else int(item._iAC)
+
+    # When new_item is None (removal), classify by old_item type so AC/damage are zeroed.
+    if new_item is not None:
+        is_weapon = int(new_item._iClass) == dx.item_class.ICLASS_WEAPON.value
+        is_shield  = int(new_item._itype) == dx.ItemType.Shield.value
+    else:
+        is_weapon = old_item is not None and int(old_item._iClass) == dx.item_class.ICLASS_WEAPON.value
+        is_shield  = old_item is not None and int(old_item._itype) == dx.ItemType.Shield.value
+
+    if is_weapon:
+        old_ac_contrib = 0
+        new_ac_contrib = 0
+    else:
+        old_ac_contrib = _vis_ac(old_item, old_id)
+        new_ac_contrib = _vis_ac(new_item, new_id)
+
+    new_player_ac = (int(player._pIAC) + int(player._pIBonusAC)
+                     - old_ac_contrib + new_ac_contrib + new_dex // 5)
+
+    # Shield check after swap
+    if is_shield:
+        has_shield = new_ac_contrib > 0
+    elif new_item is not None and int(new_item._iLoc) == ILOC_2H:
+        has_shield = False
+        # 2H displaces the shield; remove its AC from new_player_ac.
+        right = player.InvBody[HAND_RIGHT]
+        if (int(right._itype) != none_val
+                and int(right._itype) == dx.ItemType.Shield.value):
+            right_id = not _needs_identification(right)
+            new_player_ac -= _vis_ac(right, right_id)
+    else:
+        right = player.InvBody[HAND_RIGHT]
+        has_shield = (int(right._itype) != none_val
+                      and int(right._itype) == dx.ItemType.Shield.value
+                      and int(right._iAC) > 0)
+
+    # Weapon damage: new item if equipping a weapon; zero if removing a weapon; else unchanged.
+    if is_weapon:
+        if new_item is not None:
+            wpn_min = int(new_item._iMinDam)
+            wpn_max = int(new_item._iMaxDam)
+        else:
+            wpn_min = 0  # removing weapon: bare hands
+            wpn_max = 0
+    else:
+        wpn_min = int(player._pIMinDam)
+        wpn_max = int(player._pIMaxDam)
+
+    dam_pct = int(player._pIBonusDam)    + d_dpct
+    dam_mod = int(player._pIBonusDamMod) + d_dmod
+    tohit   = int(player._pIBonusToHit)  + d_tohit + d_enac
+
+    return _warrior_combat_eff(
+        int(player._pLevel), new_str, new_dex, new_player_ac, new_hp,
+        wpn_min, wpn_max, dam_pct, dam_mod, tohit, has_shield, dlvl)
+
+
+def _warrior_eff_two_hand_swap(player, new_left, old_left, new_right, old_right, dlvl):
+    """Combat efficiency after simultaneously swapping both hand slots.
+
+    Used for 2H <-> 1H+shield comparisons. Either new/old item can be None (empty).
+    Visible-stats-only rule applies to each item independently.
+    """
+    none_val   = dx.ItemType.None_.value
+    ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
+
+    def _id(item):
+        return item is not None and not _needs_identification(item)
+
+    nl_id = _id(new_left);  ol_id = old_left  is None or not _needs_identification(old_left)
+    nr_id = _id(new_right); or_id = old_right is None or not _needs_identification(old_right)
+
+    def _vis(attr, item, identified):
+        if item is None or not identified:
+            return 0
+        return int(getattr(item, attr))
+
+    # Combined stat deltas from both hand slots
+    d_str   = (_vis('_iPLStr',    new_left,  nl_id) - _vis('_iPLStr',    old_left,  ol_id) +
+               _vis('_iPLStr',    new_right, nr_id) - _vis('_iPLStr',    old_right, or_id))
+    d_dex   = (_vis('_iPLDex',    new_left,  nl_id) - _vis('_iPLDex',    old_left,  ol_id) +
+               _vis('_iPLDex',    new_right, nr_id) - _vis('_iPLDex',    old_right, or_id))
+    d_vit   = (_vis('_iPLVit',    new_left,  nl_id) - _vis('_iPLVit',    old_left,  ol_id) +
+               _vis('_iPLVit',    new_right, nr_id) - _vis('_iPLVit',    old_right, or_id))
+    d_hp    = (_vis('_iPLHP',     new_left,  nl_id) - _vis('_iPLHP',     old_left,  ol_id) +
+               _vis('_iPLHP',     new_right, nr_id) - _vis('_iPLHP',     old_right, or_id))
+    d_tohit = (_vis('_iPLToHit',  new_left,  nl_id) - _vis('_iPLToHit',  old_left,  ol_id) +
+               _vis('_iPLToHit',  new_right, nr_id) - _vis('_iPLToHit',  old_right, or_id))
+    d_enac  = (_vis('_iPLEnAc',   new_left,  nl_id) - _vis('_iPLEnAc',   old_left,  ol_id) +
+               _vis('_iPLEnAc',   new_right, nr_id) - _vis('_iPLEnAc',   old_right, or_id))
+    d_dpct  = (_vis('_iPLDam',    new_left,  nl_id) - _vis('_iPLDam',    old_left,  ol_id) +
+               _vis('_iPLDam',    new_right, nr_id) - _vis('_iPLDam',    old_right, or_id))
+    d_dmod  = (_vis('_iPLDamMod', new_left,  nl_id) - _vis('_iPLDamMod', old_left,  ol_id) +
+               _vis('_iPLDamMod', new_right, nr_id) - _vis('_iPLDamMod', old_right, or_id))
+
+    new_dex = int(player._pDexterity) + d_dex
+    new_str = int(player._pStrength)  + d_str
+    new_hp  = max(1, (int(player._pMaxHP) >> 6) + 2 * d_vit + (d_hp >> 6))
+
+    def _vis_ac(item, identified):
+        if item is None:
+            return 0
+        return _identified_item_ac(item) if identified else int(item._iAC)
+
+    # Left hand is typically a weapon (no AC); right hand may be a shield (has AC).
+    new_right_ac = _vis_ac(new_right, nr_id)
+    old_right_ac = _vis_ac(old_right, or_id)
+    new_player_ac = (int(player._pIAC) + int(player._pIBonusAC)
+                     - old_right_ac + new_right_ac + new_dex // 5)
+
+    # Shield present after swap if new_right is a shield with positive visible AC
+    has_shield = (new_right is not None
+                  and int(new_right._itype) == dx.ItemType.Shield.value
+                  and new_right_ac > 0)
+
+    # Weapon damage from new_left if it is a weapon, else zero (removes weapon)
+    new_left_is_weapon = (new_left is not None
+                          and int(new_left._iClass) == dx.item_class.ICLASS_WEAPON.value)
+    if new_left_is_weapon:
+        wpn_min = int(new_left._iMinDam)
+        wpn_max = int(new_left._iMaxDam)
+    else:
+        wpn_min = 0
+        wpn_max = 0
+
+    dam_pct = int(player._pIBonusDam)    + d_dpct
+    dam_mod = int(player._pIBonusDamMod) + d_dmod
+    tohit   = int(player._pIBonusToHit)  + d_tohit + d_enac
+
+    return _warrior_combat_eff(
+        int(player._pLevel), new_str, new_dex, new_player_ac, new_hp,
+        wpn_min, wpn_max, dam_pct, dam_mod, tohit, has_shield, dlvl)
 
 
 def _item_score_for_warrior(item, player, complement=None, force_basic=False):
@@ -854,6 +1106,7 @@ class AgentAI:
         # Cleared only when engine confirms the equip (InvBody seed match) - never on
         # intermediate equips - so the winning seed always governs comparisons.
         self._pending_equip          = {}
+        self._cur_dlvl               = 0   # set each tick before item evaluation
         # ordered list of gear decisions pending execution:
         #   {'action': 'equip'|'drop', 'seed': int, 'name': str, 'body_cii': int (equip)}
         self._action_queue           = []
@@ -1772,7 +2025,7 @@ class AgentAI:
 
     def _resolve_identified_equipped(self, d, identified_seeds):
         """Handle body-slot items revealed by identification this tick.
-        - Cursed (score < 0): drop immediately; re-evaluate any backup for this slot.
+        - Cursed (efficiency drops when removed): drop immediately; re-evaluate any backup.
         - Non-cursed with backup: compare backup vs identified; equip winner, drop loser.
         InvDropItem accepts body-slot cii so no move-to-inv step is needed for drops.
         Returns True if a direct drop was submitted this tick."""
@@ -1781,9 +2034,8 @@ class AgentAI:
         INV_FIRST  = dx.inv_item.INVITEM_INV_FIRST.value
         HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
         HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
-        ILOC_2H     = dx.item_equip_type.ILOC_TWOHAND.value
-        hand_r      = player.InvBody[HAND_RIGHT]
-        live_shield = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
+        ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
+        dlvl       = max(1, self._cur_dlvl)
         for bc in range(INV_FIRST):
             item = player.InvBody[bc]
             if int(item._itype) == none_val:
@@ -1793,11 +2045,13 @@ class AgentAI:
                 continue
             if int(item._iLoc) in _SKIP_ILOC:
                 continue
-            complement   = live_shield if bc == HAND_LEFT else None
-            score, label = _item_score_for_warrior(item, player, complement)
+            cur_eff      = _warrior_current_eff(player, dlvl)
+            eff_without  = _warrior_eff_with_swap(player, None, item, dlvl)
+            label        = f"eff={cur_eff:.4f}"
             backup_seeds = self._backup_for_item.pop(eq_seed, None)  # list[seed] or None
             name         = _item_name(item)
-            if score < 0:
+            if eff_without > cur_eff:
+                # Removing the item improves efficiency: it is harmful (cursed).
                 print(f"agent {self._tick_count}: drop harmful equipped '{name}'"
                       f" seed={eq_seed} [{label}] bc={bc}", file=self.log)
                 self._drop_and_mask(d, bc)
@@ -1809,14 +2063,14 @@ class AgentAI:
             if not backup_seeds:
                 continue
             if bc == HAND_LEFT and int(item._iLoc) == ILOC_2H:
-                # 2H identified: compare backup combo (weapon + shield) vs 2H weapon-only.
+                # 2H identified: compare backup combo (weapon + shield) vs 2H.
                 bk_weapon_seed = backup_seeds[0] if len(backup_seeds) > 0 else None
                 bk_shield_seed = backup_seeds[1] if len(backup_seeds) > 1 else None
                 bk_weapon = self._find_inv_by_seed(player, bk_weapon_seed)[0] if bk_weapon_seed else None
                 bk_shield = self._find_inv_by_seed(player, bk_shield_seed)[0] if bk_shield_seed else None
-                bk_score  = _hand_combo_score(bk_weapon, bk_shield)
-                bk_label  = f"score={bk_score:.1f}"
-                if bk_score > score:
+                bk_eff   = _warrior_eff_two_hand_swap(player, bk_weapon, item, bk_shield, None, dlvl)
+                bk_label = f"eff={bk_eff:.4f}"
+                if bk_eff > cur_eff:
                     bk_wname = _item_name(bk_weapon) if bk_weapon is not None else None
                     bk_sname = _item_name(bk_shield) if bk_shield is not None else None
                     parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
@@ -1825,21 +2079,19 @@ class AgentAI:
                           f" beats 2H '{name}' [{label}] - restoring"
                           f" {', '.join(p for p in parts if p)}", file=self.log)
                     if bk_weapon is not None:
-                        self._pending_equip[HAND_LEFT] = (bk_weapon_seed, bk_score, bk_wname)
+                        self._pending_equip[HAND_LEFT] = (bk_weapon_seed, bk_eff, bk_wname)
                         self._queued_seeds.add(bk_weapon_seed)
                         self._action_queue.append(
                             {'action': 'equip', 'seed': bk_weapon_seed,
                              'name': bk_wname, 'body_cii': HAND_LEFT})
                     if bk_shield is not None:
-                        self._pending_equip[HAND_RIGHT] = (bk_shield_seed, bk_score, bk_sname)
+                        self._pending_equip[HAND_RIGHT] = (bk_shield_seed, bk_eff, bk_sname)
                         self._queued_seeds.add(bk_shield_seed)
                         self._action_queue.append(
                             {'action': 'equip', 'seed': bk_shield_seed,
                              'name': bk_sname, 'body_cii': HAND_RIGHT})
                 else:
                     # 2H beats backup combo - keep backups as eviction insurance.
-                    # If a better 1H later displaces the 2H, _cleanup_stale_backups
-                    # frees them: shield re-evaluates to HAND_RIGHT, old weapon drops.
                     labeled = [("weapon", bk_weapon_seed, bk_weapon),
                                ("shield", bk_shield_seed, bk_shield)]
                     valid = [(role, s, it) for role, s, it in labeled
@@ -1853,23 +2105,19 @@ class AgentAI:
                               f" {', '.join(parts)}", file=self.log)
             else:
                 # Normal: single backup item competing for the same slot.
-                # backup_seeds may have len > 1 when a 1H inherited a 2H backup list
-                # via the transfer chain (index 0 = weapon, index 1 = shield).
                 bk_seed = backup_seeds[0]
                 bk_item, _ = self._find_inv_by_seed(player, bk_seed)
                 if bk_item is None:
-                    # Backup already gone (dropped by another path); nothing to compare.
                     continue
-                bk_score, bk_label = _item_score_for_warrior(bk_item, player, complement)
+                bk_eff  = _warrior_eff_with_swap(player, bk_item, item, dlvl)
+                bk_label = f"eff={bk_eff:.4f}"
                 bk_name = _item_name(bk_item)
-                if bk_score > score:
+                if bk_eff > cur_eff:
                     print(f"agent {self._tick_count}: backup '{bk_name}' seed={bk_seed}"
                           f" [{bk_label}] beats '{name}' seed={eq_seed} [{label}]"
                           f" - equipping backup", file=self.log)
-                    self._pending_equip[bc] = (bk_seed, bk_score, bk_name)
+                    self._pending_equip[bc] = (bk_seed, bk_eff, bk_name)
                     self._queued_seeds.add(bk_seed)
-                    # The equip action swaps backup into body; main moves to InvList
-                    # and is dropped on the next tick via _evaluate_and_queue.
                     self._action_queue.append(
                         {'action': 'equip', 'seed': bk_seed, 'name': bk_name, 'body_cii': bc})
                 else:
@@ -1877,9 +2125,6 @@ class AgentAI:
                           f" [{bk_label}] - '{name}' seed={eq_seed} [{label}] is better", file=self.log)
                     self._queued_seeds.add(bk_seed)
                     self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
-                # Free any extra backups (e.g. a shield stranded when a 1H inherited a 2H
-                # backup list via the transfer chain). Re-evaluate them now that the slot
-                # context is correct (identified item is in InvBody).
                 for extra_seed in backup_seeds[1:]:
                     self._queued_seeds.discard(extra_seed)
                     self._evaluate_and_queue(d, extra_seed)
@@ -2059,6 +2304,7 @@ class AgentAI:
         _pending_equip, and returns
         (is_better, new_score, new_label, old_score, old_label, old_name, body_cii).
         old_name is None for class-filtered items (no comparison logged).
+        All comparisons use direct combat efficiency (hp*dps_ratio).
         """
         if int(item._itype) == dx.ItemType.Bow.value:
             return False, 0.0, "bow", 0.0, "", None, None
@@ -2070,144 +2316,128 @@ class AgentAI:
         ILOC_RING  = dx.item_equip_type.ILOC_RING.value
         HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
         HAND_RIGHT = dx.inv_item.INVITEM_HAND_RIGHT.value
+        none_val   = dx.ItemType.None_.value
         iloc       = int(item._iLoc)
         body_cii   = _item_body_slot(item)
+        dlvl       = max(1, self._cur_dlvl)
 
         if iloc == ILOC_RING:
             left_cii  = dx.inv_item.INVITEM_RING_LEFT.value
             right_cii = dx.inv_item.INVITEM_RING_RIGHT.value
             left      = player.InvBody[left_cii]
             right     = player.InvBody[right_cii]
-            if int(left._itype) == dx.ItemType.None_.value:
-                body_cii = left_cii   # left empty: fill it
-            elif int(right._itype) == dx.ItemType.None_.value:
-                body_cii = right_cii  # right empty: fill it
+            if int(left._itype) == none_val:
+                body_cii = left_cii
+            elif int(right._itype) == none_val:
+                body_cii = right_cii
             else:
-                # Both occupied: displace the weaker ring.
+                # Both occupied: displace the ring with smaller marginal efficiency gain.
                 lp = self._pending_equip.get(left_cii)
                 rp = self._pending_equip.get(right_cii)
-                ls = lp[1] if lp else _item_score_for_warrior(left, player)[0]
-                rs = rp[1] if rp else _item_score_for_warrior(right, player)[0]
+                cur_eff      = _warrior_current_eff(player, dlvl)
+                eff_no_left  = _warrior_eff_with_swap(player, None, left,  dlvl)
+                eff_no_right = _warrior_eff_with_swap(player, None, right, dlvl)
+                ls = (lp[1] if lp else cur_eff) - eff_no_left
+                rs = (rp[1] if rp else cur_eff) - eff_no_right
                 body_cii = left_cii if ls <= rs else right_cii
-            complement = None
 
         elif iloc == ILOC_2H:
-            # New item is 2H: score weapon-only (2H cannot pair with a shield).
-            # Old score is the full combo (1H+shield) or weapon-only if 2H is equipped.
-            new_score = _weapon_only_score(item)
-            new_label = f"score={new_score:.1f}"
+            eq = player.InvBody[HAND_LEFT]
+            old_item  = eq if int(eq._itype) != none_val else None
+            new_eff   = _warrior_eff_with_swap(player, item, old_item, dlvl)
+            new_label = f"eff={new_eff:.4f}"
             pending   = self._pending_equip.get(HAND_LEFT)
             if pending is not None:
-                _, old_score, old_name = pending
-                return (new_score > old_score, new_score, new_label,
-                        old_score, f"score={old_score:.1f}", old_name, HAND_LEFT)
-            eq = player.InvBody[HAND_LEFT]
-            if int(eq._itype) == dx.ItemType.None_.value:
-                return new_score >= 0.0, new_score, new_label, 0.0, "empty", "", HAND_LEFT
-            if int(eq._iLoc) == ILOC_2H:
-                old_score = _weapon_only_score(eq)
-            else:
-                # 1H in left: compare against full 1H+shield combo.
-                hand_r = player.InvBody[HAND_RIGHT]
-                live_shield = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
-                if live_shield is None:
-                    # A shield equip may be queued but not yet confirmed by the engine
-                    # (e.g. backup-shield restore in flight). Include it so the 2H is
-                    # not re-equipping against a temporarily bare 1H.
-                    pend_r = self._pending_equip.get(HAND_RIGHT)
-                    if pend_r is not None:
-                        live_shield, _ = self._find_inv_by_seed(player, pend_r[0])
-                old_score, _ = _item_score_for_warrior(eq, player, live_shield)
-            old_label = f"score={old_score:.1f}"
-            is_better = new_score > old_score or (
-                new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
-            return is_better, new_score, new_label, old_score, old_label, _item_name(eq), HAND_LEFT
+                _, old_eff, old_name = pending
+                return (new_eff > old_eff, new_eff, new_label,
+                        old_eff, f"eff={old_eff:.4f}", old_name, HAND_LEFT)
+            if old_item is None:
+                return new_eff >= 0.0, new_eff, new_label, 0.0, "empty", "", HAND_LEFT
+            old_eff   = _warrior_current_eff(player, dlvl)
+            # When HAND_RIGHT is empty but a shield equip is pending (mid-swap),
+            # include it so the 2H is not compared against a temporarily bare 1H.
+            right = player.InvBody[HAND_RIGHT]
+            if int(right._itype) == none_val:
+                pend_r = self._pending_equip.get(HAND_RIGHT)
+                if pend_r is not None:
+                    pend_sh, _ = self._find_inv_by_seed(player, pend_r[0])
+                    if pend_sh is not None:
+                        old_eff = _warrior_eff_with_swap(player, pend_sh, None, dlvl)
+            old_label = f"eff={old_eff:.4f}"
+            is_better = new_eff > old_eff or (
+                new_eff == old_eff and _dur_ratio(item) > _dur_ratio(eq))
+            return is_better, new_eff, new_label, old_eff, old_label, _item_name(eq), HAND_LEFT
 
         elif body_cii == HAND_LEFT:
-            # 1H weapon: score as combo with live shield.
-            # When 2H is equipped, pair with backup shield (if any) for combo comparison.
             hand_l_eq = player.InvBody[HAND_LEFT]
-            hand_r    = player.InvBody[HAND_RIGHT]
-            if (int(hand_l_eq._itype) != dx.ItemType.None_.value
+            if (int(hand_l_eq._itype) != none_val
                     and int(hand_l_eq._iLoc) == ILOC_2H):
+                # 1H weapon vs current 2H: evaluate new weapon + backup shield combo.
                 bk_sh_item = None
                 bk_list = self._backup_for_item.get(int(hand_l_eq._iSeed), [])
                 if len(bk_list) > 1:
                     bk_sh_item = self._find_inv_by_seed(player, bk_list[1])[0]
-                new_score, new_label = _item_score_for_warrior(item, player, bk_sh_item)
+                new_eff  = _warrior_eff_two_hand_swap(
+                    player, item, hand_l_eq, bk_sh_item, None, dlvl)
+                new_label = f"eff={new_eff:.4f}"
                 pending = self._pending_equip.get(HAND_LEFT)
                 if pending is not None:
-                    _, old_score, old_name = pending
-                    return (new_score > old_score, new_score, new_label,
-                            old_score, f"score={old_score:.1f}", old_name, HAND_LEFT)
-                old_score = _weapon_only_score(hand_l_eq)
-                old_label = f"score={old_score:.1f}"
-                is_better = new_score > old_score or (
-                    new_score == old_score and _dur_ratio(item) > _dur_ratio(hand_l_eq))
-                return (is_better, new_score, new_label, old_score, old_label,
+                    _, old_eff, old_name = pending
+                    return (new_eff > old_eff, new_eff, new_label,
+                            old_eff, f"eff={old_eff:.4f}", old_name, HAND_LEFT)
+                old_eff   = _warrior_current_eff(player, dlvl)
+                old_label = f"eff={old_eff:.4f}"
+                is_better = new_eff > old_eff or (
+                    new_eff == old_eff and _dur_ratio(item) > _dur_ratio(hand_l_eq))
+                return (is_better, new_eff, new_label, old_eff, old_label,
                         _item_name(hand_l_eq), HAND_LEFT)
-            complement = hand_r if int(hand_r._itype) != dx.ItemType.None_.value else None
 
         elif body_cii == HAND_RIGHT:
-            # Shield: when 2H occupies HAND_LEFT, try combo (new shield + backup weapon) vs 2H.
-            # If no backup weapon available, shield can't fill a hand alone - drop it.
             hand_l = player.InvBody[HAND_LEFT]
-            if (int(hand_l._itype) != dx.ItemType.None_.value
+            if (int(hand_l._itype) != none_val
                     and int(hand_l._iLoc) == ILOC_2H):
+                # Shield vs current 2H: requires a backup weapon to form a combo.
                 bk_wp_item = None
                 bk_list = self._backup_for_item.get(int(hand_l._iSeed), [])
                 if len(bk_list) > 0:
                     bk_wp_item = self._find_inv_by_seed(player, bk_list[0])[0]
                 if (bk_wp_item is None
                         or int(bk_wp_item._iClass) != dx.item_class.ICLASS_WEAPON.value):
-                    # No backup weapon (or stale entry holds a shield at index 0):
-                    # shield can't evict 2H without a weapon partner.
-                    # new_score carries shield-only score for the backup-upgrade comparison.
-                    return (False, _shield_only_score(item), "shield-blocked-by-2h",
+                    # No backup weapon: shield can't evict 2H without a weapon partner.
+                    # Return shield's solo efficiency for the backup-upgrade comparison.
+                    sh_eff = _warrior_eff_with_swap(player, item, None, dlvl)
+                    return (False, sh_eff, "shield-blocked-by-2h",
                             0.0, "", None, HAND_RIGHT)
-                sh_score   = _shield_only_score(item)
-                combo_score = sh_score + max(0.0, _weapon_only_score(bk_wp_item))
-                old_score  = _weapon_only_score(hand_l)
-                old_label  = f"score={old_score:.1f}"
-                if combo_score > old_score:
-                    combo_label = f"combo={combo_score:.1f}"
-                    return (True, combo_score, combo_label,
-                            old_score, old_label, _item_name(hand_l), HAND_RIGHT)
-                # Combo loses: return shield-only score so backup-upgrade comparison is correct.
-                return (False, sh_score, f"score={sh_score:.1f}",
-                        old_score, old_label, _item_name(hand_l), HAND_RIGHT)
-            complement = hand_l if int(hand_l._itype) != dx.ItemType.None_.value else None
+                new_eff   = _warrior_eff_two_hand_swap(
+                    player, bk_wp_item, hand_l, item, None, dlvl)
+                old_eff   = _warrior_current_eff(player, dlvl)
+                new_label = f"eff={new_eff:.4f}"
+                old_label = f"eff={old_eff:.4f}"
+                if new_eff > old_eff:
+                    return (True, new_eff, new_label,
+                            old_eff, old_label, _item_name(hand_l), HAND_RIGHT)
+                sh_eff = _warrior_eff_with_swap(player, item, None, dlvl)
+                return (False, sh_eff, f"eff={sh_eff:.4f}",
+                        old_eff, old_label, _item_name(hand_l), HAND_RIGHT)
 
-        else:
-            # Head, chest, amulet - single slot.
-            complement = None
-
-        new_score, new_label = _item_score_for_warrior(item, player, complement)
-
+        # Single slot (head, chest, amulet) or 1H weapon with 1H in left:
+        # compare new item efficiency against current slot via virtual swap.
         pending = self._pending_equip.get(body_cii)
+        eq      = player.InvBody[body_cii]
+        old_item = eq if int(eq._itype) != none_val else None
+        new_eff  = _warrior_eff_with_swap(player, item, old_item, dlvl)
+        new_label = f"eff={new_eff:.4f}"
         if pending is not None:
-            _, old_score, old_name = pending
-            return new_score > old_score, new_score, new_label, old_score, f"score={old_score:.1f}", old_name, body_cii
-
-        eq = player.InvBody[body_cii]
-        if int(eq._itype) == dx.ItemType.None_.value:
-            # >= 0: unidentified jewelry scores 0 and should fill empty slots;
-            # identified harmful items (e.g. cursed ring) score negative and must not.
-            return new_score >= 0.0, new_score, new_label, 0.0, "empty", "", body_cii
-
-        old_score, old_label = _item_score_for_warrior(eq, player, complement)
-        # Either item is unidentified magic: re-score both at basic level so hidden
-        # bonuses on either side cannot skew the comparison.  NORMAL items are exempt
-        # (not _is_magic -> identified=True in score functions regardless of force_basic).
-        if ((_needs_identification(item) or _needs_identification(eq))
-                and _is_magic(item) and _is_magic(eq)):
-            new_score, new_label = _item_score_for_warrior(
-                item, player, complement, force_basic=True)
-            old_score, old_label = _item_score_for_warrior(
-                eq, player, complement, force_basic=True)
-        is_better = new_score > old_score or (
-            new_score == old_score and _dur_ratio(item) > _dur_ratio(eq))
-        return is_better, new_score, new_label, old_score, old_label, _item_name(eq), body_cii
+            _, old_eff, old_name = pending
+            return (new_eff > old_eff, new_eff, new_label,
+                    old_eff, f"eff={old_eff:.4f}", old_name, body_cii)
+        if old_item is None:
+            return new_eff >= 0.0, new_eff, new_label, 0.0, "empty", "", body_cii
+        old_eff   = _warrior_current_eff(player, dlvl)
+        old_label = f"eff={old_eff:.4f}"
+        is_better = new_eff > old_eff or (
+            new_eff == old_eff and _dur_ratio(item) > _dur_ratio(eq))
+        return is_better, new_eff, new_label, old_eff, old_label, _item_name(eq), body_cii
 
     def _is_better_rogue(self, item, player):
         assert False, "rogue item evaluation not implemented"
@@ -2293,6 +2523,7 @@ class AgentAI:
         # gear; identification happens in-place after equipping once a scroll is available.
         # Non-jewelry unidentified items use base stats for scoring, so fall through too.
 
+        self._cur_dlvl = int(d.currlevel.value)
         is_better, new_score, new_label, old_score, old_label, old_name, body_cii = \
             is_better_fn(item, player)
         pending = self._pending_equip.get(body_cii)
@@ -2525,10 +2756,9 @@ class AgentAI:
                                       f" '{name}' seed={seed} [{new_label}]"
                                       f" for 2H seed={hl_seed}", file=self.log)
                                 return
-                            e_score   = (_shield_only_score(existing_item) if is_shield
-                                         else _weapon_only_score(existing_item))
-                            new_cmp   = (_shield_only_score(item) if is_shield
-                                         else _weapon_only_score(item))
+                            bk_dlvl = max(1, self._cur_dlvl)
+                            e_score = _warrior_eff_with_swap(player, existing_item, None, bk_dlvl)
+                            new_cmp = _warrior_eff_with_swap(player, item, None, bk_dlvl)
                             if new_cmp > e_score:
                                 bk_list[bk_idx] = seed
                                 old_bk = _item_name(existing_item)
@@ -2553,8 +2783,9 @@ class AgentAI:
                                 return
                             else:
                                 # Weapon gone; lone shield at bfi[0]. Upgrade if incoming is better.
-                                e_score = _shield_only_score(bk0_item)
-                                new_cmp = _shield_only_score(item)
+                                bk_dlvl = max(1, self._cur_dlvl)
+                                e_score = _warrior_eff_with_swap(player, bk0_item, None, bk_dlvl)
+                                new_cmp = _warrior_eff_with_swap(player, item, None, bk_dlvl)
                                 if new_cmp > e_score:
                                     bk_list[0] = seed
                                     old_bk = _item_name(bk0_item)
