@@ -251,6 +251,7 @@ class DiabloParserNamespace(argparse.Namespace):
 
 
 def make_diablo_parser():
+    from diablo_agent import parse_seed_range
     class IndentedHelpFormatter(argparse.RawTextHelpFormatter):
         def __init__(self, *args, **kwargs):
             # Width controls line wrapping; max_help_position controls indent
@@ -536,6 +537,9 @@ def make_diablo_parser():
     agent_ai_parser.add_argument(
         "--pause", type=float, default=0,
         help="Seconds to pause between agent steps, useful in GUI mode (default: 0)")
+    agent_ai_parser.add_argument(
+        "--seeds", type=parse_seed_range, default=parse_seed_range("1"), metavar="A-B",
+        help="Seed range A-B (inclusive) or single seed A to run sequentially (default: 1)")
 
     #
     # train-ai
@@ -2862,7 +2866,7 @@ def play_ai(args, gameconfig):
 
 
 def agent_ai(args, gameconfig):
-    from diablo_agent import AgentAI, ModelRunner
+    from diablo_agent import AgentAI, ModelRunner, run_agent_loop
     from rl.flat_model import FlatACModel
     from rl.hrl_model import HRLACModel
     from rl.utils import device
@@ -2917,19 +2921,21 @@ def agent_ai(args, gameconfig):
 
     model_runners = {lvl: name_to_runner[name] for lvl, name in level_to_name.items()}
 
-    supervisor = AgentAI(
-        game, model_runners,
-        view_radius=gameconfig['view-radius'],
-        kill_threshold=args.kill_threshold,
-        repair_threshold=args.repair_threshold,
-        max_steps_per_level=args.max_steps_per_level,
-        no_gear_management=args.no_gear_management,
-        use_two_hand_weapon=args.use_two_hand_weapon,
-        all_items_identified=args.all_items_identified,
-        safe_radius=args.safe_radius,
-        pause=args.pause,
-        stat_strategy=args.stat_strategy)
-    supervisor.run()
+    def make_supervisor():
+        return AgentAI(
+            game, model_runners,
+            view_radius=gameconfig['view-radius'],
+            kill_threshold=args.kill_threshold,
+            repair_threshold=args.repair_threshold,
+            max_steps_per_level=args.max_steps_per_level,
+            no_gear_management=args.no_gear_management,
+            use_two_hand_weapon=args.use_two_hand_weapon,
+            all_items_identified=args.all_items_identified,
+            safe_radius=args.safe_radius,
+            pause=args.pause,
+            stat_strategy=args.stat_strategy)
+
+    run_agent_loop(args.seeds, env, make_supervisor)
 
     env.close()
     return 0

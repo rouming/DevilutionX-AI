@@ -694,6 +694,47 @@ class Pathfinder:
 
 
 # ---------------------------------------------------------------------------
+# Seed loop
+# ---------------------------------------------------------------------------
+
+def parse_seed_range(s):
+    """Argparse type: parse 'A-B' or 'A' into a range of integer seeds (inclusive).
+
+    '1-30' -> range(1, 31)
+    '5'    -> range(5, 6)
+    """
+    parts = s.split('-')
+    try:
+        if len(parts) == 2:
+            lo, hi = int(parts[0]), int(parts[1])
+        elif len(parts) == 1:
+            lo = hi = int(parts[0])
+        else:
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"invalid seeds '{s}': expected 'A-B' or 'A'")
+    if lo > hi:
+        raise ValueError(f"invalid seeds '{s}': A must be <= B")
+    return range(lo, hi + 1)
+
+
+def run_agent_loop(seeds, env, make_supervisor):
+    """Run the agent sequentially over seeds, resetting the game for each.
+
+    seeds:          iterable of integer seed values
+    env:            gym env; env.reset(seed=s) starts a new game with seed s
+    make_supervisor: callable() -> AgentAI; called fresh for each seed so all
+                    episode state is clean
+    """
+    SEP = "=" * 40
+    for seed in seeds:
+        print(f"{SEP}\n  seed {seed}\n{SEP}", flush=True)
+        env.reset(seed=seed)
+        make_supervisor().run()
+        print(f"{SEP}\n  seed {seed} done\n{SEP}", flush=True)
+
+
+# ---------------------------------------------------------------------------
 # ModelRunner
 # ---------------------------------------------------------------------------
 
