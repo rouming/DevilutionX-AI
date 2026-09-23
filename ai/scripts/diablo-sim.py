@@ -122,6 +122,9 @@ P_SUFFIX = 2.0 / 3.0 + (0.75 / 3.0 * 0.5)  # ~0.792
 
 STAT_POWERS = {'STR', 'DEX', 'MAG', 'VIT'}
 
+IGNORE_BOW = True   # warrior cannot use bows
+IGNORE_2HW = True   # warrior uses 1H+shield; never equip 2H melee/staves
+
 # Warrior gear slots: (name, affix_itype, score_method, drop_weight).
 # Weights derived from itemdat.tsv dropRate sums per slot class.
 _SLOT_DEFS = [
@@ -266,6 +269,9 @@ def _load_items(path):
             except (ValueError, KeyError):
                 continue
             if cls == 'Weapon' and it['max_dam'] > 0:
+                itype_col = row.get('itemType', '')
+                it['is_bow'] = (itype_col == 'Bow')
+                it['is_2hw'] = (row['equipType'] == 'Two-handed' and not it['is_bow'])
                 weapons.append(it)
             elif cls == 'Armor':
                 if equip == 'Armor' and it['max_ac'] > 0:
@@ -447,16 +453,17 @@ def _score_item(it, bonuses, score_by):
 
 
 def _empty_slot():
-    return {'score': -1.0, 'stats': {}, 'ac': 0,
+    return {'score': -1.0, 'stats': {}, 'ac': 0, 'life': 0,
             'min_dam': 0, 'max_dam': 0, 'tohit': 0,
             'dam_pct': 0, 'dam_mod': 0, 'resist': 0, 'atk_tier': 0, 'rec_tier': 0}
 
 
 def _gear_stat_totals(slots):
-    totals = {'str': 0, 'dex': 0, 'mag': 0, 'vit': 0}
+    totals = {'str': 0, 'dex': 0, 'mag': 0, 'vit': 0, 'life': 0}
     for s in slots.values():
-        for k in totals:
+        for k in ('str', 'dex', 'mag', 'vit'):
             totals[k] += s['stats'].get(k, 0)
+        totals['life'] += s.get('life', 0)
     return totals
 
 
@@ -509,16 +516,17 @@ def _warrior_block_pct(dex, clvl, monster_mlvl, has_shield):
     return max(0, min(100, blk))
 
 
-def _warrior_hp(clvl, total_vit, base_vit):
+def _warrior_hp(clvl, total_vit, base_vit, life_bonus=0):
     # Source: assets/txtdata/classes/warrior/attributes.tsv
     #   adjLife=18  lvlLife=2  chrLife=2  itmLife=2
     # HP = start(70) + (clvl-1)*lvlLife + (base_vit-WAR_BASE_VIT)*chrLife + gear_vit*itmLife
+    #      + life_bonus  (from LIFE affix, direct raw-HP addition)
     # base_vit is the VIT accumulated by the stat strategy (from _warrior_stats).
     # VIT from strategy contributes chrLife(2) HP per point above the starting 25.
     # Gear VIT (eff_vit - base_vit) contributes itmLife(2) HP per point.
     vit_from_alloc = base_vit - _WAR_BASE['vit']
     gear_vit       = max(0, total_vit - base_vit)
-    return 70 + (clvl - 1) * 2 + vit_from_alloc * 2 + gear_vit * 2
+    return 70 + (clvl - 1) * 2 + vit_from_alloc * 2 + gear_vit * 2 + life_bonus
 
 
 def _warrior_expected_damage(clvl, eff_str, wpn_min, wpn_max, dam_pct, flat_bonus):
@@ -531,7 +539,7 @@ def _warrior_expected_damage(clvl, eff_str, wpn_min, wpn_max, dam_pct, flat_bonu
     # Warrior crit: GenerateRnd(100) < clvl doubles damage.
     # Source: Source/player.cpp:571-573 PlrHitMonst()
     avg_base    = (wpn_min + wpn_max) / 2.0
-    avg_after   = avg_base * (1 + dam_pct / 100.0) + flat_bonus + (clvl * eff_str // 100)
+    avg_after   = avg_base * (1 + dam_pct / 100.0) + flat_bonus + (clvl * eff_str / 100)
     crit_factor = 1.0 + clvl / 100.0   # E[dam] = base*(1 + crit_chance) since crit doubles
     return avg_after * crit_factor
 
@@ -556,7 +564,8 @@ def _floor_combat_efficiency(clvl, eff, base_vit, slots, floor_monsters, floor):
     wpn          = slots['weapon']
     item_tohit   = sum(slots[s]['tohit'] for s in slots)
 
-    warrior_hp = _warrior_hp(clvl, eff['vit'], base_vit)
+    life_bonus = sum(slots[s].get('life', 0) for s in slots)
+    warrior_hp = _warrior_hp(clvl, eff['vit'], base_vit, life_bonus)
 
     total = 0.0
     for m in floor_monsters:
@@ -684,6 +693,8 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                 it        = rng.choices(pool, weights=weights, k=1)[0]
                 bonuses   = _roll_affixes(rng, affix_cache, itype, lvl_lo, lvl_hi, floor)
                 rolled_ac = rng.randint(it['min_ac'], it['max_ac']) if it['max_ac'] > 0 else 0
+                if (IGNORE_BOW and it.get('is_bow')) or (IGNORE_2HW and it.get('is_2hw')):
+                    continue  # consume RNG but never equip
                 score     = _score_item_c(it, bonuses, slot, C, rolled_ac=rolled_ac)
                 candidates.append((slot, it, bonuses, score, rolled_ac))
 
@@ -706,6 +717,7 @@ def simulate(monsters, xp_thresholds, item_cache, affix_cache,
                     'score':    new_score,
                     'stats':    stat_map,
                     'ac':       _apply_acp(rolled_ac, bonuses.get('ACP', 0)),
+                    'life':     bonuses.get('LIFE', 0),
                     'min_dam':  it['min_dam'],
                     'max_dam':  it['max_dam'],
                     'tohit':    bonuses.get('TOHIT', 0) + bonuses.get('TARGAC', 0),
