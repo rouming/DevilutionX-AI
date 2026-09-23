@@ -65,21 +65,6 @@ _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_HELM.value,
 })
 
-# Scoring coefficients - paste optimizer output here to update.
-# Units match engine values (_iPLHP is HP*64; see comment on 'life').
-_SCORE_COEFF = {
-    'str':       1.0,   # score per STR affix point
-    'vit':       1.0,   # score per VIT affix point
-    'dex':       1.0,   # score per DEX affix point
-    'tohit':     0.1,   # score per (TOHIT + EnAc) point
-    'life':      0.005, # score per _iPLHP engine unit (_iPLHP = real_HP * 64, so 0.32/real HP)
-    'gethit':    1.0,   # score per _iPLGetHit magnitude
-    'res':       0.03,  # score per resistance point (FR + LR + MR summed)
-    'dam_pct':   0.2,   # score per damage-% point (jewelry only)
-    'armor_ac':  0.5,   # AC multiplier for armor and helm slots
-    'shield_ac': 1.0,   # AC multiplier for shield slot
-}
-
 # Per-floor average monster stats derived from monstdat.tsv (Always-available monsters only).
 # Used by the direct combat efficiency scorer to evaluate item candidates.
 _FLOOR_MON_AVG = {
@@ -203,32 +188,6 @@ def _can_equip(item, player):
             int(item._iMinDex) <= int(player._pDexterity))
 
 
-def _pl_stats_warrior(item):
-    """Stat bonus contribution for warrior: STR + VIT + DEX."""
-    return (int(item._iPLStr) * _SCORE_COEFF['str'] +
-            int(item._iPLVit) * _SCORE_COEFF['vit'] +
-            int(item._iPLDex) * _SCORE_COEFF['dex'])
-
-def _hp_score(item):
-    """Life bonus score. _iPLHP stored *64; 'life' coeff is per engine unit."""
-    return int(item._iPLHP) * _SCORE_COEFF['life']
-
-def _tohit_score(item):
-    """To-hit contribution: attack-rating bonus + enemy-AC reduction."""
-    return (int(item._iPLToHit) + int(item._iPLEnAc)) * _SCORE_COEFF['tohit']
-
-def _gethit_score(item):
-    """Damage-taken modifier: negative GetHit = less damage per hit = good."""
-    return -int(item._iPLGetHit) * _SCORE_COEFF['gethit']
-
-def _dam_score(item):
-    """Damage-% bonus contribution (jewelry only; weapons apply it as a multiplier)."""
-    return int(item._iPLDam) * _SCORE_COEFF['dam_pct']
-
-def _res_sum_score(item):
-    """Sum of all resistances (armor/helm/shield: can carry multiple elements)."""
-    return (int(item._iPLFR) + int(item._iPLLR) + int(item._iPLMR)) * _SCORE_COEFF['res']
-
 def _needs_identification(item):
     # _iIdentified is only meaningful for non-normal items. Normal items always
     # have _iIdentified=false (set by SetupItem) but carry no hidden affixes;
@@ -248,23 +207,6 @@ def _unidentified_weapon_dmg(item):
     return (int(item._iMinDam) + int(item._iMaxDam)) / 2
 
 
-def _identified_weapon_dmg(item):
-    """Effective avg damage for identified weapon: (base_avg + flat_bonus) * (1 + dam%)."""
-    return (_unidentified_weapon_dmg(item) + int(item._iPLDamMod)) * (1 + int(item._iPLDam) / 100)
-
-
-def _weapon_only_score(item, force_basic=False):
-    """Damage contribution of a weapon (1H or 2H), excluding any shield."""
-    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
-    dmg   = _identified_weapon_dmg(item) if identified else _unidentified_weapon_dmg(item)
-    score = dmg
-    if identified:
-        score += (_pl_stats_warrior(item) + _tohit_score(item) +
-                  _hp_score(item) + _gethit_score(item) +
-                  _res_sum_score(item))
-    return score
-
-
 def _unidentified_item_ac(item):
     """Base AC before identification."""
     return float(int(item._iAC))
@@ -280,49 +222,6 @@ def _identified_item_ac(item):
         b = 1 if pl_ac > 0 else -1
     return ac + b
 
-
-def _shield_only_score(item, force_basic=False):
-    """AC contribution of a shield."""
-    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
-    ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
-    score = ac * _SCORE_COEFF['shield_ac']
-    if identified:
-        score += (_pl_stats_warrior(item) + _tohit_score(item) +
-                  _hp_score(item) + _gethit_score(item) +
-                  _res_sum_score(item))
-    return score
-
-
-def _armor_only_score(item, force_basic=False):
-    """AC + combat bonuses for helms and chest armor."""
-    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
-    ac    = _identified_item_ac(item) if identified else _unidentified_item_ac(item)
-    # Armor AC values are large (Full Plate Mail Godly ~192 total) and would dominate stat
-    # bonuses (best suffix "of the stars" ~33) without a discount. 'armor_ac' coeff calibrates this.
-    score = ac * _SCORE_COEFF['armor_ac']
-    if identified:
-        score += (_pl_stats_warrior(item) + _tohit_score(item) +
-                  _hp_score(item) + _gethit_score(item) +
-                  _res_sum_score(item))
-    return score
-
-
-def _jewelry_score(item):
-    """Stat score for identified jewelry; 0.0 if unidentified."""
-    if _needs_identification(item):
-        return 0.0
-    return (_pl_stats_warrior(item) + _tohit_score(item) +
-            _hp_score(item) + _gethit_score(item) +
-            _res_sum_score(item) + _dam_score(item))
-
-
-def _hand_combo_score(left, right):
-    """Total hand slot score for two KNOWN-GOOD items. left=weapon or None, right=shield or None.
-    Only call this when both inputs are guaranteed non-cursed (e.g. the 2H backup comparison);
-    for scoring a main item against a live complement use _item_score_for_warrior instead."""
-    ws = _weapon_only_score(left)  if left  is not None else 0.0
-    ss = _shield_only_score(right) if right is not None else 0.0
-    return ws + ss
 
 
 def _warrior_combat_eff(clvl, str_, dex, player_ac, hp,
@@ -554,57 +453,6 @@ def _warrior_eff_two_hand_swap(player, new_left, old_left, new_right, old_right,
     return _warrior_combat_eff(
         int(player._pLevel), new_str, new_dex, new_player_ac, new_hp,
         wpn_min, wpn_max, dam_pct, dam_mod, tohit, has_shield, dlvl)
-
-
-def _item_score_for_warrior(item, player, complement=None, force_basic=False):
-    """Scalar score + label for any equippable item (Warrior only).
-
-    complement: the other-hand item to pair with, or None (default) for no pairing.
-      For a weapon: complement is the shield (right hand).
-      For a shield: complement is the weapon (left hand).
-      Callers pass the live InvBody item for normal scoring, a backup item for
-      cross-slot backup comparisons (step-2 2H logic), or None for no pairing
-      (2H weapon scored alone, or shield scored alone when weapon cancels).
-
-    force_basic: when True, score using base stats only (no magic bonuses).
-      Passed to _weapon_only_score / _shield_only_score for the main item; the
-      complement is always scored at its natural level.
-      Not applied to jewelry (comparing basic jewelry scores, all 0, is meaningless).
-
-    Harm propagation: a cursed main item (score < 0) always returns negative even
-    when the complement is good.  A cursed complement is clamped to 0 so it cannot
-    make an innocent main item appear harmful.
-    """
-    iloc       = int(item._iLoc)
-    identified = not _is_magic(item) or (not force_basic and not _needs_identification(item))
-
-    if iloc in _WEAPON_ILOC:
-        if int(item._itype) == dx.ItemType.Shield.value:
-            # Shield is the main item; propagate only its own harm.
-            ss = _shield_only_score(item, force_basic)
-            if ss < 0:
-                return ss, f"score={ss:.1f}"
-            ws = _weapon_only_score(complement) if complement is not None else 0.0
-            score = ss + max(0.0, ws)
-            return score, f"score={score:.1f}"
-        # Weapon is the main item; propagate only its own harm.
-        ws = _weapon_only_score(item, force_basic)
-        if ws < 0:
-            return ws, f"score={ws:.1f}"
-        ss = _shield_only_score(complement) if complement is not None else 0.0
-        score = ws + max(0.0, ss)
-        return score, f"score={score:.1f}"
-
-    if iloc in _ARMOR_ILOC:
-        score = _armor_only_score(item, force_basic)
-        return score, f"score={score:.1f}"
-
-    if iloc in _JEWELRY_ILOC:
-        # Unidentified: score 0 so jewelry fills empty slots but never displaces identified gear.
-        # force_basic is NOT applied: comparing basic jewelry scores (all 0) is meaningless.
-        score = _jewelry_score(item)
-        return score, "unidentified" if _needs_identification(item) else f"score={score:.2f}"
-    assert False, f"unexpected iloc {iloc} in _item_score_for_warrior"
 
 
 def _is_scroll_misc(imisc):
