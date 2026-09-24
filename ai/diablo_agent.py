@@ -37,9 +37,10 @@ import ring
 
 _SKIP_ITYPE = frozenset({
     dx.ItemType.None_.value,
-    dx.ItemType.Gold.value,
     dx.ItemType.Misc.value,
 })
+
+_MAX_GOLD_PILES = 2
 
 _SKIP_ILOC = frozenset({
     dx.item_equip_type.ILOC_NONE.value,
@@ -418,6 +419,18 @@ def _count_scroll_spellid(player, spellid):
                 int(it._iSpell) == spellid):
             count += 1
     return count
+
+
+def _gold_piles_sorted(player):
+    """Return gold piles sorted by value ascending as (ivalue, seed) list."""
+    itype_gold = dx.ItemType.Gold.value
+    piles = [
+        (int(player.InvList[i]._ivalue), int(player.InvList[i]._iSeed))
+        for i in range(int(player._pNumInv))
+        if int(player.InvList[i]._itype) == itype_gold
+    ]
+    piles.sort()
+    return piles
 
 
 def _is_combat_spell_scroll(spellid):
@@ -1604,6 +1617,30 @@ class AgentAI:
                 print(f"agent {self._tick_count}: repairing '{name}' {slot_name}, dur {cur_dur}/{max_dur}",
                       file=self.log)
 
+    def _pending_drop_count(self, player, match):
+        """Count queued and pending-retry drops where match(item) is true."""
+        itype_none = dx.ItemType.None_.value
+        seeds = set()
+        for a in self._action_queue:
+            if a['action'] == 'drop':
+                seeds.add(a['seed'])
+        seeds.update(self._pending_drop_seeds)
+        n = 0
+        for seed in seeds:
+            for i in range(int(player._pNumInv)):
+                it = player.InvList[i]
+                if int(it._iSeed) == seed and match(it):
+                    n += 1
+                    break
+            else:
+                for i in range(8):
+                    it = player.SpdList[i]
+                    if (int(it._itype) != itype_none
+                            and int(it._iSeed) == seed and match(it)):
+                        n += 1
+                        break
+        return n
+
 
     def _drop_and_mask(self, d, cii):
         """Drop inventory item cii. Normally data2 bit0 tells the engine to set _iMasked
@@ -2154,6 +2191,21 @@ class AgentAI:
 
         if int(item._itype) == dx.ItemType.Misc.value:
             self._evaluate_misc_item(d, item, seed, name)
+            return
+
+        if int(item._itype) == dx.ItemType.Gold.value:
+            gold_piles = _gold_piles_sorted(player)
+            if _MAX_GOLD_PILES > 0:
+                to_drop = gold_piles[:-_MAX_GOLD_PILES] if len(gold_piles) > _MAX_GOLD_PILES else []
+            else:
+                to_drop = gold_piles
+            for g_val, g_seed in to_drop:
+                if g_seed in self._queued_seeds or g_seed in self._pending_drop_seeds:
+                    continue
+                print(f"agent {self._tick_count}: queue drop gold seed={g_seed}"
+                      f" val={g_val} - excess gold piles (>{_MAX_GOLD_PILES})", file=self.log)
+                self._queued_seeds.add(g_seed)
+                self._action_queue.append({'action': 'drop', 'seed': g_seed, 'name': 'Gold'})
             return
 
         if int(item._itype) in _SKIP_ITYPE:
