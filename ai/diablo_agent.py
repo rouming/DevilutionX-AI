@@ -40,7 +40,8 @@ _SKIP_ITYPE = frozenset({
     dx.ItemType.Misc.value,
 })
 
-_MAX_GOLD_PILES = 2
+_MAX_GOLD_PILES  = 2
+_INV_WARN_PCT    = 80  # warn once per level when inventory cells used >= this %
 
 _SKIP_ILOC = frozenset({
     dx.item_equip_type.ILOC_NONE.value,
@@ -828,6 +829,7 @@ class AgentAI:
         # Keyed by the equipped item's seed (stable vs autosort).
         self._backup_for_item        = {}
         self._backup_resolved        = set()  # eq_seeds resolved via _resolve_identified_equipped
+        self._inv_warn_issued        = False  # reset each level; guards the 80%-full WARNING
 
         self._pathfinder = Pathfinder(game, view_radius)
         # Agent-owned set of masked drop positions (level-specific). Stable across
@@ -994,6 +996,19 @@ class AgentAI:
         if cur_level != self.cur_level:
             self._on_level_change(d, cur_level)
 
+        if not self._inv_warn_issued:
+            inv_grid = np.asarray(d.player.InvGrid)
+            used = int(np.count_nonzero(inv_grid))
+            pct  = used * 100 // len(inv_grid)
+            if pct >= _INV_WARN_PCT:
+                print(f"agent {self._tick_count}: WARNING inventory {pct}% full"
+                      f" ({used}/{len(inv_grid)} cells used) on level {cur_level}", file=self.log)
+                for i in range(int(d.player._pNumInv)):
+                    it = d.player.InvList[i]
+                    print(f"  WARNING inv[{i}] seed={int(it._iSeed):#010x} '{_item_name(it)}'",
+                          file=self.log)
+                self._inv_warn_issued = True
+
         self._assign_stat_points(d)
         if not self.no_gear_management:
             sr  = self.safe_radius
@@ -1013,6 +1028,7 @@ class AgentAI:
 
     def _on_level_change(self, d, new_level):
         self.cur_level          = new_level
+        self._inv_warn_issued   = False
         self.level_steps        = 0
         self.stairs_pos         = self._level_stairs.get(new_level)
         self._action_queue           = []
