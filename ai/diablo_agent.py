@@ -65,23 +65,22 @@ _ARMOR_ILOC = frozenset({
     dx.item_equip_type.ILOC_HELM.value,
 })
 
-# Per-floor average monster stats derived from monstdat.tsv (all non-Never monsters).
-# Averaged over all species whose minDunLvl..maxDunLvl range includes the floor.
+# Per-floor average monster stats derived from monstdat.tsv (Always-available monsters only).
 # Used by the direct combat efficiency scorer to evaluate item candidates.
 _FLOOR_MON_AVG = {
     1:  {'ac':  6, 'tohit':  17, 'mlvl':  1, 'hp':   4, 'mind': 1, 'maxd':  5},
-    2:  {'ac':  8, 'tohit':  22, 'mlvl':  3, 'hp':   9, 'mind': 2, 'maxd':  6},
-    3:  {'ac': 12, 'tohit':  28, 'mlvl':  4, 'hp':  15, 'mind': 3, 'maxd':  8},
-    4:  {'ac': 19, 'tohit':  35, 'mlvl':  6, 'hp':  24, 'mind': 3, 'maxd': 10},
-    5:  {'ac': 28, 'tohit':  41, 'mlvl':  8, 'hp':  33, 'mind': 4, 'maxd': 11},
-    6:  {'ac': 35, 'tohit':  48, 'mlvl': 10, 'hp':  42, 'mind': 5, 'maxd': 13},
-    7:  {'ac': 41, 'tohit':  54, 'mlvl': 12, 'hp':  56, 'mind': 6, 'maxd': 15},
-    8:  {'ac': 42, 'tohit':  57, 'mlvl': 13, 'hp':  66, 'mind': 6, 'maxd': 16},
-    9:  {'ac': 46, 'tohit':  64, 'mlvl': 15, 'hp':  78, 'mind': 7, 'maxd': 18},
-    10: {'ac': 48, 'tohit':  73, 'mlvl': 18, 'hp':  95, 'mind': 8, 'maxd': 20},
-    11: {'ac': 51, 'tohit':  83, 'mlvl': 20, 'hp': 107, 'mind':10, 'maxd': 21},
-    12: {'ac': 54, 'tohit':  92, 'mlvl': 22, 'hp': 129, 'mind':11, 'maxd': 22},
-    13: {'ac': 58, 'tohit': 106, 'mlvl': 24, 'hp': 144, 'mind':13, 'maxd': 24},
+    2:  {'ac':  7, 'tohit':  22, 'mlvl':  3, 'hp':   9, 'mind': 2, 'maxd':  6},
+    3:  {'ac': 11, 'tohit':  27, 'mlvl':  4, 'hp':  15, 'mind': 3, 'maxd':  8},
+    4:  {'ac': 17, 'tohit':  34, 'mlvl':  6, 'hp':  24, 'mind': 3, 'maxd': 10},
+    5:  {'ac': 20, 'tohit':  38, 'mlvl':  7, 'hp':  28, 'mind': 4, 'maxd': 11},
+    6:  {'ac': 29, 'tohit':  46, 'mlvl':  9, 'hp':  33, 'mind': 4, 'maxd': 13},
+    7:  {'ac': 35, 'tohit':  50, 'mlvl': 13, 'hp':  28, 'mind': 4, 'maxd': 16},
+    8:  {'ac': 35, 'tohit':  50, 'mlvl': 13, 'hp':  28, 'mind': 4, 'maxd': 16},
+    9:  {'ac': 45, 'tohit':  65, 'mlvl': 15, 'hp':  87, 'mind': 7, 'maxd': 18},
+    10: {'ac': 48, 'tohit':  73, 'mlvl': 18, 'hp':  99, 'mind': 9, 'maxd': 20},
+    11: {'ac': 51, 'tohit':  83, 'mlvl': 20, 'hp': 108, 'mind':10, 'maxd': 22},
+    12: {'ac': 55, 'tohit':  92, 'mlvl': 22, 'hp': 129, 'mind':11, 'maxd': 22},
+    13: {'ac': 59, 'tohit': 104, 'mlvl': 24, 'hp': 143, 'mind':13, 'maxd': 24},
     14: {'ac': 58, 'tohit': 109, 'mlvl': 26, 'hp': 148, 'mind':13, 'maxd': 25},
     15: {'ac': 59, 'tohit': 118, 'mlvl': 27, 'hp': 159, 'mind':12, 'maxd': 29},
     16: {'ac': 52, 'tohit': 119, 'mlvl': 29, 'hp': 164, 'mind':12, 'maxd': 30},
@@ -235,21 +234,18 @@ def _warrior_combat_eff(clvl, str_, dex, player_ac, hp,
     """
     mon = _FLOOR_MON_AVG.get(dlvl, _FLOOR_MON_AVG[16])
 
-    # warrior hit chance vs monster (player.cpp:542-543, player.h:577,585-588): clvl+70+dex/2+tohit-mon_ac, clamp [5,95]
-    hit_pct   = min(95, max(5, clvl + 70 + tohit + dex // 2 - mon['ac'])) / 100.0
+    # Warrior hits monster
+    hit_pct   = min(95, max(5, 50 + tohit + dex // 2 - mon['ac'])) / 100.0
     avg_base  = (wpn_min + wpn_max) / 2.0
     avg_dam   = avg_base * (1.0 + dam_pct / 100.0) + dam_mod + clvl * str_ / 100.0
     crit      = 1.0 + clvl / 100.0
     warrior_dps = max(0.0, avg_dam) * crit * hit_pct
 
-    # monster hit chance vs warrior (monster.cpp:1139,1144-1148, player.h:567-569): mon_tohit+2*(mlvl-clvl)+30-player_ac, floor GetMinHit
-    min_hit = 20 if dlvl == 14 else 25 if dlvl == 15 else 30 if dlvl == 16 else 15
-    mon_hit_pct = max(min_hit, mon['tohit'] + 2 * (mon['mlvl'] - clvl) + 30 - player_ac) / 100.0
+    # Monster hits warrior
+    base_pct  = min(95, max(5, mon['tohit'] + 2 * (mon['mlvl'] - clvl) + 30 - player_ac))
     if has_shield:
-        # block chance reduces effective monster hits (monster.cpp:1150-1154, player.h:621-626): dex+30+2*(clvl-mlvl), clamp [0,100]
-        blk = min(100, max(0, dex + 30 + 2 * (clvl - mon['mlvl'])))
-        mon_hit_pct = mon_hit_pct * (1.0 - blk / 100.0)
-    mon_dps   = (mon['mind'] + mon['maxd']) / 2.0 * mon_hit_pct
+        base_pct = base_pct * 2 // 3
+    mon_dps   = (mon['mind'] + mon['maxd']) / 2.0 * (base_pct / 100.0)
 
     if mon_dps < 1e-3:
         return float(hp) * warrior_dps
@@ -276,7 +272,7 @@ def _warrior_current_eff(player, dlvl):
         int(player._pIMaxDam),
         int(player._pIBonusDam),
         int(player._pIBonusDamMod),
-        int(player._pIBonusToHit) + int(player._pIEnAc),  # player.h:577,585-588
+        int(player._pIBonusToHit),
         has_shield,
         dlvl)
 
@@ -375,7 +371,7 @@ def _warrior_eff_with_swap(player, new_item, old_item, dlvl):
 
     dam_pct = int(player._pIBonusDam)    + d_dpct
     dam_mod = int(player._pIBonusDamMod) + d_dmod
-    tohit   = int(player._pIBonusToHit) + int(player._pIEnAc) + d_tohit + d_enac
+    tohit   = int(player._pIBonusToHit)  + d_tohit + d_enac
 
     return _warrior_combat_eff(
         int(player._pLevel), new_str, new_dex, new_player_ac, new_hp,
@@ -452,7 +448,7 @@ def _warrior_eff_two_hand_swap(player, new_left, old_left, new_right, old_right,
 
     dam_pct = int(player._pIBonusDam)    + d_dpct
     dam_mod = int(player._pIBonusDamMod) + d_dmod
-    tohit   = int(player._pIBonusToHit) + int(player._pIEnAc) + d_tohit + d_enac
+    tohit   = int(player._pIBonusToHit)  + d_tohit + d_enac
 
     return _warrior_combat_eff(
         int(player._pLevel), new_str, new_dex, new_player_ac, new_hp,
