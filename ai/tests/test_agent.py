@@ -272,7 +272,8 @@ class InvTests:
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
         old_shield = self._s0.body[HR]
 
-        self._gift_shield(seed=0xDEAD0002, name="Test Shield", ac=50)
+        # ac=20 keeps eff(1H+sh) below eff(2H_avg100)=742 for tests 04-10.
+        self._gift_shield(seed=0xDEAD0002, name="Test Shield", ac=20)
         self._settle()
         s = self._state()
 
@@ -281,13 +282,13 @@ class InvTests:
         s.assert_absent(old_shield,    "old shield destroyed")
 
     def test_04_weaker_2h_rejected(self):
-        """A 2H whose score < current 1H+shield combo is dropped.
-        State after test_03: HAND_LEFT=0xDEAD0001 (score 15), HAND_RIGHT=0xDEAD0002 (score 25),
-        combo=40. 2H avg=30 (score 30) < 40 -> dropped."""
+        """A 2H whose eff < current 1H+shield eff is dropped.
+        State after test_03: 1H(avg=15) + sh(ac=20). eff(1H+sh)=325.
+        2H avg=30, eff=224 < 325 -> dropped."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=25, maxdam=35 -> avg=30 < combo=40 -> dropped
+        # mindam=25, maxdam=35 -> avg=30, eff=224 < eff(1H+sh)=325 -> dropped
         self._gift_2h_sword(seed=0xDEAD000B, name="Weak 2H", mindam=25, maxdam=35)
         self._settle()
         s = self._state()
@@ -298,12 +299,12 @@ class InvTests:
 
     def test_05_2h_sword_equips_keeps_insurance(self):
         """Stronger 2H sword equips; old 1H and shield kept as eviction insurance.
-        State after test_04: HAND_LEFT=0xDEAD0001 (score 15), HAND_RIGHT=0xDEAD0002 (score 50).
-        2H avg=100 > combo 65 -> equips. Old 1H and shield stored as bfi eviction insurance."""
+        State after test_04: 1H(avg=15) + sh(ac=20), eff=325.
+        2H avg=100, eff=742 > 325 -> equips. Old 1H and shield stored as bfi eviction insurance."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=90, maxdam=110 -> avg=100 > current combo score of 65
+        # mindam=90, maxdam=110 -> avg=100, eff=742 > eff(1H+sh)=325 -> equips
         self._gift_2h_sword(seed=0xDEAD0003, name="Test 2H Sword", mindam=90, maxdam=110)
         self._settle()
         s = self._state()
@@ -334,14 +335,14 @@ class InvTests:
 
     def test_07_better_1h_upgrades_backup(self):
         """A 1H better than backup[0] but worse than the 2H upgrades backup[0].
-        State after test_06: HAND_LEFT=0xDEAD0003 (2H score 100),
-        bfi=[0xDEAD0001(score 15), 0xDEAD0002(score 50)].
-        New 1H avg=20 (score 20) > backup score 15 but combo(20+50)=70 < 100 -> upgrades backup.
-        Old 0xDEAD0001 dropped, 0xDEAD000A becomes backup[0]."""
+        State after test_06: HAND_LEFT=0xDEAD0003 (2H eff=742),
+        bfi=[0xDEAD0001(avg=15), 0xDEAD0002(ac=20)].
+        New 1H avg=20: combo_eff(20+sh20)=431 < 2H_eff=742, solo_eff(20)=150 > solo_eff(15)=113
+        -> upgrades backup[0]. Old 0xDEAD0001 dropped, 0xDEAD000A becomes backup[0]."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # avg=20 > backup weapon score 15, combo(20+50)=70 < 100 -> upgrade backup[0]
+        # avg=20: combo_eff(431) < 2H_eff(742), solo_eff(150) > bk_solo_eff(113) -> upgrade backup[0]
         self._gift_sword(seed=0xDEAD000A, name="Mid Sword", mindam=15, maxdam=25)
         self._settle()
         s = self._state()
@@ -357,15 +358,15 @@ class InvTests:
 
     def test_08_shield_upgrades_backup(self):
         """A shield better than backup[1] but not strong enough to evict upgrades backup[1].
-        State after test_07: HAND_LEFT=0xDEAD0003 (2H score 100),
-        bfi=[0xDEAD000A(score 20), 0xDEAD0002(score 50)].
-        Shield ac=70 -> score 70 > backup[1] score 50. combo(20+70)=90 < 100 -> upgrades backup[1].
-        Old 0xDEAD0002 dropped, 0xDEAD000C becomes backup[1]."""
+        State after test_07: HAND_LEFT=0xDEAD0003 (2H eff=742),
+        bfi=[0xDEAD000A(avg=20), 0xDEAD0002(ac=20)].
+        Shield ac=25: combo_eff(20+sh25)=538 < 2H_eff=742, solo_eff(sh25)=2660 > solo_eff(sh20)=2128
+        -> upgrades backup[1]. Old 0xDEAD0002 dropped, 0xDEAD000C becomes backup[1]."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # ac=70 -> score=70 > backup[1] score=50, combo(20+70)=90 < 100 -> upgrade backup[1]
-        self._gift_shield(seed=0xDEAD000C, name="Better Shield", ac=70)
+        # ac=25: combo_eff(538) < 2H_eff(742), solo_eff(sh25)=2660 > solo_eff(sh20)=2128 -> upgrade backup[1]
+        self._gift_shield(seed=0xDEAD000C, name="Better Shield", ac=25)
         self._settle()
         s = self._state()
 
@@ -380,9 +381,10 @@ class InvTests:
 
     def test_09_shield_blocked_by_2h(self):
         """A shield too weak to beat the 2H via combo is dropped.
-        State after test_08: HAND_LEFT=0xDEAD0003 (2H score 100),
-        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 70)].
-        Shield ac=10 -> score 10. combo(20 + 10) = 30 < 100 -> shield dropped."""
+        State after test_08: HAND_LEFT=0xDEAD0003 (2H eff=742),
+        bfi=[0xDEAD000A(avg=20), 0xDEAD000C(ac=25)].
+        Shield ac=10: combo_eff(20+sh10)=294 < 2H_eff=742 and solo_eff(sh10)=1450 < solo_eff(sh25)=2660
+        -> shield dropped (no eviction, no backup upgrade)."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
@@ -397,10 +399,10 @@ class InvTests:
         s.assert_present(0xDEAD000C, "backup shield still in inv")
 
     def test_10_shield_evicts_2h_via_insurance(self):
-        """A shield stronger than the 2H+insurance combo evicts the 2H.
-        State after test_09: HAND_LEFT=0xDEAD0003 (2H score 100),
-        bfi=[0xDEAD000A(score 20), 0xDEAD000C(score 70)].
-        Shield ac=100 -> score 100. combo(0xDEAD000A + shield) = 120 > 100 -> evicts 2H.
+        """A shield that pushes combo eff above 2H eff evicts the 2H.
+        State after test_09: HAND_LEFT=0xDEAD0003 (2H eff=742),
+        bfi=[0xDEAD000A(avg=20), 0xDEAD000C(ac=25)].
+        Shield ac=100: combo_eff(20+sh100)=2153 > 2H_eff=742 -> evicts 2H.
         0xDEAD000A equips to HAND_LEFT, shield to HAND_RIGHT, 0xDEAD000C and 2H dropped."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
@@ -416,12 +418,12 @@ class InvTests:
 
     def test_11_1h_replaces_1h(self):
         """A stronger 1H sword equips over the existing 1H; old 1H dropped.
-        State after test_10: HAND_LEFT=0xDEAD000A (score 20), HAND_RIGHT=0xDEAD0005 (score 100).
-        combo(new 1H avg=75 + shield 100) = 175 > combo(20 + 100) = 120 -> equips."""
+        State after test_10: HAND_LEFT=0xDEAD000A (avg=20), HAND_RIGHT=0xDEAD0005 (ac=100).
+        new 1H avg=75: eff(75+sh100)=7984 >> eff(20+sh100)=2153 -> equips."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
 
-        # mindam=65, maxdam=85 -> avg=75; combo 75+100=175 > 20+100=120
+        # mindam=65, maxdam=85 -> avg=75; eff(75+sh100)=7984 >> eff(20+sh100)=2153 -> equips
         self._gift_sword(seed=0xDEAD0006, name="Strong 1H", mindam=65, maxdam=85)
         self._settle()
         s = self._state()
@@ -549,13 +551,12 @@ class Inv2HBackupTests:
         print(f"  1H seed={self._bk_sw_seed:#010x}  shield seed={self._bk_sh_seed:#010x}")
 
     def test_02_unidentified_2h_equips_backup_set(self):
-        """Unidentified 2H (avg > 1H+shield combo) equips; old 1H and shield
-        are reserved as backups in inventory, not dropped."""
+        """Unidentified 2H (avg=15, eff=113) equips; starting 1H and shield reserved as backup.
+        eff_2H(15)=113 > eff_starter(ss+bk)=53. Use avg=15 so inheritance tests can evict it."""
         HL = self._HL
         HR = self._HR
-        # warrior combo = _weapon_only_score(1H) + _shield_only_score(shield).
-        # Starting gear is weak, so avg=60 should comfortably win.
-        self._gift_2h_unidentified(self._2h_seed, "Test 2H", mindam=50, maxdam=70)
+        # avg=15, eff=113 > eff_starter=53 -> 2H equips; starter combo is backup.
+        self._gift_2h_unidentified(self._2h_seed, "Test 2H", mindam=10, maxdam=20)
         self._settle()
         s = self._state()
 
@@ -987,10 +988,12 @@ class _Inv2HWithBackupBase:
         print(f"  ss={self._ss_seed:#010x}  bk={self._bk_seed:#010x}")
 
     def test_02_2h_equips_backup_set(self):
-        """Unidentified 2H (avg=60) equips; starting 1H and shield reserved as backup."""
+        """Unidentified 2H (avg=15, eff=113) equips; starting 1H and shield reserved as backup.
+        eff_2H(15)=113 > eff_starter(ss+bk)=53. Use avg=15 so inheritance tests can evict it."""
         HL = self._HL
         HR = self._HR
-        self._gift_2h_unidentified(self._2H_SEED, "First 2H", mindam=50, maxdam=70)
+        # avg=15, eff=113 > eff_starter=53 -> 2H equips; starter combo is backup.
+        self._gift_2h_unidentified(self._2H_SEED, "First 2H", mindam=10, maxdam=20)
         self._settle()
         s = self._state()
         s.assert_body(HL, self._2H_SEED, "2H equipped")
@@ -1030,7 +1033,7 @@ class Inv2HTo2HInheritanceTests(_Inv2HWithBackupBase):
     _2H_SEED2 = 0xA1000002
 
     def test_03_stronger_2h_inherits_backup(self):
-        # weapon_only(new 2H avg=80) > weapon_only(old 2H avg=60)
+        # eff(new 2H avg=80)=593 > eff(old 2H avg=15)=113
         HL = self._HL
         self._gift_2h_unidentified(self._2H_SEED2, "Stronger 2H", mindam=70, maxdam=90)
         self._settle(max_ticks=30)
@@ -1051,7 +1054,7 @@ class Inv2HTo1HInheritanceTests(_Inv2HWithBackupBase):
     _1H_SEED = 0xA2000002
 
     def test_03_stronger_1h_inherits_backup_weapon(self):
-        # combo(1H avg=60 + bk_ac3*0.5=1.5) = 61.5 > weapon_only(2H avg=60)
+        # combo_eff(1H avg=60 + bk3)=737 > eff(2H avg=15)=113
         HL = self._HL
         HR = self._HR
         self._gift_1h_unidentified(self._1H_SEED, "Stronger 1H", mindam=55, maxdam=65)
@@ -1073,7 +1076,7 @@ class Inv2HToShInheritanceTests(_Inv2HWithBackupBase):
     _SH_SEED = 0xA3000002
 
     def test_03_stronger_shield_inherits_backup_shield(self):
-        # combo(ss_avg4 + shield_score ac120*0.5=60) = 64 > weapon_only(2H avg=60)
+        # combo_eff(ss avg=4 + sh120)=456 > eff(2H avg=15)=113
         HL = self._HL
         HR = self._HR
         self._gift_shield_unidentified(self._SH_SEED, "Strong Shield", ac=120)
@@ -1199,13 +1202,13 @@ class Inv1HTo2HInheritanceTests(_Inv1HWithBackupBase):
                        f"({'identified' if identified else 'unidentified'})")
 
     def test_03_2h_takes_over_1h(self):
-        # weapon_only(2H avg=80) > combo(1H avg=60 + bk_ac3*0.5=1.5 = 61.5)
+        # eff_2H(avg=110)=816 > eff(1H_avg60+bk_ac3)=737 -> 2H evicts
         HL = self._HL
         HR = self._HR
         if self._identified:
-            self._gift_2h_identified(self._2H_SEED, "Strong 2H", mindam=70, maxdam=90)
+            self._gift_2h_identified(self._2H_SEED, "Strong 2H", mindam=100, maxdam=120)
         else:
-            self._gift_2h_unidentified(self._2H_SEED, "Strong 2H", mindam=70, maxdam=90)
+            self._gift_2h_unidentified(self._2H_SEED, "Strong 2H", mindam=100, maxdam=120)
         self._settle(max_ticks=30)
         s = self._state()
         s.assert_body(HL, self._2H_SEED, "2H equipped")
@@ -1728,13 +1731,13 @@ class InvBeatBackupSpamTests:
         print(f"  1H seed={self._bk_sw_seed:#010x}  shield seed={self._bk_sh_seed:#010x}")
 
     def test_02_normal_2h_equips_marks_resolved(self):
-        """NORMAL 2H (score=8.0) beats backup combo -> equips.
+        """NORMAL 2H (eff=76) beats backup combo (eff=53) -> equips.
         After settling, _backup_resolved must contain the 2H seed so that
         _resolve_identified_equipped does NOT fire again on subsequent ticks."""
         HL = dx.inv_item.INVITEM_HAND_LEFT.value
         HR = dx.inv_item.INVITEM_HAND_RIGHT.value
-        # 2H score = (4+12)/2 = 8.0; starting combo < 8.0 so 2H wins.
-        self._gift_2h(self._2H_SEED, "Normal 2H", mindam=4, maxdam=12)
+        # avg=10, eff=76 > eff_starter=53 so 2H wins.
+        self._gift_2h(self._2H_SEED, "Normal 2H", mindam=5, maxdam=15)
         self._settle()
         s = self._state()
         s.assert_body(HL, self._2H_SEED, "2H equipped")
@@ -2027,23 +2030,22 @@ class InvUnidentifiedUpgradeTests:
         s.assert_body(self._HL, self._MAGIC_SWORD_SEED, "magic sword still equipped")
 
     def test_04_unidentified_sword_decision(self):
-        """Gift unidentified magic sword: basic_avg=14.0, pldam_mod=+3 (identified_avg=17.0).
-        Scores against currently equipped identified magic sword (basic=10, identified=15):
+        """Gift unidentified magic sword: basic_avg=16.0, pldam_mod=+3 (identified_avg=19.0).
+        Scores against currently equipped identified magic sword (basic=10, identified=15, eff=187):
 
-          new_basic=14 vs old_basic=10     -> new wins  (correct comparison)
-          new_basic=14 vs old_identified=15 -> new LOSES (current bug: wrong comparison)
-          new_identified=17 vs old_identified=15 -> new wins after identification
+          new_basic_eff(16)=200 > old_eff(187)   -> new wins (basic eff beats identified eff)
+          new_basic_eff(14)=175 < old_eff(187)   -> new LOSES (would fail with lower damage)
+          new_identified_eff(19)=236 > old_eff   -> new wins after identification
 
-        has_identify_scroll=True (FAILS with current code):
-          - BUG: drops new sword (14 < 15); test asserts it equips after identification.
-          - FIX: keeps sword, identifies (17 > 15), new sword equips, old dropped.
+        has_identify_scroll=True:
+          - basic eff passes (200 > 187); identifies (236 > 187), new sword equips, old dropped.
         has_identify_scroll=False (passes with current code):
-          - No scroll -> new sword dropped in both old and new code."""
+          - basic eff passes but no scroll -> new sword dropped."""
         HL = self._HL
         HR = self._HR
-        # basic_avg = (12+16)/2 = 14.0; identified_avg = 14 + 3 = 17.0
+        # basic_avg = (14+18)/2 = 16.0; identified_avg = 16 + 3 = 19.0
         self._gift_1h_unidentified_magic(
-            self._UNID_SWORD_SEED, "Better Unid Sword", mindam=12, maxdam=16, pldam_mod=3)
+            self._UNID_SWORD_SEED, "Better Unid Sword", mindam=14, maxdam=18, pldam_mod=3)
         self._settle(max_ticks=30)
         s = self._state()
         if self.has_identify_scroll:
