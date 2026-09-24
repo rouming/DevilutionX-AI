@@ -30,6 +30,7 @@ _ICURS_POTION_OF_HEALING  = 32
 _ICURS_SCROLL_OF          = 1
 _ICURS_RING               = 12
 _ICURS_AMULET             = 45
+_ICURS_GOLD_LARGE         = 6
 
 # item_index values counted from IDI_GOLD=0
 _IDI_HEAL     = 24
@@ -89,7 +90,7 @@ def _reset_game(game):
 
 def _gift(game, seed, itype, iloc, iclass, icurs, name, mindam, maxdam, ac=0,
           minstr=0, mindex=0, imiscid=0, ididx=0, identified=1, imagical=0,
-          pldam_mod=0, plhp=0, ispell=0, durability=255, maxdur=255):
+          pldam_mod=0, plhp=0, ispell=0, durability=255, maxdur=255, value=1000):
     """Fill GiftItem and trigger INV_GIFT_ITEM ring command."""
     g = game.state.GiftItem
     # Explicit field assignment avoids slice issues on nested struct fields
@@ -104,8 +105,8 @@ def _gift(game, seed, itype, iloc, iclass, icurs, name, mindam, maxdam, ac=0,
     g['_iLoc']        = iloc
     g['_iClass']      = iclass
     g['_iCurs']       = icurs
-    g['_ivalue']      = 1000
-    g['_iIvalue']     = 1000
+    g['_ivalue']      = value
+    g['_iIvalue']     = value
     g['_iMinDam']     = mindam
     g['_iMaxDam']     = maxdam
     g['_iAC']         = ac
@@ -2282,6 +2283,129 @@ def _start_game(binary, mshared):
     return diablo_state.DiabloGame.run(config)
 
 
+class InvGoldDropRetryTests:
+    """Verify that the agent retries gold drops that the engine silently failed.
+
+    _settle here includes agent._pending_drop_seeds in the quiesce check.
+    Without _pending_drop_seeds (no retry fix) that raises AttributeError and
+    the test fails.  With the fix the settle drains cleanly and only the
+    allowed number of gold piles remain.
+    """
+
+    _GOLD_SEED_BASE = 0xB000_0000
+
+    def __init__(self, game):
+        self.game  = game
+        stand      = _StandModel()
+        runners    = {lvl: stand for lvl in range(1, 17)}
+        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout,
+                             use_two_hand_weapon=True)
+        # We do the real drop, not the drop AND destroy
+        self.agent._test_mode = False
+
+    def _settle(self, max_ticks=200):
+        for _ in range(max_ticks):
+            self.agent._tick()
+            if (not self.agent._action_queue and
+                not self.agent._pending_equip and
+                not self.agent._inv_changed and
+                not self.agent._pending_drop_seeds):
+                return
+        raise AssertionError(
+            f"agent did not settle after {max_ticks} ticks; "
+            f"queue={self.agent._action_queue}, "
+            f"pending_drops={self.agent._pending_drop_seeds}")
+
+    def _gift_gold(self, seed, value=5000):
+        _gift(self.game, seed,
+              itype=dx.ItemType.Gold.value,
+              iloc=dx.item_equip_type.ILOC_NONE.value,
+              iclass=dx.item_class.ICLASS_GOLD.value,
+              icurs=_ICURS_GOLD_LARGE,
+              name='Gold', mindam=0, maxdam=0, value=value)
+
+    def _gold_pile_count(self):
+        player = self.game.safe_state.player
+        return sum(
+            1 for i in range(int(player._pNumInv))
+            if int(player.InvList[i]._itype) == dx.ItemType.Gold.value
+        )
+
+    def _gold_pile_values(self):
+        player = self.game.safe_state.player
+        return sorted(
+            int(player.InvList[i]._ivalue)
+            for i in range(int(player._pNumInv))
+            if int(player.InvList[i]._itype) == dx.ItemType.Gold.value
+        )
+
+    def test_01_excess_gold_dropped(self):
+        """Gift gold beyond the limit; agent must keep exactly _MAX_GOLD_PILES
+        with the the maximum gold.
+
+        With _test_mode=False drops land on real floor tiles. The pending
+        counter in _evaluate_new_item ensures only the excess piles are queued
+        for drop (not all of them). If the adjacent tiles happen to fill up,
+        _pending_drop_seeds re-queues the failed seeds; walking south opens
+        new tiles so those retries succeed.
+        """
+        import diablo_agent as da
+
+        # Regardless of what agent defines, we override and set to 2
+        da._MAX_GOLD_PILES = 2
+
+        N = 13
+        base = 1000
+        step = 100
+        for i in range(N):
+            self._gift_gold(seed=self._GOLD_SEED_BASE + i, value=base + step * i)
+        RE = ring.RingEntryType
+        # Stationary: deposits drops at the starting position until adjacent
+        # tiles are exhausted; the last couple of drops fail silently.
+        for _ in range(N):
+            self.agent._tick()
+        # Moving south: each step opens a fresh adjacent tile so retried drops
+        # succeed. Without _pending_drop_seeds the failed seeds are lost and
+        # the assert fires.
+        for _ in range(8):
+            self.game.submit_key(
+                RE.RING_ENTRY_KEY_DOWN | RE.RING_ENTRY_F_SINGLE_TICK_PRESS)
+            self.agent._tick()
+        self._settle()
+        count = self._gold_pile_count()
+        assert count == da._MAX_GOLD_PILES, \
+            f"expected {da._MAX_GOLD_PILES} gold piles kept, got {count}"
+
+        # The piles with the maximum gold should be kept
+        values = self._gold_pile_values()
+        expected = []
+        for i in range(da._MAX_GOLD_PILES):
+            expected.append(base + step * (N - i - 1))
+        expected = sorted(expected)
+        assert values == expected, f"expected {expected}, got {values}"
+
+
+    def run_all(self):
+        print("\n--- InvGoldDropRetryTests ---")
+        tests = sorted(m for m in dir(self) if m.startswith('test_'))
+        passed = 0
+        for name in tests:
+            try:
+                print(f"\n[RUN] {name}")
+                getattr(self, name)()
+                print(f"[OK]  {name}")
+                passed += 1
+            except Exception as e:
+                import traceback
+                tag = "FAIL" if isinstance(e, AssertionError) else "ERR"
+                print(f"[{tag}] {name}: {e}")
+                traceback.print_exc()
+                print(f"\n{passed} passed, 1 failed (stopped)")
+                return passed, 1
+        print(f"\n{passed} passed, 0 failed")
+        return passed, 0
+
+
 def main():
     argparse.ArgumentParser(
         description="AgentAI inventory management integration tests"
@@ -2325,6 +2449,7 @@ def main():
         lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=False),
         lambda g: InvUnidentifiedUpgradeTests(g, has_identify_scroll=True),
         InvJewelryTests,
+        InvGoldDropRetryTests,
     ]
 
     total_passed = total_failed = 0
