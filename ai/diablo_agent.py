@@ -960,6 +960,9 @@ class AgentAI:
         self._action_queue           = []
         # seeds currently in _action_queue; prevents re-detection of already-decided items
         self._queued_seeds           = set()
+        # {seed: name} for drop commands submitted last tick; checked next tick to
+        # detect engine-side failures (e.g. floor full) and re-queue the drop.
+        self._pending_drop_seeds     = {}
         # seeds that were just identified this tick; re-evaluated next tick
         self._identify_pending_seeds = set()
         # {seed: bool} - identification state of equipped body slots, updated every tick
@@ -1093,6 +1096,20 @@ class AgentAI:
             belt_first = dx.inv_item.INVITEM_BELT_FIRST.value
             prev_list = {s for (c, s, _) in self._inv_prev if inv_first <= c}
             curr_list = {s for (c, s, _) in inv_curr    if inv_first <= c}
+
+            # Re-queue drops that the engine failed to execute (e.g. floor full).
+            # A seed still present in inventory one tick after its drop command was
+            # submitted means the engine silently kept the item.
+            if self._pending_drop_seeds and not self.no_gear_management:
+                for seed, name in list(self._pending_drop_seeds.items()):
+                    if seed in curr_list:
+                        print(f"agent {self._tick_count}: retry drop '{name}'"
+                              f" seed={seed} - engine drop failed", file=self.log)
+                        self._queued_seeds.add(seed)
+                        self._action_queue.append(
+                            {'action': 'drop', 'seed': seed, 'name': name})
+                self._pending_drop_seeds.clear()
+
             skip      = self._queued_seeds
             new_seeds = curr_list - prev_list - skip
             # Re-evaluate inventory items that were just identified this tick
@@ -1175,6 +1192,7 @@ class AgentAI:
         self.stairs_pos         = self._level_stairs.get(new_level)
         self._action_queue           = []
         self._queued_seeds           = set()
+        self._pending_drop_seeds     = {}
         self._identify_pending_seeds = set()
         self._inv_changed            = False
         self._pending_equip          = {}
@@ -2751,6 +2769,7 @@ class AgentAI:
                 print(f"agent {self._tick_count}: drop '{name}' seed={seed}", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
+                self._pending_drop_seeds[seed] = name
                 self._drop_and_mask(d, cii)
                 return
 
