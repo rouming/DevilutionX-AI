@@ -41,7 +41,7 @@ _SKIP_ITYPE = frozenset({
 })
 
 _MAX_TOWN_PORTALS = 0
-_MAX_GOLD_PILES   = 2
+_MAX_GOLD_PILES   = 0
 _INV_WARN_PCT     = 80  # warn once per level when inventory cells used >= this %
 
 _SKIP_ILOC = frozenset({
