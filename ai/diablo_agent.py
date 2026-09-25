@@ -523,6 +523,14 @@ def _count_scroll_spellid(player, spellid):
     return count
 
 
+def _item_ns(name, seed):
+    return f"'{name}' seed={seed:#010x}"
+
+
+def _item_str(item):
+    return _item_ns(_item_name(item), int(item._iSeed))
+
+
 def _gold_piles_sorted(player):
     """Return gold piles sorted by value ascending as (ivalue, seed) list."""
     itype_gold = dx.ItemType.Gold.value
@@ -1038,7 +1046,7 @@ class AgentAI:
             # Suppress on death - all equipped items leave simultaneously when hero dies.
             destroyed = not dead and cii < inv_first and seed not in added_seeds
             suffix = ' (destroyed)' if destroyed else ''
-            print(f"agent {self._tick_count}: inv[-] cii={cii} seed={seed} '{name}'{suffix}", file=self.log)
+            print(f"agent {self._tick_count}: inv[-] cii={cii} {_item_ns(name, seed)}{suffix}", file=self.log)
         for cii, seed, name in sorted(added):
             slot  = None
             stats = None
@@ -1050,10 +1058,10 @@ class AgentAI:
                         slot  = _item_slot_type(item)
                         stats = _item_stats_str(item)
             if slot:
-                print(f"agent {self._tick_count}: inv[+] cii={cii} seed={seed}"
-                      f" slot={slot} [{stats}] '{name}'", file=self.log)
+                print(f"agent {self._tick_count}: inv[+] cii={cii} {_item_ns(name, seed)}"
+                      f" slot={slot} [{stats}]", file=self.log)
             else:
-                print(f"agent {self._tick_count}: inv[+] cii={cii} seed={seed} '{name}'", file=self.log)
+                print(f"agent {self._tick_count}: inv[+] cii={cii} {_item_ns(name, seed)}", file=self.log)
 
     def _tick(self):
         d = self.game.safe_state
@@ -1084,7 +1092,7 @@ class AgentAI:
                 if (int(slot._itype) != dx.ItemType.None_.value
                         and int(slot._iSeed) == self._pending_equip[bc][0]):
                     seed, score, name = self._pending_equip[bc]
-                    print(f"agent {self._tick_count}: equipped '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: equipped {_item_ns(name, seed)}"
                           f" lvl={self.cur_level}"
                           f" gear: {_player_gear_str(d.player)}", file=self.log)
                     del self._pending_equip[bc]
@@ -1104,8 +1112,8 @@ class AgentAI:
             if self._pending_drop_seeds and not self.no_gear_management:
                 for seed, name in list(self._pending_drop_seeds.items()):
                     if seed in curr_list:
-                        print(f"agent {self._tick_count}: retry drop '{name}'"
-                              f" seed={seed} - engine drop failed", file=self.log)
+                        print(f"agent {self._tick_count}: retry drop {_item_ns(name, seed)}"
+                              f" - engine drop failed", file=self.log)
                         self._queued_seeds.add(seed)
                         self._action_queue.append(
                             {'action': 'drop', 'seed': seed, 'name': name})
@@ -1165,8 +1173,7 @@ class AgentAI:
                       f" ({used}/{len(inv_grid)} cells used) on level {cur_level}", file=self.log)
                 for i in range(int(d.player._pNumInv)):
                     it = d.player.InvList[i]
-                    print(f"  WARNING inv[{i}] seed={int(it._iSeed):#010x} '{_item_name(it)}'",
-                          file=self.log)
+                    print(f"  WARNING inv[{i}] {_item_str(it)}", file=self.log)
                 self._inv_warn_issued = True
 
         self._assign_stat_points(d)
@@ -1791,8 +1798,8 @@ class AgentAI:
                     RE.RING_ENTRY_F_SINGLE_TICK_PRESS,
                     data=(cii, 0))
                 name = _item_name(item)
-                print(f"agent {self._tick_count}: repairing '{name}' {slot_name}, dur {cur_dur}/{max_dur}",
-                      file=self.log)
+                print(f"agent {self._tick_count}: repairing {_item_str(item)}"
+                      f" {slot_name}, dur {cur_dur}/{max_dur}", file=self.log)
 
     def _pending_drop_count(self, player, match):
         """Count queued and pending-retry drops where match(item) is true."""
@@ -1924,8 +1931,8 @@ class AgentAI:
             name         = _item_name(item)
             if eff_without > cur_eff:
                 # Removing the item improves efficiency: it is harmful (cursed).
-                print(f"agent {self._tick_count}: drop harmful equipped '{name}'"
-                      f" seed={eq_seed} [{label}] bc={bc}", file=self.log)
+                print(f"agent {self._tick_count}: drop harmful equipped {_item_str(item)}"
+                      f" [{label}] bc={bc}", file=self.log)
                 self._drop_and_mask(d, bc)
                 self._inv_changed = True
                 for bk_seed in (backup_seeds or []):
@@ -1945,10 +1952,10 @@ class AgentAI:
                 if bk_eff > cur_eff:
                     bk_wname = _item_name(bk_weapon) if bk_weapon is not None else None
                     bk_sname = _item_name(bk_shield) if bk_shield is not None else None
-                    parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
-                           + [f"shield '{bk_sname}'" if bk_sname else None])
+                    parts = ([f"weapon {_item_str(bk_weapon)}" if bk_weapon is not None else None]
+                           + [f"shield {_item_str(bk_shield)}" if bk_shield is not None else None])
                     print(f"agent {self._tick_count}: backup combo {bk_label}"
-                          f" beats 2H '{name}' [{label}] - restoring"
+                          f" beats 2H {_item_ns(name, eq_seed)} [{label}] - restoring"
                           f" {', '.join(p for p in parts if p)}", file=self.log)
                     if bk_weapon is not None:
                         self._pending_equip[HAND_LEFT] = (bk_weapon_seed, bk_eff, bk_wname)
@@ -1971,8 +1978,8 @@ class AgentAI:
                     if valid:
                         self._backup_for_item[eq_seed] = [s for _, s, _ in valid]
                         self._backup_resolved.add(eq_seed)
-                        parts = [f"{role} '{_item_name(it)}'" for role, _, it in valid]
-                        print(f"agent {self._tick_count}: 2H '{name}' [{label}] beats backup"
+                        parts = [f"{role} {_item_str(it)}" for role, _, it in valid]
+                        print(f"agent {self._tick_count}: 2H {_item_ns(name, eq_seed)} [{label}] beats backup"
                               f" {bk_label} - keeping as eviction insurance:"
                               f" {', '.join(parts)}", file=self.log)
             else:
@@ -1985,16 +1992,16 @@ class AgentAI:
                 bk_label = f"eff={bk_eff:.4f}"
                 bk_name = _item_name(bk_item)
                 if bk_eff > cur_eff:
-                    print(f"agent {self._tick_count}: backup '{bk_name}' seed={bk_seed}"
-                          f" [{bk_label}] beats '{name}' seed={eq_seed} [{label}]"
+                    print(f"agent {self._tick_count}: backup {_item_ns(bk_name, bk_seed)}"
+                          f" [{bk_label}] beats {_item_ns(name, eq_seed)} [{label}]"
                           f" - equipping backup", file=self.log)
                     self._pending_equip[bc] = (bk_seed, bk_eff, bk_name)
                     self._queued_seeds.add(bk_seed)
                     self._action_queue.append(
                         {'action': 'equip', 'seed': bk_seed, 'name': bk_name, 'body_cii': bc})
                 else:
-                    print(f"agent {self._tick_count}: drop backup '{bk_name}' seed={bk_seed}"
-                          f" [{bk_label}] - '{name}' seed={eq_seed} [{label}] is better", file=self.log)
+                    print(f"agent {self._tick_count}: drop backup {_item_ns(bk_name, bk_seed)}"
+                          f" [{bk_label}] - {_item_ns(name, eq_seed)} [{label}] is better", file=self.log)
                     self._queued_seeds.add(bk_seed)
                     self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
                 for extra_seed in backup_seeds[1:]:
@@ -2010,11 +2017,11 @@ class AgentAI:
 
         if imisc == imisc_book:
             if int(player._pMagic) >= int(item._iMinMag):
-                print(f"agent {self._tick_count}: queue read book '{name}' seed={seed}", file=self.log)
+                print(f"agent {self._tick_count}: queue read book {_item_ns(name, seed)}", file=self.log)
                 self._queued_seeds.add(seed)
                 self._action_queue.append({'action': 'use', 'seed': seed, 'name': name})
             else:
-                print(f"agent {self._tick_count}: queue drop book '{name}' seed={seed}"
+                print(f"agent {self._tick_count}: queue drop book {_item_ns(name, seed)}"
                       f" - magic {int(player._pMagic)} < {int(item._iMinMag)}", file=self.log)
                 self._queued_seeds.add(seed)
                 self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2034,7 +2041,7 @@ class AgentAI:
                 if self.all_items_identified:
                     # Items are pre-identified by the engine; scrolls serve no
                     # purpose, so drop in order not to fill the inventory.
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                           f" - unused scroll", file=self.log)
                     self._queued_seeds.add(seed)
                     self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2045,7 +2052,7 @@ class AgentAI:
 
             if spellid == spellid_portal:
                 if self._count_scroll_spellid(player, spellid) > _MAX_TOWN_PORTALS:
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                           f" - excess scrolls (>{_MAX_TOWN_PORTALS})", file=self.log)
                     self._queued_seeds.add(seed)
                     self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2056,7 +2063,7 @@ class AgentAI:
                 return
 
             # All other scrolls: drop.
-            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+            print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                   f" - unused scroll spellid={spellid}", file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2077,7 +2084,7 @@ class AgentAI:
             # TODO: enable keep_mana_potions once the agent uses spells heavily.
             if self.keep_mana_potions:
                 return
-            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+            print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                   f" - mana potion, not keeping", file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2099,8 +2106,8 @@ class AgentAI:
         scroll_cii = _find_scroll_of_identify(player)
         if scroll_cii is None:
             return
-        print(f"agent {self._tick_count}: queue identify equipped '{target_name}'"
-              f" seed={target_seed} (identify scroll acquired)", file=self.log)
+        print(f"agent {self._tick_count}: queue identify equipped {_item_ns(target_name, target_seed)}"
+              f" (identify scroll acquired)", file=self.log)
         self._queued_seeds.add(target_seed)
         self._action_queue.append(
             {'action': 'identify', 'seed': target_seed, 'name': target_name,
@@ -2128,7 +2135,7 @@ class AgentAI:
                 self._pathfinder._path = []
                 seed = int(item._iSeed)
                 name = _item_name(item)
-                print(f"agent {self._tick_count}: masked drop '{name}' seed={seed} at {p}", file=self.log)
+                print(f"agent {self._tick_count}: masked drop {_item_ns(name, seed)} at {p}", file=self.log)
 
     def _equip(self, inv_cii, body_cii):
         """Move inventory item inv_cii to body slot body_cii (engine handles swap)."""
@@ -2166,8 +2173,8 @@ class AgentAI:
                         break
             if item is None:
                 continue
-            print(f"agent {self._tick_count}: revealed '{_item_name(item)}'"
-                  f" seed={seed} [{_identified_label(item)}]", file=self.log)
+            print(f"agent {self._tick_count}: revealed {_item_str(item)}"
+                  f" [{_identified_label(item)}]", file=self.log)
 
     def _is_better_warrior(self, item, player):
         """Is item an upgrade for warrior?
@@ -2360,7 +2367,7 @@ class AgentAI:
             for g_val, g_seed in to_drop:
                 if g_seed in self._queued_seeds or g_seed in self._pending_drop_seeds:
                     continue
-                print(f"agent {self._tick_count}: queue drop gold seed={g_seed}"
+                print(f"agent {self._tick_count}: queue drop gold {_item_ns('Gold', g_seed)}"
                       f" val={g_val} - excess gold piles (>{_MAX_GOLD_PILES})", file=self.log)
                 self._queued_seeds.add(g_seed)
                 self._action_queue.append({'action': 'drop', 'seed': g_seed, 'name': 'Gold'})
@@ -2376,7 +2383,7 @@ class AgentAI:
         max_dur = int(item._iMaxDur)
         cur_dur = int(item._iDurability)
         if 0 < max_dur and cur_dur / max_dur < self.repair_threshold:
-            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+            print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                   f" - dur {cur_dur}/{max_dur} below threshold", file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
@@ -2385,7 +2392,7 @@ class AgentAI:
         if not _can_equip(item, player):
             req = (f"MinStr={int(item._iMinStr)} MinMag={int(item._iMinMag)}"
                    f" MinDex={int(item._iMinDex)}")
-            print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} - stat req not met ({req})", file=self.log)
+            print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)} - stat req not met ({req})", file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
             return
@@ -2411,13 +2418,13 @@ class AgentAI:
                 if _is_magic(eq_cur) and not _needs_identification(eq_cur):
                     scroll_cii = _find_scroll_of_identify(player)
                     if scroll_cii is None:
-                        print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                        print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                               f" - unidentified magic, no scroll to identify vs magic",
                               file=self.log)
                         self._queued_seeds.add(seed)
                         self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
                     else:
-                        print(f"agent {self._tick_count}: queue identify '{name}' seed={seed}"
+                        print(f"agent {self._tick_count}: queue identify {_item_ns(name, seed)}"
                               f" - basic beat identified magic, identifying before equip",
                               file=self.log)
                         self._queued_seeds.add(seed)
@@ -2427,11 +2434,12 @@ class AgentAI:
                     return
             id_tag = " unidentified" if _needs_identification(item) else ""
             if old_label == "empty":
-                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag} - empty slot",
+                print(f"agent {self._tick_count}: queue equip {_item_ns(name, seed)} [{new_label}]{id_tag} - empty slot",
                       file=self.log)
             else:
-                print(f"agent {self._tick_count}: queue equip '{name}' seed={seed} [{new_label}]{id_tag}"
-                      f" over '{old_name}' [{old_label}]", file=self.log)
+                print(f"agent {self._tick_count}: queue equip {_item_ns(name, seed)} [{new_label}]{id_tag}"
+                      f" over {_item_ns(old_name, int(player.InvBody[body_cii]._iSeed))} [{old_label}]",
+                      file=self.log)
             # Handle the item(s) displaced by this equip.
             ILOC_2H    = dx.item_equip_type.ILOC_TWOHAND.value
             HAND_LEFT  = dx.inv_item.INVITEM_HAND_LEFT.value
@@ -2460,8 +2468,8 @@ class AgentAI:
                         bk_other_name = _item_name(bk_other_item)
                         role = 'shield' if body_cii == HAND_LEFT else 'weapon'
                         print(f"agent {self._tick_count}: also equip {role}"
-                              f" '{bk_other_name}' seed={bk_other_seed}"
-                              f" alongside '{name}'", file=self.log)
+                              f" {_item_ns(bk_other_name, bk_other_seed)}"
+                              f" alongside {_item_ns(name, seed)}", file=self.log)
                         self._pending_equip[other_body] = (bk_other_seed, new_score, bk_other_name)
                         self._queued_seeds.add(bk_other_seed)
                         self._action_queue.append(
@@ -2477,12 +2485,12 @@ class AgentAI:
                         bk_drop_name = _item_name(bk_drop_item)
                         if _needs_identification(item):
                             print(f"agent {self._tick_count}: inherit non-partner backup"
-                                  f" '{bk_drop_name}' seed={bk_drop_seed}"
-                                  f" for unidentified '{name}' seed={seed}", file=self.log)
+                                  f" {_item_ns(bk_drop_name, bk_drop_seed)}"
+                                  f" for unidentified {_item_ns(name, seed)}", file=self.log)
                             self._backup_for_item[seed] = [bk_drop_seed]
                         else:
-                            print(f"agent {self._tick_count}: drop non-partner backup '{bk_drop_name}'"
-                                  f" seed={bk_drop_seed} - 2H evicted", file=self.log)
+                            print(f"agent {self._tick_count}: drop non-partner backup {_item_ns(bk_drop_name, bk_drop_seed)}"
+                                  f" - 2H evicted", file=self.log)
                             self._queued_seeds.add(bk_drop_seed)
                             self._action_queue.append(
                                 {'action': 'drop', 'seed': bk_drop_seed, 'name': bk_drop_name})
@@ -2500,8 +2508,8 @@ class AgentAI:
                         # over). Old 2H goes to InvList and scores lower, so it gets dropped.
                         print(f"agent {self._tick_count}: inherit backups"
                               f" {[f'{s:#010x}' for s in prior_seeds]}"
-                              f" from old 2H seed={eq_seed:#010x}"
-                              f" for new 2H '{name}' seed={seed}", file=self.log)
+                              f" from old 2H {_item_str(eq_cur)}"
+                              f" for new 2H {_item_ns(name, seed)}", file=self.log)
                         self._backup_for_item[seed] = list(prior_seeds)
                         inherited = True
                     else:
@@ -2510,8 +2518,8 @@ class AgentAI:
                             pi, _ = self._find_inv_by_seed(player, ps)
                             if pi is not None:
                                 pn = _item_name(pi)
-                                print(f"agent {self._tick_count}: drop prior backup '{pn}' seed={ps}"
-                                      f" - 2H '{name}' takes over", file=self.log)
+                                print(f"agent {self._tick_count}: drop prior backup {_item_ns(pn, ps)}"
+                                      f" - 2H {_item_ns(name, seed)} takes over", file=self.log)
                                 self._queued_seeds.add(ps)
                                 self._action_queue.append({'action': 'drop', 'seed': ps, 'name': pn})
                 if not inherited:
@@ -2525,11 +2533,11 @@ class AgentAI:
                         backups.append(int(hand_r._iSeed))
                         bk_sname = _item_name(hand_r)
                     if backups:
-                        parts = ([f"weapon '{bk_wname}'" if bk_wname else None]
-                               + [f"shield '{bk_sname}'" if bk_sname else None])
+                        parts = ([f"weapon {_item_str(eq_cur)}" if bk_wname else None]
+                               + [f"shield {_item_str(hand_r)}" if bk_sname else None])
                         print(f"agent {self._tick_count}: reserve"
                               f" {', '.join(p for p in parts if p)}"
-                              f" for unidentified 2H '{name}' seed={seed}", file=self.log)
+                              f" for unidentified 2H {_item_ns(name, seed)}", file=self.log)
                         self._backup_for_item[seed] = backups
             elif eq_seed and eq_seed in self._backup_for_item:
                 if int(eq_cur._iLoc) == ILOC_2H:
@@ -2545,18 +2553,18 @@ class AgentAI:
                         bk_item, _ = self._find_inv_by_seed(player, bk_seed)
                         if bk_item is not None:
                             bk_name = _item_name(bk_item)
-                            print(f"agent {self._tick_count}: drop old backup '{bk_name}' seed={bk_seed}"
-                                  f" - displaced '{old_name}' eq_seed={eq_seed} takes its place",
+                            print(f"agent {self._tick_count}: drop old backup {_item_ns(bk_name, bk_seed)}"
+                                  f" - displaced {_item_ns(old_name, eq_seed)} takes its place",
                                   file=self.log)
                             self._queued_seeds.add(bk_seed)
                             self._action_queue.append({'action': 'drop', 'seed': bk_seed, 'name': bk_name})
                         else:
-                            print(f"agent {self._tick_count}: backup seed={bk_seed} gone from inventory"
-                                  f" while displacing eq_seed={eq_seed}", file=self.log)
+                            print(f"agent {self._tick_count}: backup {_item_ns('?', bk_seed)} gone from inventory"
+                                  f" while displacing {_item_ns(old_name, eq_seed)}", file=self.log)
                     if _needs_identification(item):
                         # Old main becomes the backup for the new unidentified item.
-                        print(f"agent {self._tick_count}: set displaced '{old_name}' seed={eq_seed}"
-                              f" as backup for unidentified '{name}' seed={seed}", file=self.log)
+                        print(f"agent {self._tick_count}: set displaced {_item_ns(old_name, eq_seed)}"
+                              f" as backup for unidentified {_item_ns(name, seed)}", file=self.log)
                         self._backup_for_item[seed] = [eq_seed]
             # Set _pending_equip at queue-time so subsequent evaluations compare against
             # this winner. Not added to any exclusion set: displaced gear must re-enter evaluation.
@@ -2579,8 +2587,8 @@ class AgentAI:
                         and _needs_identification(eq)
                         and eq_seed not in self._backup_for_item
                         and int(eq._iLoc) not in _JEWELRY_ILOC):
-                    print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
-                          f" as backup for unidentified '{old_name}' eq_seed={eq_seed}", file=self.log)
+                    print(f"agent {self._tick_count}: stash {_item_ns(name, seed)} [{new_label}]"
+                          f" as backup for unidentified {_item_ns(old_name, eq_seed)}", file=self.log)
                     self._backup_for_item[eq_seed] = [seed]
                     return
             if (pending is not None
@@ -2590,9 +2598,8 @@ class AgentAI:
                 if pend_seed not in self._backup_for_item:
                     pend_item, _ = self._find_inv_by_seed(player, pend_seed)
                     if pend_item is not None and _needs_identification(pend_item):
-                        print(f"agent {self._tick_count}: stash '{name}' seed={seed} [{new_label}]"
-                              f" as backup for pending unidentified '{pend_name}'"
-                              f" pend_seed={pend_seed}", file=self.log)
+                        print(f"agent {self._tick_count}: stash {_item_ns(name, seed)} [{new_label}]"
+                              f" as backup for pending unidentified {_item_ns(pend_name, pend_seed)}", file=self.log)
                         self._backup_for_item[pend_seed] = [seed]
                         return
             # 2H active and has eviction-insurance backups: try to upgrade the backup list
@@ -2624,8 +2631,8 @@ class AgentAI:
                                     and int(existing_item._iClass) != dx.item_class.ICLASS_WEAPON.value):
                                 bk_list.insert(0, seed)
                                 print(f"agent {self._tick_count}: restore weapon backup"
-                                      f" '{name}' seed={seed} [{new_label}]"
-                                      f" for 2H seed={hl_seed}", file=self.log)
+                                      f" {_item_ns(name, seed)} [{new_label}]"
+                                      f" for 2H {_item_str(eq_2h)}", file=self.log)
                                 return
                             bk_dlvl = max(1, self._cur_dlvl)
                             e_score = _warrior_eff_with_swap(player, existing_item, None, bk_dlvl)
@@ -2634,9 +2641,9 @@ class AgentAI:
                                 bk_list[bk_idx] = seed
                                 old_bk = _item_name(existing_item)
                                 print(f"agent {self._tick_count}: upgrade 2H backup[{bk_idx}]"
-                                      f" '{old_bk}' seed={existing_seed} ->"
-                                      f" '{name}' seed={seed} [{new_label}]"
-                                      f" for 2H seed={hl_seed}", file=self.log)
+                                      f" {_item_ns(old_bk, existing_seed)} ->"
+                                      f" {_item_ns(name, seed)} [{new_label}]"
+                                      f" for 2H {_item_str(eq_2h)}", file=self.log)
                                 self._queued_seeds.add(existing_seed)
                                 self._action_queue.append(
                                     {'action': 'drop', 'seed': existing_seed, 'name': old_bk})
@@ -2649,8 +2656,8 @@ class AgentAI:
                                 # Normal: weapon at bfi[0], stash this shield as bfi[1].
                                 bk_list.append(seed)
                                 print(f"agent {self._tick_count}: add shield backup"
-                                      f" '{name}' seed={seed} [{new_label}]"
-                                      f" for unidentified 2H seed={hl_seed}", file=self.log)
+                                      f" {_item_ns(name, seed)} [{new_label}]"
+                                      f" for unidentified 2H {_item_str(eq_2h)}", file=self.log)
                                 return
                             else:
                                 # Weapon gone; lone shield at bfi[0]. Upgrade if incoming is better.
@@ -2661,26 +2668,28 @@ class AgentAI:
                                     bk_list[0] = seed
                                     old_bk = _item_name(bk0_item)
                                     print(f"agent {self._tick_count}: upgrade 2H lone-shield backup"
-                                          f" '{old_bk}' seed={bk0_seed} ->"
-                                          f" '{name}' seed={seed} [{new_label}]"
-                                          f" for 2H seed={hl_seed}", file=self.log)
+                                          f" {_item_ns(old_bk, bk0_seed)} ->"
+                                          f" {_item_ns(name, seed)} [{new_label}]"
+                                          f" for 2H {_item_str(eq_2h)}", file=self.log)
                                     self._queued_seeds.add(bk0_seed)
                                     self._action_queue.append(
                                         {'action': 'drop', 'seed': bk0_seed, 'name': old_bk})
                                     return
             if old_name is None:
                 if new_label == "shield-blocked-by-2h":
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                           f" - shield blocked by active 2H", file=self.log)
                 else:
-                    print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)}"
                           f" - class filter [{new_label}]", file=self.log)
             elif new_score == old_score:
-                print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} [{new_label}]"
-                      f" - tied with '{old_name}' [{old_label}]", file=self.log)
+                print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)} [{new_label}]"
+                      f" - tied with {_item_ns(old_name, int(player.InvBody[body_cii]._iSeed))} [{old_label}]",
+                      file=self.log)
             else:
-                print(f"agent {self._tick_count}: queue drop '{name}' seed={seed} [{new_label}]"
-                      f" - worse than '{old_name}' [{old_label}]", file=self.log)
+                print(f"agent {self._tick_count}: queue drop {_item_ns(name, seed)} [{new_label}]"
+                      f" - worse than {_item_ns(old_name, int(player.InvBody[body_cii]._iSeed))} [{old_label}]",
+                      file=self.log)
             self._queued_seeds.add(seed)
             self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
 
@@ -2710,14 +2719,14 @@ class AgentAI:
                         cii = BELT_FIRST + i
                         break
             if cii is None and entry['action'] != 'identify':
-                print(f"agent {self._tick_count}: queue discard '{name}' seed={seed} - not in inv/belt", file=self.log)
+                print(f"agent {self._tick_count}: queue discard {_item_ns(name, seed)} - not in inv/belt", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 continue
 
             if entry['action'] == 'equip':
                 body_cii = entry['body_cii']
-                print(f"agent {self._tick_count}: equip '{name}' seed={seed}", file=self.log)
+                print(f"agent {self._tick_count}: equip {_item_ns(name, seed)}", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 # _pending_equip[body_cii] is NOT cleared here - only when engine confirms
@@ -2735,21 +2744,21 @@ class AgentAI:
                             target_cii = i
                             break
                 if target_cii is None:
-                    print(f"agent {self._tick_count}: queue discard '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: queue discard {_item_ns(name, seed)}"
                           f" - identify: not found", file=self.log)
                     self._action_queue.pop(0)
                     self._queued_seeds.discard(seed)
                     continue
                 scroll_cii = _find_scroll_of_identify(player)
                 if scroll_cii is None:
-                    print(f"agent {self._tick_count}: drop '{name}' seed={seed}"
+                    print(f"agent {self._tick_count}: drop {_item_ns(name, seed)}"
                           f" - identify: scroll gone", file=self.log)
                     self._action_queue.pop(0)
                     self._queued_seeds.discard(seed)
                     if cii is not None:  # only drop if item is in inv, not if equipped
                         self._drop_and_mask(d, cii)
                     return
-                print(f"agent {self._tick_count}: identify '{name}' seed={seed}", file=self.log)
+                print(f"agent {self._tick_count}: identify {_item_ns(name, seed)}", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 self._identify_pending_seeds.add(seed)
@@ -2762,7 +2771,7 @@ class AgentAI:
                     data=(scroll_cii, target_cii))
                 return
             elif entry['action'] == 'use':
-                print(f"agent {self._tick_count}: use '{name}' seed={seed}", file=self.log)
+                print(f"agent {self._tick_count}: use {_item_ns(name, seed)}", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 RE = ring.RingEntryType
@@ -2771,7 +2780,7 @@ class AgentAI:
                     data=(cii, 0))
                 return
             else:
-                print(f"agent {self._tick_count}: drop '{name}' seed={seed}", file=self.log)
+                print(f"agent {self._tick_count}: drop {_item_ns(name, seed)}", file=self.log)
                 self._action_queue.pop(0)
                 self._queued_seeds.discard(seed)
                 self._pending_drop_seeds[seed] = name
