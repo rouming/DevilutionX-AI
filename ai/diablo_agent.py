@@ -40,8 +40,9 @@ _SKIP_ITYPE = frozenset({
     dx.ItemType.Misc.value,
 })
 
-_MAX_GOLD_PILES  = 2
-_INV_WARN_PCT    = 80  # warn once per level when inventory cells used >= this %
+_MAX_TOWN_PORTALS = 0
+_MAX_GOLD_PILES   = 2
+_INV_WARN_PCT     = 80  # warn once per level when inventory cells used >= this %
 
 _SKIP_ILOC = frozenset({
     dx.item_equip_type.ILOC_NONE.value,
@@ -1817,6 +1818,11 @@ class AgentAI:
                         break
         return n
 
+    def _count_scroll_spellid(self, player, spellid):
+        count = _count_scroll_spellid(player, spellid)
+        count -= self._pending_drop_count(
+            player, lambda it: int(it._iSpell) == spellid)
+        return count
 
     def _drop_and_mask(self, d, cii):
         """Drop inventory item cii. Normally data2 bit0 tells the engine to set _iMasked
@@ -2038,10 +2044,9 @@ class AgentAI:
                 return
 
             if spellid == spellid_portal:
-                cap = 2
-                if _count_scroll_spellid(player, spellid) > cap:
+                if self._count_scroll_spellid(player, spellid) > _MAX_TOWN_PORTALS:
                     print(f"agent {self._tick_count}: queue drop '{name}' seed={seed}"
-                          f" - scroll surplus (>{cap})", file=self.log)
+                          f" - excess scrolls (>{_MAX_TOWN_PORTALS})", file=self.log)
                     self._queued_seeds.add(seed)
                     self._action_queue.append({'action': 'drop', 'seed': seed, 'name': name})
                 return
