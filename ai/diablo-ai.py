@@ -538,8 +538,8 @@ def make_diablo_parser():
         "--pause", type=float, default=0,
         help="Seconds to pause between agent steps, useful in GUI mode (default: 0)")
     agent_ai_parser.add_argument(
-        "--seeds", type=parse_seed_range, default=parse_seed_range("1"), metavar="A-B",
-        help="Seed range A-B (inclusive) or single seed A to run sequentially (default: 1)")
+        "--seeds", type=parse_seed_range, default=parse_seed_range("1"), metavar="SEEDS",
+        help="Seeds to run: single 'A', range 'A-B', list 'A,B,C', or mixed 'A-B,C' (default: 1)")
 
     #
     # train-ai
