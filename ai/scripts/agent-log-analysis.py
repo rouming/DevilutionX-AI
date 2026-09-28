@@ -50,8 +50,11 @@ STAT_RE = re.compile(
     r'atk=(\d+) rec=(\d+)'
 )
 
-SEED_RE = re.compile(r'^\s+seed \d+\s*$')
+SEED_RE    = re.compile(r'^\s+seed \d+\s*$')
+SEED_VAL_RE = re.compile(r'^\s+seed (\d+)\s*$')
 LEVELUP_RE = re.compile(r'agent \d+: level up (\d+)')
+NOWLVL_RE  = re.compile(r'now on level (\d+)')
+DEATH_LVL_RE = re.compile(r'hero died at level (\d+)')
 
 by_floor = defaultdict(list)
 clvl_by_floor = defaultdict(list)
@@ -303,4 +306,36 @@ print("#   Empty = built-in depth-scaling formulas.")
 print("Char gear combat   = " + ", ".join(entries))
 
 print()
+
+# --- per-seed deepest level, sorted ---
+
+seed_max_level = {}  # seed -> max dungeon level reached
+current_seed = None
+for line in raw.splitlines():
+    m_s = SEED_VAL_RE.match(line)
+    if m_s:
+        current_seed = int(m_s.group(1))
+        seed_max_level.setdefault(current_seed, 0)
+        continue
+    if current_seed is None:
+        continue
+    for pat in (NOWLVL_RE, DEATH_LVL_RE):
+        m = pat.search(line)
+        if m:
+            lvl = int(m.group(1))
+            if lvl > seed_max_level[current_seed]:
+                seed_max_level[current_seed] = lvl
+            break
+
+if seed_max_level:
+    print("Seeds by deepest level reached (ascending):")
+    print()
+    by_level = defaultdict(list)
+    for seed, lvl in seed_max_level.items():
+        by_level[lvl].append(seed)
+    for lvl in sorted(by_level):
+        seeds_str = ", ".join(str(s) for s in sorted(by_level[lvl]))
+        print("  level %2d: %s" % (lvl, seeds_str))
+    print()
+
 print("\n".join(_death_lines))
