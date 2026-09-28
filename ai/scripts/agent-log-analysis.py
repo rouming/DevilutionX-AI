@@ -21,11 +21,14 @@ if levels:
         n, min(levels), max(levels),
         statistics.mean(levels), statistics.stdev(levels) if n > 1 else 0.0))
     _death_lines.append("")
+    _death_lines.append("Death level historgram:")
+    _death_lines.append("")
     for lvl, cnt in sorted(Counter(levels).items()):
         bar = "#" * cnt
         _death_lines.append("  level %2d: %3d (%5.1f%%)  %s" % (lvl, cnt, 100 * cnt / n, bar))
     _death_lines.append("")
-    _death_lines.append("survival function (fraction of runs that reached at least level N):")
+    _death_lines.append("Survival function (fraction of runs that reached at least level N):")
+    _death_lines.append("")
     for lvl in range(1, max(levels) + 1):
         survived = sum(1 for l in levels if l >= lvl)
         _death_lines.append("  level %2d: %5.1f%%" % (lvl, 100 * survived / n))
@@ -327,8 +330,11 @@ for line in raw.splitlines():
                 seed_max_level[current_seed] = lvl
             break
 
+print("\n".join(_death_lines))
+print("")
+
 if seed_max_level:
-    print("Seeds by deepest level reached (ascending):")
+    print("Seeds by deepest level reached:")
     print()
     by_level = defaultdict(list)
     for seed, lvl in seed_max_level.items():
@@ -337,5 +343,3 @@ if seed_max_level:
         seeds_str = ", ".join(str(s) for s in sorted(by_level[lvl]))
         print("  level %2d: %s" % (lvl, seeds_str))
     print()
-
-print("\n".join(_death_lines))
