@@ -314,6 +314,9 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--gui", action="store_true",
         help="Start Diablo in GUI mode only")
+    common_parser.add_argument(
+        "--record", metavar="FILE",
+        help="Record the GUI window to a video file (requires --gui, gpu-screen-recorder and xdotool). Use .mkv extension for crash-safe incremental writing.")
     # See also `incompatible_options`
     common_parser.add_argument(
         "--invincible-player", action="store_true",
@@ -1977,6 +1980,61 @@ def new_game_data(gameconfig, n_counter):
     dungeon_level = diablo_state.sample_dungeon_level(spec, seed)
     return (dungeon_level << 1) | 1, seed
 
+def _find_game_window(pid, timeout=10):
+    """Return window ID of the window owned by pid, or raise RuntimeError."""
+    import subprocess, time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        r = subprocess.run(['xdotool', 'search', '--pid', str(pid)],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return int(r.stdout.strip().split('\n')[-1])
+        time.sleep(0.2)
+    raise RuntimeError(f"game window for pid {pid} not found within {timeout}s")
+
+def _record_screen_start(game, args):
+    """Start gpu-screen-recorder if --record and --gui are set; returns proc or None."""
+    if not getattr(args, 'record', None) or not args.record or not args.gui:
+        return None
+    if game.proc is None:
+        print("WARNING: --record ignored when attaching to an existing process")
+        return None
+
+    import shutil, subprocess
+    if not shutil.which('gpu-screen-recorder'):
+        print("WARNING: --record ignored: gpu-screen-recorder not found in PATH")
+        return None
+
+    if not args.record.endswith('.mkv'):
+        print("WARNING: --record: use .mkv extension for crash-safe recording")
+    print(f"Recording: waiting for game window (pid {game.proc.pid})...")
+    wid = _find_game_window(game.proc.pid)
+    cmd = [
+        'gpu-screen-recorder',
+        '-w', str(wid),
+        '-f', '30',
+        '-a', 'app:devilutionx',
+        '-ac', 'aac',
+        '-o', args.record,
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import atexit
+    atexit.register(_record_screen_stop, proc)
+    print(f"Recording: started -> {args.record}")
+    return proc
+
+def _record_screen_stop(proc):
+    """Stop a recording process started by _record_screen_start."""
+    if proc is None:
+        return
+    import signal
+    try:
+        proc.send_signal(signal.SIGINT)
+    except OSError:
+        pass
+    proc.wait()
+    print("Recording: saved")
+
 def run_tui(stdscr, args, gameconfig):
     global RUNNING
     global LAST_KEY
@@ -1994,6 +2052,8 @@ def run_tui(stdscr, args, gameconfig):
     envlog = None
     n_counter = 0
 
+    # Recording is stopped via atexit on both normal exit and Ctrl-C.
+    _record_screen_start(game, args)
     # Main loop
     while RUNNING:
         stdscr.clear()
@@ -2842,6 +2902,8 @@ def play_ai(args, gameconfig):
     if hasattr(preprocess_obss, "vocab"):
         preprocess_obss.vocab.load_vocab(utils.get_vocab(model_dir))
 
+    # Recording is stopped via atexit on both normal exit and Ctrl-C.
+    _record_screen_start(penv_pool.envs[0].unwrapped.game, args)
     ts = time.time()
     logs = batch_evaluate(acmodel, preprocess_obss, penv_pool, args.argmax,
                           args.seed, args.seed_base, args.episodes_int,
@@ -2937,6 +2999,8 @@ def agent_ai(args, gameconfig):
             pause=args.pause,
             stat_strategy=args.stat_strategy)
 
+    # Recording is stopped via atexit on both normal exit and Ctrl-C.
+    _record_screen_start(game, args)
     run_agent_loop(args.seeds, env, make_supervisor)
 
     env.close()
