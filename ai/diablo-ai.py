@@ -2876,6 +2876,8 @@ def agent_ai(args, gameconfig):
     # Create one env instance to obtain obs/action space metadata and a game
     env_config = copy.deepcopy(gameconfig)
     env_config['index'] = 0
+    env_config['eval-kill-threshold']      = args.kill_threshold
+    env_config['eval-max-steps-per-level'] = args.max_steps_per_level
     EnvClass = utils.get_env_class(args.env)
     EnvClass.tune_config(env_config)
     game = diablo_state.DiabloGame.run_or_attach(env_config)
