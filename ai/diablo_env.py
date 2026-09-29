@@ -288,6 +288,9 @@ class DiabloEnv(gym.Env):
         self._kill_threshold    = self.config.get('eval-kill-threshold', 0.0)
         self._max_steps_per_level = self.config.get('eval-max-steps-per-level', 0)
         self._no_stuck_timeout  = self.config.get('eval-no-stuck-timeout', False)
+        ticks_scale = 10 / self.config.get('game-ticks-per-step', 10)
+        self.EPISODE_TIMEOUT = int(self.__class__.EPISODE_TIMEOUT * ticks_scale)
+        self.STUCK_TIMEOUT   = int(self.__class__.STUCK_TIMEOUT   * ticks_scale)
         self.initial_monsters_cnt = 0
 
         if self.log_to_stdout:
