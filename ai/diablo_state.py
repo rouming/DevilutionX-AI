@@ -1842,7 +1842,7 @@ class DiabloGame:
                          dungeon_level=config.get("dungeon-level", DUNGEON_LEVEL_DEFAULT)[0][0],
                          automap_active=1 if config["gui"] else 0,
                          skip_progress=1 if config["gui"] else 0,
-                         skip_animation=0 if config["gui"] else 1,
+                         skip_animation=0 if (config["gui"] or config["animation"]) else 1,
                          headless=0 if config["gui"] else 1,
                          game_ticks_per_step=game_ticks_per_step,
                          step_mode=0 if config["gui"] else 1 if step_mode else 0,

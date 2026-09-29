@@ -314,6 +314,14 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--gui", action="store_true",
         help="Start Diablo in GUI mode only")
+    _anim_group = common_parser.add_mutually_exclusive_group()
+    _anim_group.add_argument(
+        "--enable-animation", dest="animation", action="store_true",
+        help="Enable walk animations.")
+    _anim_group.add_argument(
+        "--disable-animation", dest="animation", action="store_false",
+        help="Disable walk animations (default).")
+    common_parser.set_defaults(animation=False)
     common_parser.add_argument(
         "--record", metavar="FILE",
         help="Record the GUI window to a video file (requires --gui, gpu-screen-recorder and xdotool). Use .mkv extension for crash-safe incremental writing.")
@@ -3151,6 +3159,7 @@ def main():
         "game-ticks-per-step": args.game_ticks_per_step,
         "step-mode": not args.real_time,
         "gui": args.gui,
+        "animation": getattr(args, 'animation', False),
         "dungeon-level": args.dungeon_level,
 
         # AI
