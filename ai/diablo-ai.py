@@ -2421,8 +2421,10 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     update = status["update"]
     duration_offset = status.get("duration", 0) or \
         (is_main and _sprout_duration(spr, model_dir) or 0)
-    start_time = time.time()
-    start_time -= min(duration_offset, start_time)
+    _now = time.time()
+    start_time = _now - min(duration_offset, _now)
+    session_start_time = _now
+    session_start_frames = num_frames
 
     if is_main:
         txt_logger.info(f"Start training from {_fmt_frames(num_frames)} frames | run {run_id}\n")
@@ -2592,6 +2594,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 train_R_str = " | ".join(f"R{i} {r:.3f}" for i, r in enumerate(train_mean_r))
             txt_logger.info(f"Evaluation: D {_fmt_duration(elapsed_time):<6} | {R_str} | S {success_rate:.3f} | bS {best_success_rate:.3f}")
             txt_logger.info(f"Training:   D {_fmt_duration(train_window_elapsed):<6} | {train_R_str} | S {train_mean_sr:.3f} | bS {best_train_success_rate:.3f}")
+            _session_frames = num_frames - session_start_frames
+            _session_target = args.frames_int - session_start_frames
+            _pct = min(100, 100 * _session_frames / _session_target) if _session_target > 0 else 100
+            _session_elapsed = time.time() - session_start_time
+            _eta = max(0, int(_session_elapsed * (args.frames_int - num_frames) / _session_frames)) if _session_frames > 0 else 0
+            txt_logger.info(f"Progress:   {_pct:.1f}% | ETA {_fmt_duration(_eta)}")
             txt_logger.info("Status saved")
 
             snap = {"duration": duration,
