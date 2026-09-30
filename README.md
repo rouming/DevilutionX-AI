@@ -1,113 +1,434 @@
-<div style="width:100%;">
-  <a href="https://youtu.be/6KuSlT9EOec" target="_blank">
-    <img src="https://github.com/user-attachments/assets/85967261-4fe9-43db-86dd-1c20c8a641d4" style="width:100%; height:auto;" />
-  </a>
-</div>
+# DevilutionX-AI
 
-# What is DevilutionX-AI
-
-`DevilutionX-AI` is a
-[Gymnasium](https://github.com/Farama-Foundation/Gymnasium) - based
-framework for training reinforcement learning (RL) agents in the game
-*Diablo*. The game runs on
-[DevilutionX](https://github.com/diasurgical/DevilutionX/), an
-open-source port of *Diablo*, with some extra patches added to make it
-usable for RL.
-
-The framework includes a Gymnasium environment,
-[patches](#devilutionx-patches) for DevilutionX, a runner, and a
-training pipeline. The PPO training pipeline is built on
-[torch_ac](https://github.com/lcswillems/torch-ac), with imitation
-learning components adapted from the [BabyAI
-project](https://github.com/mila-iqia/babyai).
-
-The goal is to train an agent (the Warrior) to clear the first dungeon
-level. That means exploring the dungeon, fighting monsters, picking up
-items, opening chests, activating other objects, and finding the stairs
-to the next level - basically what a human would do when just starting
-the game.
-
-The short video at the top of this README demonstrates the agent
-exploring a randomly generated dungeon level. The agent searches for a
-randomly placed town portal while also fighting monsters during this
-exploration. More details on replicating the results are provided
-below. This is done using the pre-trained model, which achieved a
-success rate of 0.98 during evaluation.
-
-This project is not about training an agent to beat the entire
-game. At first, I just wanted to see "signs of life": an RL agent that
-can explore the first dungeon level without worrying about more
-complex behaviors like going back to town, casting spells, or swapping
-gear.
-
-I am not an RL expert, and AI is not part of my daily work, so I
-started with a small and simple goal. Hopefully the framework can be
-useful to others with more RL experience. Maybe together we will see
-an agent one day that plays *Diablo* in a way that looks a lot like a
-human.
-
-## Results
-
-Training progressed through four stages, each building on the previous one.
-
-**Stage 1: Finding the stairs (monsters disabled)**
-
-The first goal was simple: train the agent to find the stairs to the
-next dungeon level with all monsters disabled. Despite the apparent
-simplicity, the agent had to explore a large partially-observable
-dungeon without any map.
-
-The agent reached a **0.96 success rate** and showed some unexpected
-behavior: it learned to exploit structural regularities in the dungeon
-generator, since stairs are not placed entirely at random -- they tend
-to appear in larger halls. It also learned to backtrack when a path
-leads nowhere, which gives the impression of episodic memory, even
-though the agent only has a local view and a recurrent state.
-
-**Stage 2: Finding a random goal (monsters still disabled)**
-
-The next task was harder: find a truly random goal placed anywhere in
-the dungeon. Unlike stairs, random goals have no spatial bias, so the
-agent had to develop systematic exploration rather than exploiting
-structural patterns.
-
-Pure reinforcement learning from scratch failed to make progress. The
-solution was a multi-phase training pipeline: first bootstrap the
-agent with imitation learning from a scripted bot, then carefully
-warm up the critic before switching to PPO. Starting PPO directly
-after imitation learning with an uninitialized critic causes
-catastrophic forgetting in just a few updates -- the agent quickly
-forgets everything it learned. The warm-up step provides a stable
-bridge.
-
-The agent reached a **0.97 success rate** on finding a randomly placed
-goal.
-
-**Stage 3: Standing still monsters, new architecture**
-
-Enabling monsters revealed a new problem: the agent completely ignored
-them. Switching to a more expressive CNN architecture, which adds
-attention blocks and FiLM conditioning on the agent's memory,
-unblocked learning and the agent quickly started engaging with
-monsters.
-
-**Stage 4: Full combat**
-
-With moving, attacking monsters and a shaped reward function, the
-agent developed combat strategies and reached a **0.98 success rate**
-over 3000 randomly generated dungeon levels (sampling mode). Success
-rates reported by Sprout during training are lower as they use argmax
-evaluation, which is more conservative.
-
-## Docker Container
-
-A prebuilt docker image is available on [Docker Hub](https://hub.docker.com/r/romanpen/devilutionx-ai-ubuntu24.04).
-
-First, the NVIDIA Container Toolkit must be installed. For a detailed guide, please follow the [NVIDIA instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-
-As described by [NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/sample-workload.html), you can run the image with CUDA support as follows:
+A hybrid agent for *Diablo* that combines a reinforcement learning model with an
+algorithmic supervisor, playing Ironman - one life, no town returns, 16 dungeon levels
+in sequence. Eval results (no stat inflation, no cheats):
 
 ```
+runs=97  min=2  max=9  mean=5.49  std=1.67
+
+Survival (fraction of runs reaching at least level N):
+
+  level  1: 100.0%  ||||||||||||||||||||||||||||||||||||||||||||||||||||
+  level  2: 100.0%  ||||||||||||||||||||||||||||||||||||||||||||||||||||
+  level  3:  95.9%  |||||||||||||||||||||||||||||||||||||||||||||||||||
+  level  4:  89.7%  ||||||||||||||||||||||||||||||||||||||||||||||||
+  level  5:  70.1%  |||||||||||||||||||||||||||||||||||||||||
+  level  6:  50.5%  ||||||||||||||||||||||||||||||
+  level  7:  27.8%  |||||||||||||||||
+  level  8:  12.4%  |||||||
+  level  9:   3.1%  ||
+
+Death level histogram:
+
+  level  2:   4 (  4.1%)  ####
+  level  3:   6 (  6.2%)  ######
+  level  4:  19 ( 19.6%)  ###################
+  level  5:  19 ( 19.6%)  ###################
+  level  6:  22 ( 22.7%)  ######################
+  level  7:  15 ( 15.5%)  ###############
+  level  8:   9 (  9.3%)  #########
+  level  9:   3 (  3.1%)  ###
+```
+
+Diablo himself is not yet dead - but the first half of the game is nailed. Interested? Read on.
+
+## What This Is
+
+A [Gymnasium](https://github.com/Farama-Foundation/Gymnasium)-based framework for
+training reinforcement learning agents in *Diablo*, running on
+[DevilutionX](https://github.com/diasurgical/DevilutionX/), an open-source port of the game.
+The agent plays the Warrior class - spells are suppressed because they degrade Warrior performance.
+
+The chosen training approach is to work directly on the internal game state rather than
+on screenshots or pixels. The observation space is a structured representation of what the
+Diablo engine itself tracks: tile properties, monster attributes, player stats. This is not
+entirely human-like, but it is far less resource-intensive than pixel-based training and
+makes it straightforward to encode exactly what information matters for decision-making.
+
+### Game State Extraction
+
+Game state is extracted from the running `DevilutionX` engine through a shared memory
+region - a large blob that the Python agent accesses via `mmap`. The engine writes dungeon
+layout, monster positions and attributes, player state, and event data into this region each
+game tick. All actions are keyboard inputs that the agent sends back to the engine through a
+ring buffer in the same shared memory. This architecture means the agent and the engine run
+as separate processes with no modifications to the core game loop beyond what is needed to
+expose the state and accept inputs.
+
+### Headless Mode
+
+`DevilutionX` supports a headless mode that runs the game without displaying graphics.
+For training this is the primary mode: dozens of game instances run simultaneously,
+each driven by its own environment runner, and their collected experience is fed to the
+optimizer in parallel. For evaluation the agent can run headless as well, but it is also
+possible to attach a GUI session to a running headless instance and watch the hero play
+in real time - the engine state is shared, so both views reflect the same game.
+
+## Ironman Rules
+
+Ironman is the natural mode for an agent. No town returns means no need to write
+town navigation code - the agent just descends. No second life means success and
+failure are unambiguous. And frankly, Ironman sounds a lot cooler than "single-level
+benchmark with resets." The agent runs from dungeon level 1 with no assistance:
+
+- `--no-quest`: quests are disabled. The Butcher and other quest-triggered content require
+  significant algorithmic handling that is not the focus of this project.
+- Town is bypassed entirely. The hero starts at level 1 and never returns.
+- Gear dropped on the floor stays there. The agent does not revisit specific items.
+- The agent does revisit rooms within a level freely - there is no mechanism to prevent
+  that. It explores until the per-level step budget (5000 steps) is exhausted or until
+  all monsters are killed (the latter rarely happens in practice).
+- One life. Death ends the run.
+
+## Agent
+
+The agent is a hybrid of an algorithmic supervisor and a trained RL model. The design
+philosophy: anything that *can* be algorithmized *should* be algorithmized. Only the
+genuinely hard problem - how to fight monsters and explore efficiently - goes to the
+RL model.
+
+Inventory management is pure algorithm: compare item effectiveness scores, equip the
+better one, drop the rest. Stat allocation is a fixed strategy: dex-rush is known to
+be optimal for Warrior in the early game, no need to learn it. Navigation to the stairs
+at end of floor is BFS: the position is known, the path is computable. None of this needs
+a neural network.
+
+What the neural network does handle: which direction to move when monsters are nearby,
+when to attack vs retreat, when to use a potion, which tiles to explore next. These
+decisions depend on context that is hard to hand-code and easy to learn from experience.
+
+### Algorithmic Supervisor
+
+The agent is a state machine that wraps the RL model and handles everything
+the model should not have to learn:
+
+- **DUNGEON**: hands control to the RL model. This is the default state on every floor.
+- **PATHFIND**: fires when the per-level step budget is exhausted or the kill threshold
+  is met. Algorithmically walks to the last sighted stairs using BFS - only if stairs
+  were discovered during DUNGEON; if not, the run fails.
+- **DEAD / DONE**: terminal states.
+
+Town navigation is not needed - the run starts at level 1 directly.
+
+Additional logic that runs on every step regardless of state:
+
+- **Gear management**: evaluates new inventory items against per-level expected monster
+  stats, equips upgrades, drops junk.
+- **Stat allocation**: each level-up distributes attribute points automatically.
+  The current strategy (`--stat-strategy dex-rush`) front-loads Dexterity to maximize
+  hit chance early, when enemy armor class is still low. In the original game this is
+  a known player-optimal path for Warrior: Dex scales attack rating, which directly
+  determines whether hits land.
+- **Repair**: repairs equipped gear when durability drops below 25%, only when no
+  monsters are within 2 tiles.
+- **Warp masking**: staircase triggers (ascend / descend) are masked as walls in the
+  model's observation to prevent accidental level transitions before the kill threshold
+  is met.
+
+The gear management logic is visible in the agent log:
+
+```
+agent 26004: inv[+] cii=8 seed=1363456912 slot=Weapon [dmg=6-15] 'Bastard Sword'
+agent 26004: queue equip 'Bastard Sword' seed=1363456912 [eff=20.03] over 'Broad Sword' [eff=17.04]
+agent 26005: equip 'Bastard Sword' seed=1363456912
+agent 26006: equipped 'Bastard Sword' seed=1363456912 lvl=6 gear: slots=7 clvl=12 hp=86/141 str=40(+12) dex=60(+0) mag=9(+0) vit=31(+9) ac=21 dmin=6 dmax=15
+agent 26006: queue drop 'Broad Sword' seed=1296653445 [eff=17.04] - worse than 'Bastard Sword' [eff=20.03]
+agent 26007: drop 'Broad Sword' seed=1296653445
+agent 26008: masked drop 'Broad Sword' seed=1296653445 at (56, 71)
+agent 26045: queue drop gold seed=150527310 val=41 - excess gold piles (>0)
+agent 26047: queue drop 'Robe' seed=404106678 [eff=18.49] - worse than 'Quilted Armor' [eff=20.03]
+agent 26049: masked drop 'Robe' seed=404106678 at (54, 69)
+```
+
+`eff` is an effectiveness score computed from the item's stats against expected
+monsters for the current floor. Items the agent decides to drop are masked in
+the model's observation immediately, so the model does not try to pick them up again.
+
+### RL Model
+
+Architecture: `CNN32Expert` + LSTM, 20 discrete actions.
+
+The RL model drives all dungeon combat and exploration decisions. Different model
+checkpoints are used per level band. The `--model` flag accepts a comma-separated
+list of `RANGE=NAME` pairs, where `RANGE` is either a single level or a `LOW-HIGH`
+span (with `*` meaning "to the end"), and `NAME` is a model directory under
+`ai/models/`. For example:
+
+```
+./diablo-ai.py agent-ai \
+   --embedding-dim 512 --cnn-arch cnn32expert --best-train \
+   --model 1-4=ClearAllLevels-1-4,5-8=ClearAllLevels-5-8,9-*=ClearAllLevels-1-4 \
+   --env Diablo-ClearAllLevels-v17 --dungeon-level 1 --seeds 1-100 \
+   --max-steps-per-level 5000 --kill-threshold 1 --stat-strategy dex-rush
+```
+
+The `9-*` band reuses the L1-4 model: the agent reaches L9+ in roughly 3% of runs,
+which is not enough to justify a dedicated training run. `ClearAllLevels-5-8` shows
+solid performance for the mid-game; L1-4 is a reasonable fallback for anything deeper.
+
+The model switches checkpoint at each level transition; the LSTM state resets.
+
+## Observation Space
+
+The agent observes only a local window of the dungeon - a 21x21 tile region centered on
+the hero, covering a radius of 10 cells. This mirrors how a human plays: most of the map
+is unknown at any given moment and must be explored.
+
+The observation is a `gym.spaces.Dict` with three keys.
+
+### `env` - (21, 21, 19) uint32
+
+Each tile in the local view is encoded as a set of flags representing its properties:
+whether it contains the player, a monster, a wall, a door, a chest, an item, and so on,
+as well as whether the tile has been explored or is currently in line-of-sight. Rather
+than passing this bitfield directly, the environment exposes each flag as a separate
+channel, giving the model a clean one-hot representation. The result is a
+`21 x 21 x 19` array where each of the 19 channels corresponds to one tile property:
+
+| Channel | Flag | Description |
+|---------|------|-------------|
+| 0 | Player | Hero position |
+| 1 | Wall | Solid obstacle |
+| 2 | PrevTrigger | Staircase to previous level / town |
+| 3 | NextTrigger | Staircase to next level |
+| 4 | WarpTrigger | Warp portal |
+| 5 | Door | Door tile |
+| 6 | Missile | Projectile in flight |
+| 7 | Monster | Monster present |
+| 8 | UnknownObject | Misc interactive object |
+| 9 | Crucifix | Crucifix |
+| 10 | Barrel | Barrel / pod / urn |
+| 11 | Chest | Chest |
+| 12 | Sarcophagus | Sarcophagus |
+| 13 | Item | Dropped item |
+| 14 | Explored | Tile has been visited |
+| 15 | Visible | Tile is in current line-of-sight |
+| 16 | Interactable | Object can be interacted with |
+| 17 | Open | Door is open |
+| 18 | Goal | Episode goal tile (unused in current env) |
+
+### `monster_attrs` - (21, 21, 9) float32
+
+Per-tile monster attributes, filled only for visible tiles. Nine normalized channels:
+
+| Index | Attribute |
+|-------|-----------|
+| 0 | HP ratio (current / max) |
+| 1 | Monster level / max monster level |
+| 2 | Is unique (0 / 1) |
+| 3 | Walk speed score (higher = faster) |
+| 4 | Attack speed score (higher = faster) |
+| 5 | Fire resistance (0 / 0.5 / 1.0) |
+| 6 | Lightning resistance |
+| 7 | Magic resistance |
+| 8 | Is ranged attacker (0 / 1) |
+
+### `scalars` - 46 float32
+
+Flat vector covering player and episode state:
+
+- Dungeon level / 16, character level / 50
+- HP ratio, mana ratio
+- Hero direction (0-7)
+- Str / magic / dex / vit normalized by class cap
+- Weapon damage min/max, armor class, fire/lightning/magic resistances
+- Mana shield active
+- Potion counts (small HP, full HP, scroll heal, small mana, full mana, rejuv, full rejuv)
+- Spell availability bits and spell levels (7 spells; included in obs but unused for Warrior)
+
+## Action Space
+
+20 discrete actions:
+
+- Walk N / NE / E / SE / S / SW / W / NW (8)
+- Stand
+- Primary action (attack monster, interact with towner, lift/place item)
+- Secondary action (open chest / door, pick up item)
+- Restore HP (uses best available HP potion)
+- Restore mana (uses best available mana potion)
+- Cast Firebolt / Charged Bolt / Firewall / Stone Curse / Mana Shield / Phasing / Fireball (7)
+
+The 7 spell actions are part of the action space but never trained for Warrior -
+the hero loadout never includes spells, so the model never sees a spell succeed.
+
+## Reward Function
+
+Current version: `Diablo-ClearAllLevels-v17`. The reward function is continuously
+revised as training progresses; this version is current but not final.
+
+**Terminal:**
+
+| Event | Reward |
+|-------|--------|
+| Death | -10.0 |
+| Diablo killed | +20.0 |
+| Level cleared (threshold / budget met) | +20.0 |
+| Escape to previous level / town | -10.0 |
+| Stuck (no progress for 300 steps) | -10.0 |
+| Timeout (3000 steps) | -10.0 |
+
+**Per-step shaping:**
+
+| Event | Reward |
+|-------|--------|
+| New tile explored | +0.05 |
+| Wasted step (no combat, no new tiles) | -0.025 |
+| Attack monster (per target hit) | +0.02 |
+| Kill monster | +0.10 |
+| Spell successful | +0.15 |
+| Spell first use (per type per episode) | +0.10 |
+| Open door (no monsters visible) | +0.02 |
+| Activate object | +0.05 |
+| Collect item | +0.02 |
+| HP potion used correctly (HP < 90%) | +0.05 |
+| HP potion wasteful / no potion | -0.10 |
+| Mana potion used correctly | +0.05 |
+| Mana potion wasteful / no potion | -0.10 |
+| Primary action with no target | -0.05 |
+| Secondary action with no target | -0.05 |
+| Spell unavailable / wasteful | -0.10 |
+
+The movement penalty (-0.025) and exploration reward (+0.05) are calibrated so that
+a step to a new tile has positive expected value, discouraging the agent from standing still.
+
+The reward function is a long history of trial and error. The principle is simple: give a
+signal for every meaningful action so the model is never flying blind. Each entry in the
+table above was added because the agent was doing something wrong - standing still, spamming
+actions with no target, ignoring potions, walking past enemies. The current v17 is the
+result of iterating on observable failures; it is not final.
+
+## Training
+
+Training is intentionally separated from agent eval and is not directly comparable to
+ironman performance.
+
+### How the current model came to be
+
+Pure reinforcement learning from scratch failed to make progress on exploration. The
+solution was to bootstrap with imitation learning: an algorithmic bot collected 50k
+demonstration episodes, and the agent was trained to imitate it for 150M frames. This
+gives the agent a navigation foundation before any RL starts.
+
+After imitation learning the policy is reasonable but the critic (value function) is
+essentially uninitialized. Starting PPO at this point causes catastrophic forgetting
+within a few updates - the critic's poor estimates generate bad gradients that overwrite
+everything the agent just learned. The fix is to train the critic in isolation first,
+then bring the policy back in gradually.
+
+Architecture was also a blocker. When standing monsters were introduced the agent simply
+ignored them and performance stayed flat. Switching to the `CNN32Expert` architecture -
+which adds self-attention over the spatial map and FiLM conditioning that modulates
+spatial features based on the LSTM memory - unblocked learning. The agent started
+engaging monsters and navigating around them instead of ignoring them.
+
+### Setup
+
+The hero is dropped into a single dungeon level with stats artificially bumped by
+`scripts/diablo-sim.py` to match expected character progression at that level. Without
+this, the hero dies within seconds on hard levels before the model can learn anything.
+
+Models are trained per level chapter rather than across all 16 levels at once - chapter-specific
+training consistently outperforms uniform training. Training success rate is roughly 0.7 on
+average across all 16 levels, but this number reflects artificial conditions: boosted stats,
+single-level episodes, no gear accumulation. It does not translate directly to ironman depth.
+
+Current training command:
+
+```shell
+./diablo-ai.py train-ai \
+   --no-butcher --no-spells \
+   --hero-hp-at-start 0.4-1 \
+   --hero-mana-at-start 0.4-1 \
+   --hero-potions-at-start 0-12 \
+   --dungeon-level 1-16 \
+   --cnn-arch cnn32expert \
+   --embedding-dim 512 \
+   --env Diablo-ClearAllLevels-v17 \
+   --gpus 2 --env-runners 256 \
+   --frames +100M \
+   --batch-size 40960 \
+   --frames-per-env-runner 320 \
+   --lr 0.0001 \
+   --entropy-coef 0.015 \
+   --recurrence 160 \
+   --eval-episodes 250 \
+   --eval-dungeon-level 1-16 \
+   --model $MODEL
+```
+
+Key parameters:
+
+- `--env Diablo-ClearAllLevels-v17` - environment the agent trains in. The task is to
+  clear dungeon floors by killing monsters and finding stairs, repeating across all 16 levels.
+- `--dungeon-level 1-16` - dungeon levels sampled during training. Models can also be
+  trained per chapter (L1-4, L5-8, etc.) for better per-chapter performance.
+- `--cnn-arch cnn32expert` - CNN architecture with self-attention and FiLM conditioning.
+  Self-attention lets the model reason about spatial relationships across the full 21x21 view.
+  FiLM conditions the spatial features on the LSTM memory, so the model can interpret the
+  same tile differently depending on what it has seen earlier in the episode.
+- `--embedding-dim 512` - size of the latent embedding produced by the CNN, fed into the LSTM.
+- `--recurrence 160` - length of temporal sequences used for LSTM training (BPTT window).
+- `--frames +100M` - total frame budget. The `+` prefix means "add 100M to the current
+  frame count", so the command can be re-run as-is to extend training incrementally.
+- `--env-runners 256` - parallel game instances collecting experience simultaneously.
+- `--frames-per-env-runner 320` - steps each runner collects before sending data to the optimizer.
+- `--batch-size 40960` - number of steps per gradient update.
+- `--entropy-coef 0.015` - weight of the entropy regularization term. Too low and the agent
+  collapses to a single strategy and stops exploring; too high and it acts randomly.
+- `--no-butcher --no-spells` - disable quest content and suppress spell drops for Warrior.
+
+## Sprout: Model Version Control
+
+Managing many training runs with different hyperparameters quickly becomes chaotic.
+Sprout treats model checkpoints like a version control system. Each training run is a node
+in a tree that versions everything - all model files, parameters, training metrics, and eval
+results. By default it shows only which parameters changed from the parent, making it easy to spot what
+was different between runs.
+
+It is also a sanity tool. When you have hundreds of runs it becomes impossible to remember
+what you tried, what helped, and what the command line for a given checkpoint was. Sprout
+solves this: every run is fully reproducible from its stored parameters, the tree shows
+the full experiment history at a glance, and the last training and eval stats are always
+attached. Browsing the history to understand why one run outperformed another takes seconds
+instead of digging through log files. Each run can also carry a short alias (e.g. "BEST TO
+CONTINUE" or "wrong params, RM ASAP") and a longer description note - useful when you need
+to leave instructions for yourself or flag a run for follow-up.
+
+Key commands (all require a model name as the working target):
+
+```shell
+# Show full training history tree
+./diablo-ai.py sprout tree
+
+# Show the exact command line used for a specific run
+./diablo-ai.py sprout show --run <RUNID>
+
+# Move the active head to any past run and resume training from there
+./diablo-ai.py sprout switch <HEAD> <TO_RUN>
+
+# Roll back the head to its parent state
+# --persist saves the current state as a branch before rewinding
+./diablo-ai.py sprout rewind <HEAD> [--persist]
+```
+
+`sprout switch` and `sprout rewind` make it practical to try risky experiments -
+architecture changes, direct weight surgery, reward reshaping - without losing a good
+checkpoint. Branching from any run is a single command.
+
+## Docker
+
+Two images are available on [Docker Hub](https://hub.docker.com/r/romanpen/):
+
+**Full environment** - `romanpen/devilutionx-ai-ubuntu24.04`
+
+Includes CUDA 12.9, build tools, compiled DevilutionX binary, Diablo Shareware asset,
+and a pre-configured Python virtualenv. This is the image for training and evaluation.
+
+NVIDIA Container Toolkit must be installed first. See the
+[NVIDIA instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+```shell
 docker run \
    --runtime=nvidia --gpus all \
    -dit \
@@ -115,15 +436,11 @@ docker run \
    romanpen/devilutionx-ai-ubuntu24.04:latest
 ```
 
-If the X11 application (Diablo GUI) needs to be executed from Docker
-(e.g., when the model is evaluated in graphics mode), the X11 socket
-must be shared with Docker using the following command:
+For GUI evaluation (agent running with graphics):
 
-```
-# Let root inside Docker connect to your X session
+```shell
 xhost +local:root
 
-# Run docker with a shared X11 socket
 docker run \
    --runtime=nvidia --gpus all \
    -dit \
@@ -133,365 +450,26 @@ docker run \
    romanpen/devilutionx-ai-ubuntu24.04:latest
 ```
 
-Previous `docker run` commands start the container in the background
-with a default `tmux` session available for attaching. To attach to
-the `tmux` session, please execute:
+Both commands start the container in the background with a `tmux` session:
 
-```
+```shell
 docker exec -it devilutionx-ai tmux -u attach
 ```
 
-## Training Peculiarities
+**Model checkpoints only** - `romanpen/devilutionx-ai-models`
 
-The chosen training method is the least resource-intensive: training
-on the internal state of the game rather than on screenshots and
-pixels. This means the observation space is represented as a
-two-dimensional matrix of the dungeon (see details about the
-[observation space](#observation-space) below), which is the
-structured game state the Diablo engine itself uses. Although this
-approach is not entirely human-like, it allows you to save
-computational or RAM resources and quickly adapt the training
-strategy. Having trained on structured data, in the future it is
-possible to separately train another CNN-based layer, which will be
-able to represent screenshots of the game in the same structured
-state.
-
-### Game State Extraction
-
-For reinforcement learning training purposes, data from the
-DevilutionX engine implementation is extracted as a two-dimensional
-21x21 array representation of a section of a dungeon. This array
-represents the agent's view, which covers a radius of 10 cells
-surrounding the agent. Additionally, descriptor arrays for dungeon
-objects, states for non-player characters, various counters, and the
-player's state (including hit points, current dungeon level, position
-in the dungeon, status, etc.) are included. All state structures are
-shared by the engine through a memory file, a large blob which the AI
-agent can access using Linux APIs such as `mmap`. All actions are
-keyboard presses that the agent sends to the game engine through a
-ring buffer and the same shared memory. To get everything working, it
-was necessary to make a set of [changes](#devilutionx-patches) to the
-original `DevilutionX` project.
-
-## Observation Space
-
-The observation space in reinforcement learning represents the domain
-of various experiments, trials, and errors. Currently, a radius of 10
-cells around the agent is observed by the RL agent. This means the
-agent sees only part of the whole dungeon, similar to how a human
-would play the game.
-
-Each tile in the two-dimensional dungeon map is encoded as a set of
-bits, where each bit denotes a specific property of the tile. These
-properties include, for example, the presence of the player, a
-monster, a wall, a closed or open door, a chest, an item, as well as
-whether the tile has been explored or is currently visible to the
-player. Instead of passing this bitset directly, the environment
-provides the agent with a one-hot style representation: each bit is
-exposed as a separate channel. As a result, the agent's observation
-takes the form of a three-dimensional array of size `21 × 21 × N`,
-where `N` equals the total number of encoded tile properties.
-
-## Action Space
-
-The choice of action space is simpler: the player can stand still
-or move in eight cardinal directions: north, northeast, east,
-southeast, south, southwest, west, and northwest. Additionally, the
-player can perform exactly two types of actions: primary and secondary
-action, where primary action includes attacking monsters, talking to
-towners, lifting and placing inventory items. Meanwhile, a secondary
-action involves opening chests, interacting with doors, and picking up
-items.
-
-Since there are only 11 possible discrete actions, the action space is
-defined using `gym.spaces.Discrete` type.
-
-## Reward Function
-
-The reward function guides the agent toward clearing the dungeon level
-while surviving combat:
-
-**Terminal rewards**:
-
-- **Death** - penalty (-10), episode ends.
-
-- **Escaping back to town** - neutral (0), episode ends.
-
-- **Reaching the goal** - strong reward (+20), episode ends.
-
-**Shaping rewards**:
-
-- **Damage taken** - penalty proportional to health lost (scaled by max HP).
-
-- **Attacking a monster** - small reward (+0.02) for dealing damage.
-
-- **Killing a monster** - reward (+0.1) per kill.
-
-- **Unproductive movement** - small penalty (-0.01) for moving without
-  any combat or progress, to discourage aimless wandering.
-
-- **Getting stuck** - early truncation with no penalty if the agent
-  repeats useless actions or times out.
-
-## Headless Mode
-
-`DevilutionX` already supports a `headless` mode, which allows the
-game to run without displaying graphics. For RL training, this is the
-primary mode because dozens of game instances and envrionemt runners
-can be run simultaneously, and states from each is collected for
-training in parallel. While evaluating (when a pre-trained AI agent
-interacts with the Diablo environment without further learning), it is
-possible to attach to the game with a graphics session and have the
-player navigate the dungeon according to the trained strategy.
-
-## Agent Training
-
-### Training Pipeline
-
-Training the agent to clear the level required several stages rather
-than a single reinforcement learning run.
-
-**Stage 1: Imitation learning bootstrap (no monsters)**
-
-An algorithmic bot that knows how to explore the dungeon was used to
-collect 50k demonstration episodes. The agent was then trained to
-imitate the bot's behavior for 150M frames, reaching 0.95 action
-accuracy. This gives the agent a solid navigation foundation before
-any RL starts.
-
-After imitation learning, the policy is well-formed but the critic
-(value function) is essentially uninitialized. Starting PPO at this
-point immediately destabilizes learning: the critic's poor estimates
-produce bad gradient updates that overwrite the policy in just a few
-steps. To avoid this, the critic is trained in isolation for 50M
-frames, then jointly with the policy for another 100M frames.
-
-PPO fine-tuning in the same no-monsters environment then brought the
-agent to a **0.97 success rate** on finding a randomly placed goal.
-
-**Stage 2: Standing still monsters, new architecture**
-
-Introducing standing non-attacking monsters had no effect: the agent
-simply ignored them and performance stayed flat. Switching to the
-CNN32Expert architecture -- adding self-attention and FiLM
-conditioning on the agent's memory -- unblocked progress. The agent
-started navigating around standing monsters and occasionally engaging
-them when they blocked the path.
-
-**Stage 3: Moving and attacking monsters (invincible player)**
-
-With the player made invincible, monsters were enabled with full
-movement and attacks. The agent reached **>0.9 success rate** in
-roughly 50M frames, learning to navigate a dungeon full of actively
-pursuing monsters.
-
-**Stage 4: Full combat with damage**
-
-Enabling monster damage and shaping the reward function around
-combat produced a brief drop from 0.9 to 0.6, but the agent
-recovered quickly -- faster than expected. It developed strategies
-for killing monsters and avoiding damage on its own, eventually
-reaching the current **0.98 success rate** on 3000 randomly generated
-dungeon levels.
-
-### Training Command
-
-Choosing the right parameters and their combinations for effective RL
-training is an art and essentially a path of endless trial and
-error. For example, I use the following command line:
+A minimal image (`FROM scratch`) containing only the trained model files.
+Useful for restoring checkpoints without pulling the full environment:
 
 ```shell
-./diablo-ai.py train-ai \
-   --harmless-barrels \
-   --cnn-arch cnn32expert \
-   --embedding-dim 512 \
-   --env Diablo-ClearTheLevel-v0 \
-   --env-runners 256 \
-   --frames 100M \
-   --batch-size 40960 \
-   --frames-per-env-runner 320 \
-   --lr 0.0001 \
-   --entropy-coef 0.001 \
-   --recurrence 160 \
-   --eval-episodes 250 \
-   --model Diablo-ClearTheLevel-v0
+docker create --name tmp romanpen/devilutionx-ai-models:latest
+docker cp tmp:/models/. ai/models/
+docker rm tmp
 ```
-
-Where:
-
-- `--env Diablo-ClearTheLevel-v0` - The environment the agent
-  interacts with. The task is to explore the dungeon, fight monsters,
-  and find the goal.
-
-- `--model Diablo-ClearTheLevel-v0` - Name of the model used for
-  training. Essentially, it's a folder where the model files are
-  located.
-
-- `--cnn-arch cnn32expert` - The convolutional neural network
-  architecture used to process observations. The `cnn32expert` variant
-  extends the base CNN with self-attention (for deeper spatial
-  understanding of the dungeon layout) and FiLM conditioning (for
-  modulating spatial features based on the agent's memory,
-  helping to differentiate between objects depending on current
-  context such as combat or exploration). The name reflects iterative
-  experimentation with several architectures.
-
-- `--harmless-barrels` - Makes exploding barrels harmless. Since the
-  agent cannot use potions to restore health, an accidental barrel
-  explosion would end the episode early and obscure the training
-  signal.
-
-- `--frames 900M` - Total number of environment frames (steps) the
-  agent will be trained on.
-
-- `--frames-per-env-runner 320` - Number of steps each environment
-  instance runs before sending data to the optimizer.
-
-- `--env-runners 256` - Number of parallel environment instances used
-  for training, allowing faster experience collection.
-
-- `--batch-size 40960` - Number of frames (steps) collected before
-  performing a gradient update.
-
-- `--recurrence 160` - Length of temporal sequences used for recurrent
-  policy updates (for RNN/LSTM agents, representing a memory).
-
-- `--embedding-dim 512` - Size of the latent embedding vector produced
-  by the CNN.
-
-- `--lr 0.0001` - Learning rate for the optimizer.
-
-- `--entropy-coef 0.001` - Weight of the entropy regularization term,
-  encouraging exploration.
-
-- `--eval-episodes 250` - Number of episodes used for periodic
-  evaluation during training.
-
-Hyperparameters are the subject of many experiments. For example, a
-low entropy coefficient can result in a Diablo RL agent getting stuck
-in one room without taking any further actions, or wandering from
-corner to corner.
-
-This list of game and training parameters used in my experiments is by
-no means optimal. I am continually exploring the behavior of an RL
-agent and frequently adjust parameters or introduce new ones to
-achieve the desired results.
-
-## Agent Evaluation
-
-The video at the very beginning of this README can be replicated with
-the following command:
-
-```shell
-./diablo-ai.py play-ai \
-   --harmless-barrels \
-   --cnn-arch cnn32expert \
-   --embedding-dim 512 \
-   --env Diablo-ClearTheLevel-v0 \
-   --env-runners 1 \
-   --model Diablo-ClearTheLevel-v0 \
-   --seed-base 5 \
-   --game-ticks-per-step 12 \
-   --gui
-```
-
-As soon as the Diablo GUI window appears, select "Single Game" and
-proceed with the "Warrior" character, using the default name and
-normal difficulty. Once the first level is loaded, the agent resets
-the environment a few times and starts exploring the dungeon, fighting
-monsters, and searching for the goal. The episode ends when the agent
-reaches the goal or gets stuck.
-
-To attach a terminal ASCII representation to the running game
-instance, use the following command:
-
-```shell
-./diablo-ai.py play --attach 0
-```
-
-## Sprout: Model Version Control
-
-Managing dozens of training runs with different hyperparameters,
-architectures, and results quickly becomes chaotic. Sprout is a
-lightweight tool included in the repository that treats model
-checkpoints like a version control system.
-
-Each time training starts, Sprout takes a snapshot of the current
-model state. The full training history is stored as a tree where each
-node records only the parameters that changed from its parent, along
-with training metrics such as success rate and total frames. Returning
-to any previous state -- including before a risky surgery or a bad
-hyperparameter choice -- is a single command:
-
-```shell
-# Show the full training history tree
-./diablo-ai.py sprout tree
-
-# Show details for the current head
-./diablo-ai.py sprout show --head Diablo-ClearTheLevel-v0
-
-# Jump the active head back to any specific run
-./diablo-ai.py sprout switch --head Diablo-ClearTheLevel-v0 --to-run d9ca5ecd
-
-# Undo the last training run and return to the parent state
-./diablo-ai.py sprout rewind Diablo-ClearTheLevel-v0
-
-# Branch off a new experiment from the current head
-./diablo-ai.py sprout clone --from-head Diablo-ClearTheLevel-v0 Diablo-ClearTheLevel-experiment
-```
-
-This made it practical to try experiments such as architecture changes
-or direct weight surgery without fear of losing a good checkpoint, and
-to compare different training strategies side by side by branching
-from the same base run.
-
-The training history for the ClearTheLevel model shows the full
-evolution from the cloned FindRandomGoal baseline through monster
-introduction and gradual recovery:
-
-```
-▶ Diablo-ClearTheLevel-v0
-└─ dd6fe9af (CLONED--Diablo-FindRandomGoal-v0--cnn32-best)
-   │ ≡ best/success_rate: 0.968
-   │ ≡ last/duration: 1d14h
-   └─ d9ca5ecd
-      │ ⇾ no_monsters: True -> False
-      │ ⇾ cnn_arch: cnn32 -> cnn32expert
-      │ ⇾ env: Diablo-FindRandomGoal-v0 -> Diablo-ClearTheLevel-v0
-      │ ⇾ entropy_coef: 0.01 -> 0.001
-      │ ≡ last/success_rate: 0.244
-      └─ ...
-         └─ c7a414fb
-            │ ⇾ invincible_player: False -> True
-            │ ⇾ blind_monsters: True -> False
-            │ ≡ last/success_rate: 0.780
-            └─ 7edc9fad
-               │ ⇾ invincible_player: True -> False
-               │ ≡ last/success_rate: 0.816
-               └─ ...
-                  └─ ● Diablo-ClearTheLevel-v0
-                       ≡ best/success_rate: 0.968
-                       ≡ last/duration: 3d00h
-                       ≡ last/success_rate: 0.916
-```
-
-Each node shows only the parameters that changed from its parent. The
-`●` marker indicates the current active head. The `⇾` prefix marks
-parameter changes, `≡` marks recorded metrics. The `best/*` values
-are inherited from the original FindRandomGoal model that was cloned
-as the starting point -- they reflect the best argmax checkpoint from
-that earlier training phase, not the ClearTheLevel training.
-
-Sprout is available as `./diablo-ai.py sprout` (which automatically
-sets the working directory) or directly as a [single Python
-file](ai/sprout.py) with `--working models`.
 
 ## Building and Running
 
-The RL training pipeline is written in Python and retrieves
-environment states from the running `DevilutionX` game
-instance. `DevilutionX` must be compiled, as it is written in
-C++. First, build the `DevilutionX` binary in the `build` folder:
+Build the DevilutionX binary:
 
 ```shell
 cmake -B build \
@@ -519,23 +497,13 @@ cmake -B build \
 make -C build -j$(nproc)
 ```
 
-Once the binary is successfully built, the entry point for all RL
-tasks is the `diablo-ai.py` script located in the `ai/` folder. This
-script includes everything needed to attach to an existing
-`DevilutionX` game instance, run RL training from scratch or evaluate
-a pre-trained agent.
-
-Before executing `diablo-ai.py` there are a few things left to be
-done: the Shareware original Diablo content should be downloaded and
-placed alongside the `devilutionx` binary, i.e., in the `build`
-folder:
+Download the Diablo Shareware asset:
 
 ```shell
 wget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq -P build
 ```
 
-Once the download is finished, the required Python modules need to be
-installed in the `virtualenv` folder which can be named as `myenv`:
+Set up the Python environment:
 
 ```shell
 cd ai
@@ -544,121 +512,38 @@ source myenv/bin/activate
 pip install -r requirements.txt
 ```
 
-Now, as a hello-world example, the Diablo game can be launched
-directly in the terminal in `headless` mode, but with TUI (text-based user
-interface) frontend:
+Run the game in headless TUI mode:
 
 ```shell
 ./diablo-ai.py play
 ```
 
-And the game will look on your terminal as follows:
-```
-        Diablo ticks:    263; Kills: 000; HP: 4480; Pos: 83:50; State: PM_STAND
-                    Animation: ticksPerFrame  1; tickCntOfFrame  0; frames  1; frame  0
-                   Total: mons HP 14432, items 4, objs 94, lvl 1 ⠦  . . . . . . ↓ ↓ ↓ ↓
-
-
-
-
-
-
-                                                   # #
-                                             # # # $ . # # # #
-                                     .     # . . . . . . . . . #
-                                   . . . . # . . . . . . . . . #
-                                   . . . . . . . . . . . . . . #
-                                 . . . o . @ @ . . . . . . . . #
-                                 . . . . . . . . . . . . . . . #
-                                 . . . . . . . . . . ↓ . . . . #
-                                 . . . . . . . . . . . . . . . #
-                                   # D # # # . . . . . . . . . #
-                                           # . . . . . . . . . #
-                                             # # . # . # . # #
-                                               # .   .   . #
-                                               #     C     #
-                                               #     .     #
-                                                   . . .
-                                                   . . .
-                                                   C . .
-
-                                           Press 'q' to quit
-```
-
-This shows a top-down view of a Diablo dungeon on the level 1 (town is
-skipped) where the arrow `↓` in the center represents the player, `#`
-represents walls, `.` represents visible part of the dungeon (or the
-player vision), `@` represents monsters, `o` represents objects, `C`
-represents unopened chests, and so on. TUI mode accepts keyboard input
-only: regular arrows for movement and exploring the dungeon, `a` for
-the primary action, `x` for the secondary action, `s` for quick save,
-`l` for quick load, and `p` for game pause.
-
-A similar text-based output can be achieved by attaching to an
-existing game instance, even when graphic session is active in another
-window:
+Attach a TUI to a running game instance (including a GUI session):
 
 ```shell
 ./diablo-ai.py play --attach 0
 ```
 
-Where `0` represents the first available Diablo instance. A list of
-all running instances can be retrieved by calling the
+List all running instances:
 
 ```shell
 ./diablo-ai.py list
 ```
-## `DevilutionX` Patches
 
-For game state extraction to a third-party application (the RL agent,
-specifically `diablo-ai.py`) and submitting keyboard inputs outside
-the UI loop, several changes to the original `DevilutionX` were
-necessary:
+## DevilutionX Engine
 
-### AI-Oriented Gameplay Changes
+The DevilutionX engine source is modified from the upstream project: several bugs fixed,
+engine optimized for parallel headless training, `--no-quest` mode added, and artificial
+stat injection added to support curriculum training. None of these modifications affect
+the agent eval path - eval runs the game as close to the original as `--no-quest` allows,
+with no stat cheating.
 
-- Shared memory implementation for reinforcement learning
-  agents. Supports external key inputs and game event monitoring.
+## Status and Contributing
 
-- Added a `headless` mode option to start the game in non-windowed
-  mode (already supported by the `DevilutionX` engine, but see the
-  list of [fixes](#various-fixes) below)
+The agent currently reaches level 9 in roughly 3% of ironman runs and dies somewhere
+between levels 4 and 7 in most of them. Diablo on level 16 is still very much alive.
+The model keeps improving - better reward shaping, better curriculum, better architecture
+choices all move the survival curve to the right.
 
-- Added an option to launch the game directly into a specified dungeon
-  level.
-
-- Enables deterministic level and player generation for reproducible
-  training by setting a seed.
-
-- Added an option to remove all monsters from the dungeon level to
-  ease the exploration training task.
-
-- Added an option to skip most animation ticks to accelerate training
-  speed.
-
-- Added an option to run the game in step mode, i.e., the game does not
-  proceed without a step from an agent (player).
-
-- Added an option to disable monster auto-pursuit behavior when
-  pressing a primary action button does not lead to the pursuit of a
-  nearby monster.
-
-### Various Fixes
-
-- Fixed missing events in the main event loop when running in headless
-  mode, which was causing the AI agent to get stuck after an event had
-  been sent, but no reaction occurred.
-
-- Fixed access to graphics and audio objects in `headless` mode. A few
-  bugs were causing random crashes of the `DevilutionX` instance.
-
-- Fixed long-standing bug where objects aligned with X/Y axis became
-  invisible under certain light conditions. Improved raycasting logic
-  with adjacent tile checks.
-
-- Fixed light rays leaking through diagonally adjacent corners,
-  further refining the lighting model.
-
-The listed changes made it possible to monitor and manage the state of
-the Diablo game from an RL agent, and also added stability during
-parallel AI training.
+If this interests you: the framework is fully open, the training code runs in Docker,
+and there is plenty of unsolved ground. PRs, ideas, and experiments welcome.
