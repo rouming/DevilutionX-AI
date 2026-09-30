@@ -38,7 +38,7 @@ class _LazyUtils:
 
 utils = _LazyUtils()
 
-VERSION='Diablo AI Tool v2.0'
+VERSION='Diablo AI Tool v2.2'
 
 def set_sighandlers():
     # Silently terminate on Ctrl-C
