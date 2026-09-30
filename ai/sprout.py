@@ -2059,6 +2059,20 @@ def cli_exec(args, sprout: Sprout) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+def cli_gc(args, sprout: Sprout) -> int:
+    """Run borg compact (GC) then borg check --verify-data on the repo."""
+    try:
+        repo = shlex.quote(sprout.repo_path)
+        print("Running borg compact...")
+        sh(f"borg compact {repo}", env=BORG_ENV, no_output=True)
+        print("Running borg check --verify-data...")
+        sh(f"borg check --verify-data {repo}", env=BORG_ENV, no_output=True)
+        print("GC and verification complete.")
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
 def build_parser(prog, suppress_working_dir=False, add_help=True):
     parser = argparse.ArgumentParser(prog=prog, description="Sprout CLI", add_help=add_help)
     if suppress_working_dir:
@@ -2161,6 +2175,8 @@ def build_parser(prog, suppress_working_dir=False, add_help=True):
     pe.add_argument("--head", help="Head name to execute in")
     pe.add_argument("exec_cmd", nargs=argparse.REMAINDER, help="Command to run")
 
+    sub.add_parser("gc", help="Compact borg repo (GC) and verify data integrity")
+
     return parser
 
 # -------------------------
@@ -2219,6 +2235,8 @@ def main(argv=None, default_parser: Optional[argparse.ArgumentParser] = None,
             ret = cli_fetch(args, sprout)
         elif args.cmd == "exec":
             ret = cli_exec(args, sprout)
+        elif args.cmd == "gc":
+            ret = cli_gc(args, sprout)
         else:
             parser.print_help()
             return 1
