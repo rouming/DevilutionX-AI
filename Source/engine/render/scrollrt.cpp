@@ -1658,10 +1658,9 @@ void scrollrt_draw_game_screen()
 
 void DrawAndBlit()
 {
-	if (!gbRunGame || HeadlessMode) {
+	if (!gbRunGame || HeadlessMode || FastForwardMode) {
 		return;
 	}
-
 	int hgt = 0;
 	bool drawHealth = IsRedrawComponent(PanelDrawComponent::Health);
 	bool drawMana = IsRedrawComponent(PanelDrawComponent::Mana);
@@ -1739,7 +1738,6 @@ void DrawAndBlit()
 			RedrawComponentComplete(component);
 		}
 	}
-
 	RenderPresent();
 }
 

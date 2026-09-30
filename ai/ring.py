@@ -63,6 +63,10 @@ class RingEntryType:
     RING_ENTRY_KEY_INV_IDENTIFY_ITEM = 1<<23  # data1 = scroll_cii, data2 = target_cii
     RING_ENTRY_KEY_INV_GIFT_ITEM     = 1<<24  # place GiftItem into player inventory
 
+    # Set game params at runtime; for GUI instances also toggles hybrid FastForwardMode.
+    # data1 = game_ticks_per_step; data2: bit0=step_mode, bit1=fast_forward, bit2=skip_animation
+    RING_ENTRY_KEY_SET_GAME_PARAMS   = 1<<25
+
     # Spell cast: auto-targets via the gamepad QuickCast path on the engine side.
     RING_ENTRY_KEY_CAST_SPELL      = 1<<20  # data1 = SpellID
 

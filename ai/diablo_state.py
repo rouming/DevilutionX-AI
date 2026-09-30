@@ -856,6 +856,7 @@ def player_position(d):
     # Cast to signed integer to prevent signed arithmetic on
     # `np.uint8` types; otherwise, a warning occurs.
     #
+    #return (int(d.player.position.tile.x), int(d.player.position.tile.y))
     return (int(d.player.position.future.x), int(d.player.position.future.y))
 
 def player_direction(d):
@@ -1779,6 +1780,7 @@ class DiabloGame:
     def __init__(self, state_path, state, state_dir=None, proc=None,
                  log_file=None, game_ticks_per_step=None, step_mode=None):
         self.state_dir = state_dir
+        self._event_recorder = None
         self.state_path = state_path
         self.proc = proc
         self.log_file = log_file
@@ -1835,6 +1837,7 @@ class DiabloGame:
     def stop_or_detach(self):
         if self.proc:
             self.proc.terminate()
+            self.proc.wait()
         if self.log_file:
             self.log_file.close()
         if self.state_dir:
@@ -1861,7 +1864,51 @@ class DiabloGame:
         self.events_queue_read_idx += 1
         return entry
 
+    def set_game_params(self, ticks, step_mode, fast_forward=False, skip_animation=False):
+        """Switch game params at runtime. For GUI instances, fast_forward also suppresses
+        render and audio (hybrid mode). Synchronous: returns after the engine has processed
+        the command. No game ticks are run during the transition."""
+        data2 = (int(step_mode) << 0) | (int(fast_forward) << 1) | (int(skip_animation) << 2)
+        self.submit_ctrl_key(ring.RingEntryType.RING_ENTRY_KEY_SET_GAME_PARAMS,
+                             data=(ticks, data2))
+        self.game_ticks_per_step = ticks
+        self.step_mode = step_mode
+
+    def submit_ctrl_key(self, key, data=(0, 0)):
+        """Submit a control command (no F_SINGLE_TICK_PRESS) and wait for the engine's
+        direct ACK (en_type == key, en_tag == request_tag). No game ticks are run."""
+        request_tag = (time.time_ns() & 0xffffffff)
+        assert ring.has_capacity_to_submit(self.state.input_queue)
+        entry = ring.get_entry_to_submit(self.state.input_queue)
+        entry.en_type = key
+        entry.en_tag = request_tag
+        entry.en_data1, entry.en_data2 = data
+        read_idx = self.state.events_queue.write_idx
+        ring.submit(self.state.input_queue)
+        while True:
+            ring.wait_any_submitted(self.state.events_queue, read_idx)
+            entry = ring.get_entry_to_retrieve(self.state.events_queue, read_idx)
+            read_idx += 1
+            assert entry is not None
+            if entry.en_tag == request_tag and entry.en_type == key:
+                break
+
+    def submit_key_nowait(self, key, data=(0, 0)):
+        """Submit key to ring without waiting for the engine response.
+        Used for buffered replay pre-fill: Python stays ahead so the engine
+        never stalls. Release events sent back by the engine are ignored."""
+        key = movement_to_true_north(key)
+        while not ring.has_capacity_to_submit(self.state.input_queue):
+            time.sleep(0.001)
+        entry = ring.get_entry_to_submit(self.state.input_queue)
+        entry.en_type = key
+        entry.en_tag = 0
+        entry.en_data1, entry.en_data2 = data
+        ring.submit(self.state.input_queue)
+
     def submit_key(self, key, data=(0, 0)):
+        if self._event_recorder is not None:
+            self._event_recorder.write(f"{self.ticks()} {key} {data[0]} {data[1]}\n")
         key = movement_to_true_north(key)
         request_tag = (time.time_ns() & 0xffffffff)
         assert ring.has_capacity_to_submit(self.state.input_queue)
@@ -1931,16 +1978,23 @@ class DiabloGame:
         mshared_filename = config["mshared-filename"]
         game_ticks_per_step = config["game-ticks-per-step"]
         step_mode = config["step-mode"]
+        # replay-startup: recording params from events-file header override CLI
+        # params at engine startup so game state matches the recording from tick 0.
+        # headless is always from 'gui': SDL init must happen if the window is shown.
+        rs = config.get("replay-startup")
+        ini_ticks = rs["ticks_per_step"] if rs else game_ticks_per_step
+        ini_step  = (1 if rs["step_mode"] else 0) if rs else (0 if config["gui"] else 1 if step_mode else 0)
+        ini_skip  = (1 if rs.get("skip_animation") else 0) if rs else (0 if (config["gui"] or config["animation"]) else 1)
 
         cfg = cfg.format(seed=config["seed"],
                          fixed_seed=1 if config["fixed-seed"] else 0,
                          dungeon_level=config.get("dungeon-level", DUNGEON_LEVEL_DEFAULT)[0][0],
                          automap_active=1 if config["gui"] else 0,
                          skip_progress=1 if config["gui"] else 0,
-                         skip_animation=0 if (config["gui"] or config["animation"]) else 1,
+                         skip_animation=ini_skip,
                          headless=0 if config["gui"] else 1,
-                         game_ticks_per_step=game_ticks_per_step,
-                         step_mode=0 if config["gui"] else 1 if step_mode else 0,
+                         game_ticks_per_step=ini_ticks,
+                         step_mode=ini_step,
                          mshared_filename=mshared_filename,
                          invincible_player=1 if config["invincible-player"] else 0,
                          no_monsters=1 if config["no-monsters"] else 0,
@@ -1995,8 +2049,8 @@ class DiabloGame:
         mshared_path = os.path.abspath(state_dir.name + "/" + mshared_filename)
         state = map_devilutionx_state_by_pid(proc.pid, mshared_path)
         return DiabloGame(state_path, state, state_dir=state_dir, proc=proc,
-                          log_file=log_file, game_ticks_per_step=game_ticks_per_step,
-                          step_mode=step_mode)
+                          log_file=log_file, game_ticks_per_step=ini_ticks,
+                          step_mode=bool(ini_step))
 
     @staticmethod
     def attach(config):

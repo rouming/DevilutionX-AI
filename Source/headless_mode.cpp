@@ -3,5 +3,6 @@
 namespace devilution {
 
 bool HeadlessMode;
+bool FastForwardMode;
 
 } // namespace devilution

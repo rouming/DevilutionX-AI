@@ -1143,7 +1143,8 @@ static struct ring_entry *receive_ring_event(int timeout_ms)
 
 static bool receive_and_inject_input(bool receive_new,
 									 int timeout_ms,
-									 uint32_t *request_tag)
+									 uint32_t *request_tag,
+									 bool *ctrl_only = nullptr)
 {
 	static bool should_release_keys;
 	static uint32_t keys_state;
@@ -1175,6 +1176,47 @@ static bool receive_and_inject_input(bool receive_new,
 
 		should_release_keys = (keys & RING_ENTRY_F_SINGLE_TICK_PRESS);
 		keys &= ~RING_ENTRY_FLAGS;
+
+		// Control commands: no F_SINGLE_TICK_PRESS, no game ticks, direct ACK.
+		if (ctrl_only) *ctrl_only = false;
+		if (keys & RING_ENTRY_KEY_SET_GAME_PARAMS) {
+			static _music_id sgp_saved_track = NUM_MUSIC;
+			int  ticks     = (int)data1;
+			bool step      = (data2 >> 0) & 1;
+			bool ff        = (data2 >> 1) & 1;
+			bool skip_anim = (data2 >> 2) & 1;
+			GetOptions().Gameplay.gameTicksPerStep.SetValue(ticks);
+			GetOptions().Gameplay.stepMode.SetValue(step);
+			GetOptions().Gameplay.skipAnimation.SetValue(skip_anim);
+			if (!HeadlessMode) {
+				if (ff && !FastForwardMode) {
+					FastForwardMode = true;
+					sgp_saved_track = sgnMusicTrack;
+					music_stop();
+					sound_stop();
+				} else if (!ff && FastForwardMode) {
+					FastForwardMode = false;
+					// FF ran game_loop() at full speed, advancing last_tick far into
+					// the future. Reset it so nthread_has_500ms_passed() fires
+					// immediately on the next iteration.
+					last_tick = SDL_GetTicks();
+					// Restore per-player frame counts (_pWFrames, _pNFrames, etc.)
+					// that were collapsed to 1 while skipAnimation was true.
+					for (Player &player : Players)
+						SetPlrAnims(player);
+					if (sgp_saved_track < NUM_MUSIC)
+						music_start(sgp_saved_track);
+				}
+			}
+			printf(">> %s: SET_GAME_PARAMS ticks=%d step=%d ff=%d skip_anim=%d\n",
+			       __func__, ticks, step, ff, skip_anim);
+			struct ring_entry *ack = ring_queue_get_entry_to_submit(&shared::events_queue);
+			ack->en_type = RING_ENTRY_KEY_SET_GAME_PARAMS;
+			ack->en_tag = entry->en_tag;
+			ring_queue_submit(&shared::events_queue);
+			keys &= ~RING_ENTRY_KEY_SET_GAME_PARAMS;
+			if (ctrl_only && !keys) *ctrl_only = true;
+		}
 
 		if (should_release_keys) {
 			pending_data1 = data1;
@@ -1289,9 +1331,7 @@ void RunGameLoop(interface_mode uMsg)
 		//
 
 		// Wait for the next request in step mode
-		static const int DEFAULT_WAIT_MS =
-			*GetOptions().Gameplay.stepMode ? -1 : 0;
-		static int timeout_ms = DEFAULT_WAIT_MS;
+		static int timeout_ms = *GetOptions().Gameplay.stepMode ? -1 : 0;
 		static bool running_loop_N_ticks;
 		static size_t run_ticks;
 		static uint32_t request_tag;
@@ -1300,7 +1340,7 @@ void RunGameLoop(interface_mode uMsg)
 		if (running_loop_N_ticks && !run_ticks) {
 			// Reply that all ticks have been executed to completion
 			running_loop_N_ticks = false;
-			timeout_ms = DEFAULT_WAIT_MS;
+			timeout_ms = *GetOptions().Gameplay.stepMode ? -1 : 0;
 
 			// Reply with step finished event
 			struct ring_entry *entry;
@@ -1312,8 +1352,9 @@ void RunGameLoop(interface_mode uMsg)
 
 		// Receive a new event when the loop is idle
 		bool receive_new = !running_loop_N_ticks;
+		bool ctrl_only = false;
 		bool injected = receive_and_inject_input(receive_new, timeout_ms,
-												 &request_tag);
+												 &request_tag, &ctrl_only);
 		if (!running_loop_N_ticks && injected) {
 			run_ticks = *GetOptions().Gameplay.gameTicksPerStep;
 			if (run_ticks) {
@@ -1322,6 +1363,14 @@ void RunGameLoop(interface_mode uMsg)
 				timeout_ms = 0;
 			}
 		}
+		// Keep timeout_ms consistent with the current step mode. Ctrl commands
+		// (SET_GAME_PARAMS) change step mode without triggering a
+		// game step, so the step-finished path never fires and timeout_ms would
+		// otherwise stay stale.
+		if (!running_loop_N_ticks)
+			timeout_ms = *GetOptions().Gameplay.stepMode ? -1 : 0;
+		// Ctrl-only commands carry no game input: skip the game tick entirely.
+		if (ctrl_only) continue;
 
 		if (injected) {
 			// Process injected input immediately. Also, if something

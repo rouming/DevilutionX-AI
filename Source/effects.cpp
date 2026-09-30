@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include "headless_mode.hpp"
+
 #include <expected.hpp>
 
 #include "data/file.hpp"
@@ -209,7 +211,7 @@ void PlaySFX(SfxID psfx)
 {
 	psfx = RndSFX(psfx);
 
-	if (!gbSndInited) return;
+	if (!gbSndInited || FastForwardMode) return;
 
 	PlaySfxPriv(&sgSFX[static_cast<int16_t>(psfx)], false, { 0, 0 });
 }
@@ -220,7 +222,7 @@ void PlaySfxLoc(SfxID psfx, Point position, bool randomizeByCategory)
 		psfx = RndSFX(psfx);
 	}
 
-	if (!gbSndInited) return;
+	if (!gbSndInited || FastForwardMode) return;
 
 	if (IsAnyOf(psfx, SfxID::Walk, SfxID::ShootBow, SfxID::CastSpell, SfxID::Swing)) {
 		TSnd *pSnd = sgSFX[static_cast<int16_t>(psfx)].pSnd.get();
@@ -300,7 +302,7 @@ void ui_sound_init()
 
 void effects_play_sound(SfxID id)
 {
-	if (!gbSndInited || !gbSoundOn) {
+	if (!gbSndInited || !gbSoundOn || FastForwardMode) {
 		return;
 	}
 

@@ -364,6 +364,16 @@ def make_diablo_parser():
     common_parser.add_argument(
         "--record", metavar="FILE",
         help="Record the GUI window to a video file (requires --gui, gpu-screen-recorder and xdotool). Use .mkv extension for crash-safe incremental writing.")
+    # TEMP: ring-event recording/playback helpers
+    common_parser.add_argument(
+        "--xxx-record-events", metavar="FILE",
+        help="TEMP: record all ring events with game ticks to FILE for later replay")
+    common_parser.add_argument(
+        "--xxx-replay-events", metavar="FILE",
+        help="TEMP: replay ring events from FILE (recorded by --xxx-record-events); use with --gui for video recording")
+    common_parser.add_argument(
+        "--xxx-replay-from", metavar="N", type=int, default=0,
+        help="TEMP: fast-forward first N events before starting normal paced replay and video recording (default: 0)")
     # See also `incompatible_options`
     common_parser.add_argument(
         "--invincible-player", action="store_true",
@@ -2117,8 +2127,56 @@ def run_tui(stdscr, args, gameconfig):
     envlog = None
     n_counter = 0
 
-    # Recording is stopped via atexit on both normal exit and Ctrl-C.
-    _record_screen_start(game, args)
+    if getattr(args, 'xxx_record_events', None):
+        game._event_recorder = open(args.xxx_record_events, 'w')
+        skip_anim = not (args.gui or getattr(args, 'animation', False))
+        header = {"version": 1, "ticks_per_step": game.game_ticks_per_step,
+                  "step_mode": bool(game.step_mode), "skip_animation": skip_anim}
+        game._event_recorder.write(json.dumps(header) + '\n')
+        print(f"Ring events recording: {args.xxx_record_events}")
+
+    # Load replay events if requested: list of (tick, key, data1, data2).
+    # First line of the file is a JSON header with the recording params.
+    # Events are submitted with a lookahead window so Python stays ahead of the
+    # engine even during file I/O. Both record and replay must use --gui (or
+    # --enable-animation) so tick numbers match (same animation settings).
+    REPLAY_LOOKAHEAD = 30
+    replay_events = []
+    replay_header = {}
+    replay_ff_remaining = getattr(args, 'xxx_replay_from', 0) or 0
+    replay_recording_started = (replay_ff_remaining == 0)
+    if getattr(args, 'xxx_replay_events', None):
+        with open(args.xxx_replay_events) as f:
+            replay_header = json.loads(f.readline())
+            for line in f:
+                t, k, d1, d2 = line.split()
+                replay_events.append((int(t), int(k), int(d1), int(d2)))
+        replay_events.reverse()  # pop from end in tick order
+        total = len(replay_events)
+        print(f"Ring events replay: {total} events from {args.xxx_replay_events}"
+              + (f", fast-forwarding first {replay_ff_remaining}" if replay_ff_remaining else ""))
+
+    # End-state params: what the engine switches to after FF (from CLI args, not from game).
+    # The game started with recording params (replay-startup); CLI params are the viewing target.
+    # For --gui: force real-time (step=False) and animations (skip=False) after FF.
+    end_state_ticks = args.game_ticks_per_step
+    end_state_step  = not args.real_time and not args.gui
+    end_state_skip  = not (args.gui or getattr(args, 'animation', False))
+    if replay_events:
+        use_ff = replay_ff_remaining > 0
+        if use_ff:
+            # Engine already started with recording params; only enable FF suppression.
+            game.set_game_params(replay_header["ticks_per_step"], replay_header["step_mode"],
+                                 fast_forward=True,
+                                 skip_animation=replay_header.get("skip_animation", False))
+            print("Fast-forward: render and audio suppressed")
+        else:
+            game.set_game_params(replay_header["ticks_per_step"], replay_header["step_mode"],
+                                 fast_forward=False,
+                                 skip_animation=replay_header.get("skip_animation", False))
+            _record_screen_start(game, args)
+    else:
+        _record_screen_start(game, args)
     # Main loop
     while RUNNING:
         stdscr.clear()
@@ -2140,6 +2198,44 @@ def run_tui(stdscr, args, gameconfig):
             game.submit_key(key, data=data)
             LAST_KEY = 0
 
+        # Pre-fill ring with replay events. During FF: submit as fast as the
+        # ring allows (no tick pacing) until FF quota is exhausted, then kick
+        # in the recorder and switch to REPLAY_LOOKAHEAD pacing.
+        if replay_events:
+            # Recorded events used F_SINGLE_TICK_PRESS (via submit_key), so each
+            # caused 2*N ticks (N for KEYDOWN, N for the deferred KEYUP release).
+            # Replay must match this so the tick timeline stays in sync.
+            F_STP = ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS
+            if replay_ff_remaining > 0:
+                while (replay_events and replay_ff_remaining > 0 and
+                       ring.has_capacity_to_submit(game.state.input_queue)):
+                    _, key, d1, d2 = replay_events.pop()
+                    game.submit_key_nowait(key | F_STP, data=(d1, d2))
+                    replay_ff_remaining -= 1
+                if replay_ff_remaining == 0:
+                    ring.wait_all_retrieved(game.state.input_queue)
+                    game.set_game_params(end_state_ticks, end_state_step,
+                                         fast_forward=False,
+                                         skip_animation=end_state_skip)
+                    print("Fast-forward complete, starting recording")
+                    # Recording is stopped via atexit on both normal exit and Ctrl-C.
+                    _record_screen_start(game, args)
+                    replay_recording_started = True
+            else:
+                now = game.ticks()
+                while (replay_events and
+                       replay_events[-1][0] <= now + REPLAY_LOOKAHEAD and
+                       ring.has_capacity_to_submit(game.state.input_queue)):
+                    _, key, d1, d2 = replay_events.pop()
+                    game.submit_key_nowait(key | F_STP, data=(d1, d2))
+            if not replay_events:
+                if not use_ff:
+                    ring.wait_all_retrieved(game.state.input_queue)
+                    game.set_game_params(end_state_ticks, end_state_step,
+                                         fast_forward=False,
+                                         skip_animation=end_state_skip)
+                print("Replay complete")
+
         # Refresh the screen to show the content
         stdscr.refresh()
 
@@ -2149,6 +2245,10 @@ def run_tui(stdscr, args, gameconfig):
 
         game.update_ticks()
         time.sleep(0.01)
+
+    if game._event_recorder is not None:
+        game._event_recorder.close()
+        print(f"Ring events saved: {args.xxx_record_events}")
 
 
 def prepare_directory_for_run(args, dir_name):
@@ -3139,9 +3239,21 @@ def agent_ai(args, gameconfig):
             pause=args.pause,
             stat_strategy=args.stat_strategy)
 
+    if getattr(args, 'xxx_record_events', None):
+        game._event_recorder = open(args.xxx_record_events, 'w')
+        skip_anim = not (args.gui or getattr(args, 'animation', False))
+        header = {"version": 1, "ticks_per_step": game.game_ticks_per_step,
+                  "step_mode": bool(game.step_mode), "skip_animation": skip_anim}
+        game._event_recorder.write(json.dumps(header) + '\n')
+        print(f"Ring events recording: {args.xxx_record_events}")
+
     # Recording is stopped via atexit on both normal exit and Ctrl-C.
     _record_screen_start(game, args)
     run_agent_loop(args.seeds, env, make_supervisor)
+
+    if game._event_recorder is not None:
+        game._event_recorder.close()
+        print(f"Ring events saved: {args.xxx_record_events}")
 
     env.close()
     return 0
@@ -3294,6 +3406,8 @@ def main():
         "gui": args.gui,
         "animation": getattr(args, 'animation', False),
         "dungeon-level": args.dungeon_level or parse_dungeon_level('1'),
+        "xxx-record-events": getattr(args, 'xxx_record_events', None),
+        "xxx-replay-events": getattr(args, 'xxx_replay_events', None),
 
         # AI
         "log-to-stdout": args.log_to_stdout \
@@ -3340,6 +3454,13 @@ def main():
             print("Error: --attach=%s is not a valid path, PID or index of a Diablo instance" %
                   path_or_pid)
             sys.exit(1)
+
+    # Parse replay header early so DiabloGame.run() can start the engine with
+    # recording params (skip_animation, step_mode, ticks) from tick 0.
+    # Only for new instances (attach already has an engine running).
+    if gameconfig.get("xxx-replay-events") and 'attach-path' not in gameconfig:
+        with open(gameconfig["xxx-replay-events"]) as _rf:
+            gameconfig["replay-startup"] = json.loads(_rf.readline())
 
     if args.command == 'play':
         return curses.wrapper(lambda stdscr: run_tui(stdscr, args, gameconfig))
