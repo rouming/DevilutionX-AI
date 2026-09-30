@@ -806,34 +806,6 @@ class Pathfinder:
 # Seed loop
 # ---------------------------------------------------------------------------
 
-def parse_seed_range(s):
-    """Argparse type: parse seeds into a list.
-
-    '5'       -> [5]
-    '1-30'    -> [1, 2, ..., 30]
-    '1,3,7'   -> [1, 3, 7]
-    '1-5,9,20-22' -> [1, 2, 3, 4, 5, 9, 20, 21, 22]
-    """
-    seeds = []
-    for tok in s.split(','):
-        parts = tok.split('-')
-        try:
-            if len(parts) == 2:
-                lo, hi = int(parts[0]), int(parts[1])
-                if lo > hi:
-                    raise ValueError(f"invalid range '{tok}': A must be <= B")
-                seeds.extend(range(lo, hi + 1))
-            elif len(parts) == 1:
-                seeds.append(int(parts[0]))
-            else:
-                raise ValueError
-        except ValueError as e:
-            if 'invalid range' in str(e):
-                raise
-            raise ValueError(f"invalid seeds '{s}': expected 'A', 'A-B', or comma-separated list")
-    return seeds
-
-
 def run_agent_loop(seeds, env, make_supervisor):
     """Run the agent sequentially over seeds, resetting the game for each.
 

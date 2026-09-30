@@ -26,9 +26,17 @@ import time
 import numpy as np
 import procutils
 import sprout
-from rl import utils
 from rl.constants import KL_GOOD_HI, CLIP_FRAC_GOOD_HI, GRAD_NORM_GOOD_HI
-from diablo_state import DungeonLevelSpec, DUNGEON_LEVEL_DEFAULT, CURRICULUM_WEIGHT_STEP
+
+class _LazyUtils:
+    """Defers 'from rl import utils' (and thus torch) until first use."""
+    def __getattr__(self, name):
+        from rl import utils as _utils
+        # Replace self in module globals so subsequent accesses are direct.
+        globals()['utils'] = _utils
+        return getattr(_utils, name)
+
+utils = _LazyUtils()
 
 VERSION='Diablo AI Tool v2.0'
 
@@ -54,6 +62,7 @@ def parse_dungeon_level(s):
     '1-16=auto'          -> all levels auto-weighted from env-stats at runtime
     '1-3=auto,4-16=20'  -> L1-3 auto, L4-16 fixed weight 20
     """
+    from diablo_state import DungeonLevelSpec, CURRICULUM_WEIGHT_STEP
     result = []
     auto_levels = set()
     for entry in s.split(','):
@@ -120,7 +129,7 @@ def _sprout_params_diff(key, old_val, new_val):
         return None
     try:
         new_spec = parse_dungeon_level(new_val)
-        old_spec = parse_dungeon_level(old_val) if old_val is not None else DUNGEON_LEVEL_DEFAULT
+        old_spec = parse_dungeon_level(old_val) if old_val is not None else parse_dungeon_level('1')
     except Exception:
         return None
 
@@ -250,8 +259,35 @@ class DiabloParserNamespace(argparse.Namespace):
         return parse_int_with_suffix(self.episodes)
 
 
+def parse_seed_range(s):
+    """Argparse type: parse seeds into a list.
+
+    '5'          -> [5]
+    '1-30'       -> [1, 2, ..., 30]
+    '1,3,7'      -> [1, 3, 7]
+    '1-5,9,20-22' -> [1, 2, 3, 4, 5, 9, 20, 21, 22]
+    """
+    seeds = []
+    for tok in s.split(','):
+        parts = tok.split('-')
+        try:
+            if len(parts) == 2:
+                lo, hi = int(parts[0]), int(parts[1])
+                if lo > hi:
+                    raise ValueError(f"invalid range '{tok}': A must be <= B")
+                seeds.extend(range(lo, hi + 1))
+            elif len(parts) == 1:
+                seeds.append(int(parts[0]))
+            else:
+                raise ValueError
+        except ValueError as e:
+            if 'invalid range' in str(e):
+                raise
+            raise ValueError(f"invalid seeds '{s}': expected 'A', 'A-B', or comma-separated list")
+    return seeds
+
+
 def make_diablo_parser():
-    from diablo_agent import parse_seed_range
     class IndentedHelpFormatter(argparse.RawTextHelpFormatter):
         def __init__(self, *args, **kwargs):
             # Width controls line wrapping; max_help_position controls indent
@@ -403,7 +439,7 @@ def make_diablo_parser():
         "--seed-base", type=int, default=0,
         help="Base value used to generate deterministic seeds for each episode or environment runner, so the i-th episode/runner uses `seed_base + i` (default: 0)")
     common_parser.add_argument(
-        "--dungeon-level", type=parse_dungeon_level, default=DUNGEON_LEVEL_DEFAULT,
+        "--dungeon-level", type=parse_dungeon_level, default=None,
         help="Starting dungeon level: '8', '1-8' (uniform range), "
              "'1=5,2=15,3-16=80' (weighted; weight proportional to frequency), "
              "or '1-16=auto' / '1-3=auto,4-16=20' (auto weights from env-stats.txt "
@@ -679,7 +715,7 @@ def make_diablo_parser():
         "--eval-env-runners", type=int, default=64,
         help="Number of environment runners dedicated to evaluation (default: 64)")
     train_ai_parser.add_argument(
-        "--eval-dungeon-level", type=parse_dungeon_level, default=DUNGEON_LEVEL_DEFAULT,
+        "--eval-dungeon-level", type=parse_dungeon_level, default=None,
         help="Dungeon level spec for eval environments (default: 1)")
     train_ai_parser.add_argument(
         "--eval-no-spells", action="store_true",
@@ -1984,7 +2020,7 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
 
 def new_game_data(gameconfig, n_counter):
     seed = diablo_state.make_episode_seed(gameconfig['seed'], 0, n_counter)
-    spec = gameconfig.get('dungeon-level', DUNGEON_LEVEL_DEFAULT)
+    spec = gameconfig.get('dungeon-level') or parse_dungeon_level('1')
     dungeon_level = diablo_state.sample_dungeon_level(spec, seed)
     return (dungeon_level << 1) | 1, seed
 
@@ -2262,7 +2298,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     runner_offset = rank * args.env_runners if ddp else 0
     envs = []
     ts = 0
-    auto_levels = args.dungeon_level.auto_levels
+    auto_levels = (args.dungeon_level or gameconfig['dungeon-level']).auto_levels
     if auto_levels:
         gameconfig['dungeon-level'].stats_path = os.path.join(model_dir, "env-stats.txt")
     for i in range(args.env_runners):
@@ -2292,7 +2328,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     if is_main:
         eval_envs = []
         eval_gameconfig = copy.deepcopy(gameconfig)
-        eval_gameconfig['dungeon-level'] = args.eval_dungeon_level
+        eval_gameconfig['dungeon-level'] = args.eval_dungeon_level or parse_dungeon_level('1')
         eval_gameconfig['no-spells']     = args.eval_no_spells
         eval_gameconfig['stats-scale']   = args.eval_stats_scale
         if args.no_eval_char_tables:
@@ -3168,7 +3204,7 @@ def main():
         "step-mode": not args.real_time,
         "gui": args.gui,
         "animation": getattr(args, 'animation', False),
-        "dungeon-level": args.dungeon_level,
+        "dungeon-level": args.dungeon_level or parse_dungeon_level('1'),
 
         # AI
         "log-to-stdout": args.log_to_stdout \
