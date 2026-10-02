@@ -2209,6 +2209,9 @@ def _scale_bar(value, good_hi, good_lo=0.0, width=4):
     """Bar over the good zone [good_lo, good_hi].
     [^---] in range (near low), [---^] in range (near high),
     [<---] below, [--->] above."""
+    import math
+    if math.isnan(value) or math.isinf(value):
+        return '[' + '?' * width + ']'
     if value < good_lo:
         return '[<' + '-' * (width - 1) + ']'
     if value > good_hi:
