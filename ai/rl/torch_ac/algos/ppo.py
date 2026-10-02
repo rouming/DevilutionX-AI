@@ -43,10 +43,12 @@ class PPOAlgo(BaseAlgo):
 
         self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
         self.batch_num = 0
+        self._consecutive_nan_updates = 0
 
     def update_parameters(self, exps, apply_update=True):
         # Collect experiences
 
+        all_nan = True
         for _ in range(self.epochs):
             # Initialize log values
 
@@ -176,9 +178,12 @@ class PPOAlgo(BaseAlgo):
                     batch_loss_tensor.sum().backward()
                     grad_norm = torch.nn.utils.clip_grad_norm_(self.acmodel.parameters(),
                                                                self.max_grad_norm).item()
-                    self.optimizer.step()
+                    if numpy.isfinite(grad_norm):
+                        self.optimizer.step()
                 else:
                     grad_norm = 0.0
+                if numpy.isfinite(grad_norm):
+                    all_nan = False
 
                 # Update log values
 
@@ -189,6 +194,17 @@ class PPOAlgo(BaseAlgo):
                 log_kls.append(batch_kl)
                 log_clip_fracs.append(batch_clip_frac)
                 log_grad_norms.append(grad_norm)
+
+        # Persistent NaN detection: if every batch in this update was NaN,
+        # count it. After 5 consecutive all-NaN updates, stop training.
+        if all_nan:
+            self._consecutive_nan_updates += 1
+            if self._consecutive_nan_updates >= 5:
+                raise RuntimeError(
+                    f"Training diverged: {self._consecutive_nan_updates} consecutive "
+                    f"updates with NaN/Inf gradients. Reduce --lr or --max-grad-norm.")
+        else:
+            self._consecutive_nan_updates = 0
 
         # Log some values
 
