@@ -215,10 +215,24 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
 
     for action in parser._actions:
         existing = arg_defs.get(action.dest)
+        is_store_true  = isinstance(action, argparse._StoreTrueAction)
+        is_store_false = isinstance(action, argparse._StoreFalseAction)
+        # store_true/store_false pairs share a dest. Track both option_strings
+        # so _bool_opt_string can emit the correct flag for each value.
+        if existing and (is_store_true or is_store_false):
+            opt_true  = existing.get("option_strings_true",  existing["option_strings"])
+            opt_false = existing.get("option_strings_false", existing["option_strings"])
+            option_strings_true  = action.option_strings if is_store_true  else opt_true
+            option_strings_false = action.option_strings if is_store_false else opt_false
+        else:
+            option_strings_true  = action.option_strings if is_store_true  else None
+            option_strings_false = action.option_strings if is_store_false else None
         arg_defs[action.dest] = {
             "default": action.default,
             "required": action.required,
             "option_strings": action.option_strings,
+            "option_strings_true":  option_strings_true,
+            "option_strings_false": option_strings_false,
             "action": action,
             # store_false/store_true pairs share a dest; the second action inherits
             # the first action's default but loses its dcb marker - preserve it.
@@ -226,6 +240,14 @@ def extract_arg_defs(parser: argparse.ArgumentParser):
                                         or (existing and existing.get("default_changes_behavior")),
         }
     return arg_defs
+
+def _bool_opt_string(meta, value):
+    """Return the correct flag for a boolean param given its value."""
+    if value:
+        strings = meta.get("option_strings_true") or meta["option_strings"]
+    else:
+        strings = meta.get("option_strings_false") or meta["option_strings"]
+    return strings[0]
 
 def make_cli_opts(parser, params, all_params=False, skip_params=None, params_overrides_fn=None):
     """Compare parameters with argparse defaults and return (cli_opts, new_params).
@@ -260,43 +282,38 @@ def make_cli_opts(parser, params, all_params=False, skip_params=None, params_ove
 
         # Handle required params: add with special marker if missing
         if required and new_val is None:
-            opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
-                missing.append(f"{opt_string}-REQUIRED")
+                missing.append(f"{_bool_opt_string(meta, True)}-REQUIRED")
             else:
                 override = params_overrides_fn(name) if params_overrides_fn else None
                 value = override if override is not None else f'${name.upper()}'
-                missing.append(f"{opt_string} {value}")
+                missing.append(f"{meta['option_strings'][0]} {value}")
 
         # Include if new param overrides default (or all_params requested)
         elif new_val is not None and (all_params or str(new_val) != str(default_val)):
-            opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
-                if new_val:
-                    opts.append(opt_string)
+                opts.append(_bool_opt_string(meta, new_val))
             else:
-                opts.append(f"{opt_string} {new_val}")
+                opts.append(f"{meta['option_strings'][0]} {new_val}")
 
         # Still output if params is required
         elif required:
-            opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
                 if default_val:
-                    opts.append(opt_string)
+                    opts.append(_bool_opt_string(meta, default_val))
             else:
-                opts.append(f"{opt_string} {default_val}")
+                opts.append(f"{meta['option_strings'][0]} {default_val}")
 
         # Param exists in current code but was not stored: post-run addition.
         # Skip any caller-specified skip_params.
         elif all_params and not required \
                 and name not in _skip:
             new_params[name] = default_val
-            opt_string = meta["option_strings"][0]
             if isinstance(default_val, bool):
                 if default_val:
-                    opts.append(opt_string)
+                    opts.append(_bool_opt_string(meta, default_val))
             elif default_val is not None:
-                opts.append(f"{opt_string} {default_val}")
+                opts.append(f"{meta['option_strings'][0]} {default_val}")
 
     return [parser.prog] + opts + missing, new_params
 
