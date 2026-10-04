@@ -2162,6 +2162,20 @@ class DiabloEnv_ClearAllLevels_v22(DiabloEnv_ClearAllLevels_v21):
     }
 
 
+class DiabloEnv_ClearAllLevels_v23(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but raises ExploreTiles (+0.05 -> +0.13).
+
+    With animation=on and game_ticks_per_step=5, crossing one tile takes
+    2 steps: step 1 fires MovementPenalty (mid-walk), step 2 fires
+    ExploreTiles.  The extra penalty step makes the v17 movement economics
+    net negative, so the agent learns to camp and fight rather than explore."""
+    ENV_VERSION = 23
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v17.REWARDS,
+        RewardEvent.ExploreTiles: +0.130,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2222,6 +2236,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v21 },
     { 'id': 'Diablo-ClearAllLevels-v22',
       'entry_point': DiabloEnv_ClearAllLevels_v22 },
+    { 'id': 'Diablo-ClearAllLevels-v23',
+      'entry_point': DiabloEnv_ClearAllLevels_v23 },
 
     # HRL Environment Classes
 
