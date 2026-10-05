@@ -2310,6 +2310,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     auto_levels = (args.dungeon_level or gameconfig['dungeon-level']).auto_levels
     if auto_levels:
         gameconfig['dungeon-level'].stats_path = os.path.join(model_dir, "env-stats.txt")
+    gameconfig['frames-per-env-runner'] = args.frames_per_env_runner
     for i in range(args.env_runners):
         env_config = copy.deepcopy(gameconfig)
         env_config['index'] = runner_offset + i
