@@ -2110,56 +2110,57 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
 #     STUCK_TIMEOUT = 600
 
 
-class DiabloEnv_ClearAllLevels_v20(DiabloEnv_ClearAllLevels_v17):
-    """Like v17 but replaces the flat movement penalty with one that grows
-    with the number of monsters currently visible to the agent.
-
-    The intent is to teach the agent to prefer fighting one monster at a
-    time rather than rushing into crowds.  When few or no monsters are in
-    view the penalty stays at the v17 base, so exploring and 1-on-1 combat
-    are not affected.  As more monsters become visible each idle step costs
-    more, making it expensive to stand or shuffle inside a crowded room.
-    The penalty caps at ten visible monsters so the agent is discouraged
-    from crowd fighting but never penalised so heavily that it refuses to
-    engage at all.
-
-    Fighting 1-3 monsters: same cost as v17, no change in behavior.
-    Fighting 4-9 monsters: penalty rises - agent is nudged to lure first.
-    10+ monsters in view:  penalty fixed at ten times the base (cap)."""
-    ENV_VERSION              = 20
-    MONST_PENALTY_THRESHOLD  = 3
-    MONST_PENALTY_CAP        = 10
-    MONST_PENALTY_SCALE      = 10.0
-
-
-class DiabloEnv_ClearAllLevels_v21(DiabloEnv_ClearAllLevels_v20):
-    """Like v20 but tracks door opens that happen while monsters are visible.
-
-    A new OpenDoorInCombat event (reward 0.0) fires instead of OpenDoor
-    when monsters are in view at the time of opening.  The split lets
-    future versions assign a negative reward to discourage the agent from
-    opening new rooms while a crowd is already in sight."""
-    ENV_VERSION = 21
-
-
-class DiabloEnv_ClearAllLevels_v22(DiabloEnv_ClearAllLevels_v21):
-    """Like v21 but adds symmetric door rewards for combat situations.
-
-    Opening a door while monsters are visible fires OpenDoorInCombat (-0.1)
-    on every occurrence; the door is not added to opened_doors_ids so each
-    re-open is penalised equally.  Closing a door while monsters are visible
-    fires CloseDoorInCombat (+0.1), rewarding the agent for sealing itself
-    off from a crowd.
-
-    Safe opens (no monsters visible) keep first-occurrence tracking and the
-    +0.02 exploration reward unchanged.  A pure open/close farm cycle nets
-    exactly zero, so there is no farming incentive."""
-    ENV_VERSION = 22
-    REWARDS = {
-        **DiabloEnv_ClearAllLevels_v21.REWARDS,
-        RewardEvent.OpenDoorInCombat:  -0.1,
-        RewardEvent.CloseDoorInCombat: +0.1,
-    }
+# v20-v22 disabled - door and crowd-penalty experiments did not improve over v17
+# class DiabloEnv_ClearAllLevels_v20(DiabloEnv_ClearAllLevels_v17):
+#     """Like v17 but replaces the flat movement penalty with one that grows
+#     with the number of monsters currently visible to the agent.
+#
+#     The intent is to teach the agent to prefer fighting one monster at a
+#     time rather than rushing into crowds.  When few or no monsters are in
+#     view the penalty stays at the v17 base, so exploring and 1-on-1 combat
+#     are not affected.  As more monsters become visible each idle step costs
+#     more, making it expensive to stand or shuffle inside a crowded room.
+#     The penalty caps at ten visible monsters so the agent is discouraged
+#     from crowd fighting but never penalised so heavily that it refuses to
+#     engage at all.
+#
+#     Fighting 1-3 monsters: same cost as v17, no change in behavior.
+#     Fighting 4-9 monsters: penalty rises - agent is nudged to lure first.
+#     10+ monsters in view:  penalty fixed at ten times the base (cap)."""
+#     ENV_VERSION              = 20
+#     MONST_PENALTY_THRESHOLD  = 3
+#     MONST_PENALTY_CAP        = 10
+#     MONST_PENALTY_SCALE      = 10.0
+#
+#
+# class DiabloEnv_ClearAllLevels_v21(DiabloEnv_ClearAllLevels_v20):
+#     """Like v20 but tracks door opens that happen while monsters are visible.
+#
+#     A new OpenDoorInCombat event (reward 0.0) fires instead of OpenDoor
+#     when monsters are in view at the time of opening.  The split lets
+#     future versions assign a negative reward to discourage the agent from
+#     opening new rooms while a crowd is already in sight."""
+#     ENV_VERSION = 21
+#
+#
+# class DiabloEnv_ClearAllLevels_v22(DiabloEnv_ClearAllLevels_v21):
+#     """Like v21 but adds symmetric door rewards for combat situations.
+#
+#     Opening a door while monsters are visible fires OpenDoorInCombat (-0.1)
+#     on every occurrence; the door is not added to opened_doors_ids so each
+#     re-open is penalised equally.  Closing a door while monsters are visible
+#     fires CloseDoorInCombat (+0.1), rewarding the agent for sealing itself
+#     off from a crowd.
+#
+#     Safe opens (no monsters visible) keep first-occurrence tracking and the
+#     +0.02 exploration reward unchanged.  A pure open/close farm cycle nets
+#     exactly zero, so there is no farming incentive."""
+#     ENV_VERSION = 22
+#     REWARDS = {
+#         **DiabloEnv_ClearAllLevels_v21.REWARDS,
+#         RewardEvent.OpenDoorInCombat:  -0.1,
+#         RewardEvent.CloseDoorInCombat: +0.1,
+#     }
 
 
 class DiabloEnv_ClearAllLevels_v23(DiabloEnv_ClearAllLevels_v17):
@@ -2230,12 +2231,13 @@ DIABLO_ENVS = [
     # v19 disabled - see comment above DiabloEnv_ClearAllLevels_v19
     # { 'id': 'Diablo-ClearAllLevels-v19',
     #   'entry_point': DiabloEnv_ClearAllLevels_v19 },
-    { 'id': 'Diablo-ClearAllLevels-v20',
-      'entry_point': DiabloEnv_ClearAllLevels_v20 },
-    { 'id': 'Diablo-ClearAllLevels-v21',
-      'entry_point': DiabloEnv_ClearAllLevels_v21 },
-    { 'id': 'Diablo-ClearAllLevels-v22',
-      'entry_point': DiabloEnv_ClearAllLevels_v22 },
+    # v20-v22 disabled - see comment above DiabloEnv_ClearAllLevels_v20
+    # { 'id': 'Diablo-ClearAllLevels-v20',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v20 },
+    # { 'id': 'Diablo-ClearAllLevels-v21',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v21 },
+    # { 'id': 'Diablo-ClearAllLevels-v22',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v22 },
     { 'id': 'Diablo-ClearAllLevels-v23',
       'entry_point': DiabloEnv_ClearAllLevels_v23 },
 
