@@ -686,6 +686,12 @@ def make_diablo_parser():
         "--entropy-coef", type=float, default=0.01,
         help="Entropy term coefficient (default: 0.01)")
     train_ai_parser.add_argument(
+        "--adaptive-entropy", type=str, default=None,
+        metavar="Hmin-Hmax,Cinit=Cmin-Cmax",
+        help="Adaptive entropy control: keep H in [Hmin,Hmax] by adjusting "
+             "entropy-coef in [Cmin,Cmax], starting at Cinit. "
+             "Example: 0.60-0.80,0.002=0.001-0.02")
+    train_ai_parser.add_argument(
         "--value-loss-coef", type=float, default=0.5,
         help="Value loss term coefficient (default: 0.5)")
     train_ai_parser.add_argument(
@@ -2455,6 +2461,22 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         step_size=args.lr_steps,
         gamma=args.lr_gamma)
 
+    # Initialize adaptive entropy controller (Hmin-Hmax,Cinit=Cmin-Cmax)
+    _ae = None
+    if getattr(args, 'adaptive_entropy', None):
+        _h_spec, _c_spec = args.adaptive_entropy.split(',')
+        _h_min, _h_max = (float(x) for x in _h_spec.split('-'))
+        _c_init, _c_bounds = _c_spec.split('=')
+        _c_min, _c_max = (float(x) for x in _c_bounds.split('-'))
+        _ae = {'h_min': _h_min, 'h_max': _h_max,
+               'c_min': _c_min, 'c_max': _c_max, 'c_init': float(_c_init),
+               'buf': [], 'smooth': 0.0}
+        algo.entropy_coef = float(_c_init)
+        if is_main:
+            txt_logger.info(
+                f"Adaptive entropy: H=[{_h_min},{_h_max}] "
+                f"coef=[{_c_min},{_c_max}] init={_c_init}\n")
+
     # Train model
     num_frames = status["num_frames"]
     update = status["update"]
@@ -2485,6 +2507,28 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             acmodel_raw.train()
         logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
         logs = {**logs1, **logs2}
+
+        if _ae is not None:
+            _h_cur = float(np.mean(logs2["entropy"]))
+            _ae['buf'].append(_h_cur)
+            if len(_ae['buf']) > 5:
+                _ae['buf'].pop(0)
+            _ae['smooth']    = float(np.mean(_ae['buf']))
+            _h_target    = (_ae['h_min'] + _ae['h_max']) / 2
+            _h_half_band = (_ae['h_max'] - _ae['h_min']) / 2
+            _h_error     = _ae['smooth'] - _h_target
+            if abs(_h_error) > _h_half_band:
+                _ratio = min(abs(_h_error) / _h_half_band, 4.0)
+                _step  = 1.0 - 0.05 * float(np.sign(_h_error)) * _ratio
+                algo.entropy_coef = max(min(algo.entropy_coef * _step,
+                                            _ae['c_max']), _ae['c_min'])
+            else:
+                # inside band: drift eC toward c_init, rate proportional to
+                # proximity to center (0 at edge, 1 at center - snaps there)
+                _proximity = 1.0 - abs(_h_error) / _h_half_band
+                algo.entropy_coef += _proximity * (_ae['c_init'] - algo.entropy_coef)
+                algo.entropy_coef = max(min(algo.entropy_coef,
+                                            _ae['c_max']), _ae['c_min'])
         update_end_time = time.time()
 
         if not args.dry_run:
@@ -2546,11 +2590,18 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 f" | S {success_rate:.2f} | ∇ {grad:.3f}{grad_bar}")
             for i in range(L):
                 rr = list(rreturn_per_episode[i].values())
-                mv = " | ".join(f"{m[1]} {logs[m[0]][i]:.3f}"
-                               for m in metrics if m[0] not in bar_metrics)
+                mv_items = []
+                for m in metrics:
+                    if m[0] in bar_metrics:
+                        continue
+                    mv_items.append(f"{m[1]} {logs[m[0]][i]:.3f}")
+                    if m[0] == "entropy" and _ae is not None:
+                        mv_items.append(f"eH {_ae['smooth']:.3f}")
+                        mv_items.append(f"eC {algo.entropy_coef:.4f}")
+                mv = " | ".join(mv_items)
                 kl = logs["kl"][i]; kl_bar = _scale_bar(kl, KL_GOOD_HI)
                 cf = logs["clip_frac"][i]; cf_bar = _scale_bar(cf, CLIP_FRAC_GOOD_HI)
-                e_term = args.entropy_coef       * logs["entropy"][i]
+                e_term = algo.entropy_coef        * logs["entropy"][i]
                 v_term = args.value_loss_coef    * logs["value_loss"][i]
                 p_term = abs(logs["policy_loss"][i])
                 total  = e_term + v_term + p_term
