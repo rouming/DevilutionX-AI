@@ -2182,50 +2182,78 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
 #     }
 
 
-class DiabloEnv_ClearAllLevels_v24(DiabloEnv_ClearAllLevels_v3):
-    """Sparse base (v3) with one randomly rotating optional reward per PPO update.
-
-    Every PPO update all env runners independently select the same optional
-    reward using fmix32(seed + update_num) % N. No cross-process synchronization
-    is needed: all envs share the same base seed and infer the update boundary
-    from their local step counter (frames-per-env-runner steps per update).
-
-    Optional pool: v17 shaping rewards that are zeroed in v3's sparse base."""
-    ENV_VERSION = 24
-
-    _v24_v3_rews  = DiabloEnv_ClearAllLevels_v3.REWARDS
-    _v24_v17_rews = DiabloEnv_ClearAllLevels_v17.REWARDS
-    OPTIONAL_REWARDS = tuple(sorted(
-        [e for e in RewardEvent
-         if DiabloEnv_ClearAllLevels_v17.REWARDS.get(e, 0.0) != 0.0
-         and DiabloEnv_ClearAllLevels_v3.REWARDS.get(e, 0.0) == 0.0],
-        key=lambda e: e.value,
-    ))
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._v24_frames = self.config.get('frames-per-env-runner', None)
-        self._v24_steps  = 0
-        self._v24_upd    = -1
-        self._v24_rews   = dict(self._v24_v3_rews)
-
-    @property
-    def REWARDS(self):
-        return self._v24_rews
-
-    def evaluate_step(self, d, env, action):
-        self._v24_steps += 1
-        if self._v24_frames:
-            upd = self._v24_steps // self._v24_frames
-            if upd != self._v24_upd:
-                self._v24_upd = upd
-                idx    = diablo_state.fmix32(self.seed + upd) % len(self.OPTIONAL_REWARDS)
-                active = self.OPTIONAL_REWARDS[idx]
-                self._v24_rews = {
-                    **self._v24_v3_rews,
-                    active: self._v24_v17_rews[active],
-                }
-        return super().evaluate_step(d, env, action)
+# v24 disabled - rotating optional rewards did not improve over v3 sparse baseline;
+# success rate dropped to ~0.30 vs v3's 0.42-0.45 despite entropy staying in range.
+# The single rotating reward was too weak a signal to guide policy improvement.
+# class DiabloEnv_ClearAllLevels_v24(DiabloEnv_ClearAllLevels_v3):
+#     """Sparse base (v3) with one randomly rotating optional reward per PPO update.
+#
+#     Every PPO update all env runners independently select the same optional
+#     reward using fmix32(seed + update_num) % N. No cross-process synchronization
+#     is needed: all envs share the same base seed and infer the update boundary
+#     from their local step counter (frames-per-env-runner steps per update).
+#
+#     Optional pool: v17 shaping rewards that are zeroed in v3's sparse base."""
+#     ENV_VERSION = 24
+#
+#     _v24_v3_rews  = DiabloEnv_ClearAllLevels_v3.REWARDS
+#     _v24_v17_rews = DiabloEnv_ClearAllLevels_v17.REWARDS
+#     OPTIONAL_REWARDS = tuple(sorted(
+#         [e for e in RewardEvent
+#          if DiabloEnv_ClearAllLevels_v17.REWARDS.get(e, 0.0) != 0.0
+#          and DiabloEnv_ClearAllLevels_v3.REWARDS.get(e, 0.0) == 0.0],
+#         key=lambda e: e.value,
+#     ))
+#
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self._v24_frames = self.config.get('frames-per-env-runner', None)
+#         self._v24_steps  = 0
+#         self._v24_upd    = -1
+#         self._v24_rews   = dict(self._v24_v3_rews)
+#
+#     @property
+#     def REWARDS(self):
+#         return self._v24_rews
+#
+#     def evaluate_step(self, d, env, action):
+#         self._v24_steps += 1
+#         if self._v24_frames:
+#             upd = self._v24_steps // self._v24_frames
+#             if upd != self._v24_upd:
+#                 self._v24_upd = upd
+#                 idx    = diablo_state.fmix32(self.seed + upd) % len(self.OPTIONAL_REWARDS)
+#                 active = self.OPTIONAL_REWARDS[idx]
+#                 self._v24_rews = {
+#                     **self._v24_v3_rews,
+#                     active: self._v24_v17_rews[active],
+#                 }
+#         return super().evaluate_step(d, env, action)
+#
+#    def __init__(self, *args, **kwargs):
+#        super().__init__(*args, **kwargs)
+#        self._v24_frames = self.config.get('frames-per-env-runner', None)
+#        self._v24_steps  = 0
+#        self._v24_upd    = -1
+#        self._v24_rews   = dict(self._v24_v3_rews)
+#
+#    @property
+#    def REWARDS(self):
+#        return self._v24_rews
+#
+#    def evaluate_step(self, d, env, action):
+#        self._v24_steps += 1
+#        if self._v24_frames:
+#            upd = self._v24_steps // self._v24_frames
+#            if upd != self._v24_upd:
+#                self._v24_upd = upd
+#                idx    = diablo_state.fmix32(self.seed + upd) % len(self.OPTIONAL_REWARDS)
+#                active = self.OPTIONAL_REWARDS[idx]
+#                self._v24_rews = {
+#                    **self._v24_v3_rews,
+#                    active: self._v24_v17_rews[active],
+#                }
+#        return super().evaluate_step(d, env, action)
 
 
 from gymnasium.envs.registration import register
@@ -2292,8 +2320,9 @@ DIABLO_ENVS = [
     # v23 disabled - see comment above DiabloEnv_ClearAllLevels_v23
     # { 'id': 'Diablo-ClearAllLevels-v23',
     #   'entry_point': DiabloEnv_ClearAllLevels_v23 },
-    { 'id': 'Diablo-ClearAllLevels-v24',
-      'entry_point': DiabloEnv_ClearAllLevels_v24 },
+    # v24 disabled - see comment above DiabloEnv_ClearAllLevels_v24
+    # { 'id': 'Diablo-ClearAllLevels-v24',
+    #   'entry_point': DiabloEnv_ClearAllLevels_v24 },
 
     # HRL Environment Classes
 
