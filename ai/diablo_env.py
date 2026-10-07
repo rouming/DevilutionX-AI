@@ -1346,6 +1346,7 @@ class RewardEvent(enum.Enum):
     MovementPenalty    = enum.auto()
     WastedPrimary      = enum.auto()
     WastedSecondary    = enum.auto()
+    RetreatedIntoFog   = enum.auto()  # terminal: revealed fog tiles while in sustained combat
 
 
 class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
@@ -1408,6 +1409,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         RewardEvent.MovementPenalty:     -0.01,
         RewardEvent.WastedPrimary:       -0.05,
         RewardEvent.WastedSecondary:     -0.05,
+        RewardEvent.RetreatedIntoFog:    -10.0,
     }
 
     @staticmethod
@@ -2256,6 +2258,67 @@ class DiabloEnv_ClearAllLevels_v17(DiabloEnv_ClearAllLevels_v16):
 #        return super().evaluate_step(d, env, action)
 
 
+class DiabloEnv_ClearAllLevels_v25(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but adds a hard combat constraint: hero must not reveal new
+    tiles while monsters are visible.
+
+    Rationale: v17 policy learned explore-and-fight rather than the desired
+    fight-then-explore.  The constraint forces the hero to finish combat in
+    explored territory before advancing into fog.  Retreating into unexplored
+    area under monster pressure ends the episode with a large negative reward,
+    teaching the hero to lure monsters into cleared area and fight defensively.
+
+    Mechanics:
+    - _retreat_fog_count increments each step where any monster is visible
+      AND explored_cnt increased (new tiles revealed).
+    - Counter resets only when no monsters are visible (combat ends cleanly).
+    - At RETREAT_FOG_THRESHOLD the episode terminates with RETREAT_FOG_PENALTY.
+    - Threshold 8 allows a few tiles of maneuvering near fog boundaries;
+      genuine retreats through unexplored area hit the cap quickly.
+    - Normalized counter (0..1) appended to the scalar observation so the
+      model can anticipate termination and self-correct."""
+
+    ENV_VERSION           = 25
+    RETREAT_FOG_THRESHOLD = 8
+
+    def __init__(self, *args, **kwargs):
+        # Initialize before super().__init__() so _get_scalars is safe when
+        # _build_observation_space calls it during the first reset().
+        self._retreat_fog_count = 0
+        super().__init__(*args, **kwargs)
+
+    def reset(self, **kwargs):
+        self._retreat_fog_count = 0
+        return super().reset(**kwargs)
+
+    def _get_scalars(self, d):
+        base = diablo_state.compute_scalars(d)
+        retreat_norm = min(self._retreat_fog_count / self.RETREAT_FOG_THRESHOLD, 1.0)
+        return np.append(base, np.float32(retreat_norm)).astype(np.float32)
+
+    def evaluate_step(self, d, env, action):
+        # Capture before super() updates prev_explored_cnt and prev_m_vis.
+        explored_cnt = diablo_state.count_explored_tiles(d)
+        fog_revealed = explored_cnt > self.prev_explored_cnt
+        prev_m_vis   = self.prev_m_vis
+
+        rewards, done, truncated = super().evaluate_step(d, env, action)
+
+        if not done and not truncated:
+            m_vis = diablo_state.count_visible_monsters(env)
+            if m_vis > 0 and prev_m_vis > 0 and fog_revealed:
+                self._retreat_fog_count += 1
+            elif m_vis == 0:
+                self._retreat_fog_count = 0
+
+            if self._retreat_fog_count >= self.RETREAT_FOG_THRESHOLD:
+                r = self.REWARDS[RewardEvent.RetreatedIntoFog]
+                print("Retreat into fog, R %.2f" % r, file=self.log)
+                return [r], True, False
+
+        return rewards, done, truncated
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2323,6 +2386,8 @@ DIABLO_ENVS = [
     # v24 disabled - see comment above DiabloEnv_ClearAllLevels_v24
     # { 'id': 'Diablo-ClearAllLevels-v24',
     #   'entry_point': DiabloEnv_ClearAllLevels_v24 },
+    { 'id': 'Diablo-ClearAllLevels-v25',
+      'entry_point': DiabloEnv_ClearAllLevels_v25 },
 
     # HRL Environment Classes
 

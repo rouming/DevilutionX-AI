@@ -288,7 +288,8 @@ def env_stats(args):
     import glob, re, math
     from collections import defaultdict
 
-    TERMINAL = {'Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout'}
+    TERMINAL = {'Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout',
+                'Retreat into fog'}
 
     RE_LEVEL = re.compile(r'dungeon_level=(\d+)')
     RE_DONE  = re.compile(r'EPISODE DONE=(true|false) steps=(\d+)')
@@ -463,9 +464,11 @@ def env_stats(args):
     if not lvl_out:
         return 0
 
-    OUTCOME_COLS = ['Goal', 'Diablo killed', 'Death', 'Escape', 'Stuck', 'Timedout']
+    OUTCOME_COLS = ['Goal', 'Diablo killed', 'Death', 'Retreat into fog',
+                    'Escape', 'Stuck', 'Timedout']
     COL_ABBREV   = {
         'Goal': 'Goal', 'Diablo killed': 'Diablo', 'Death': 'Death',
+        'Retreat into fog': 'Retreat',
         'Escape': 'Escape', 'Stuck': 'Stuck', 'Timedout': 'Timeout',
     }
     cols = [c for c in OUTCOME_COLS if any(lvl_out[lvl].get(c) for lvl in lvl_out)]

@@ -102,8 +102,8 @@ SCALAR_NAMES = [
     "lvl_manashield",       # 43
     "lvl_phasing",          # 44
     "lvl_fireball",         # 45
-    # v4 env appends one extra scalar:
-    "stuck_frac",           # 46
+    # v25 appends one extra scalar:
+    "retreat_fog_norm",     # 46
 ]
 
 # 4. Locate first conv layer
