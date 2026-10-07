@@ -1815,7 +1815,9 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         env, self.view_radius,
                         EF.Monster.value, self.WASTED_PRIMARY_DIST)
                     if not has_target and self.ENV_VERSION >= 8 and not self.WASTED_PRIMARY_STRICT:
-                        obj_mask = EF.Interactable.value | EF.Door.value | EF.Barrel.value
+                        obj_mask = EF.Interactable.value | EF.Barrel.value
+                        if self.ENV_VERSION < 25:
+                            obj_mask |= EF.Door.value
                         has_target = diablo_state.player_has_adjacent(
                             env, self.view_radius, obj_mask, 0)
                     if not has_target:
