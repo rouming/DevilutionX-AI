@@ -471,7 +471,17 @@ def env_stats(args):
         'Retreat into fog': 'Retreat',
         'Escape': 'Escape', 'Stuck': 'Stuck', 'Timedout': 'Timeout',
     }
-    cols = [c for c in OUTCOME_COLS if any(lvl_out[lvl].get(c) for lvl in lvl_out)]
+    _abbrev_lower = {v.lower(): k for k, v in COL_ABBREV.items()}
+    exclude_set = set()
+    for token in (getattr(args, 'exclude', None) or '').split(','):
+        token = token.strip().lower()
+        if token:
+            full = _abbrev_lower.get(token)
+            if full:
+                exclude_set.add(full)
+
+    cols = [c for c in OUTCOME_COLS
+            if c not in exclude_set and any(lvl_out[lvl].get(c) for lvl in lvl_out)]
 
     def outcome_fmt(cnt, tot):
         return "%.1f%%(%d)" % (100.0 * cnt / tot, cnt) if tot else "-"
@@ -485,8 +495,12 @@ def env_stats(args):
         return "μ=%d σ=%d [%d..%d]" % (mean, std, min(lst), max(lst))
 
     all_levels = sorted(lvl_out)
+    excl_per_level = {l: sum(lvl_out[l].get(c, 0) for c in exclude_set) for l in all_levels}
+    excl_total = sum(excl_per_level.values())
+
     col_w = {c: max(len(COL_ABBREV[c]),
-                    max(len(outcome_fmt(lvl_out[l].get(c, 0), sum(lvl_out[l].values())))
+                    max(len(outcome_fmt(lvl_out[l].get(c, 0),
+                                        sum(lvl_out[l].values()) - excl_per_level[l]))
                         for l in all_levels))
              for c in cols}
     step_w = max(
@@ -501,19 +515,23 @@ def env_stats(args):
         ["%*s" % (step_w, "steps(succ)"), "%*s" % (step_w, "steps(fail)")]
     )
     print()
-    total_succ_pct = 100.0 * succ_scanned / episodes_scanned if episodes_scanned else 0.0
+    episodes_eff = episodes_scanned - excl_total
+    total_succ_pct = 100.0 * succ_scanned / episodes_eff if episodes_eff else 0.0
     level_succ_rates = [
-        100.0 * len(lvl_steps[level]['succ']) / sum(lvl_out[level].values())
+        100.0 * len(lvl_steps[level]['succ']) /
+        max(1, sum(lvl_out[level].values()) - excl_per_level[level])
         for level in all_levels
-        if sum(lvl_out[level].values())
+        if sum(lvl_out[level].values()) - excl_per_level[level] > 0
     ]
     uniform_succ_pct = sum(level_succ_rates) / len(level_succ_rates) if level_succ_rates else 0.0
-    succ_line = "success: %.1f%% total / %.1f%% uniform" % (total_succ_pct, uniform_succ_pct)
+    excl_label = ("excl. %s" % ",".join(COL_ABBREV[c] for c in sorted(exclude_set))) if exclude_set else ""
+    succ_key = ("success (%s)" % excl_label) if excl_label else "success"
+    succ_line = "%s: %.1f%% total / %.1f%% uniform" % (succ_key, total_succ_pct, uniform_succ_pct)
     print("Per-level outcomes (%s, %s%s):" % (ep_desc, succ_line, run_suffix))
     print(hdr)
     print("-" * len(hdr))
     for level in all_levels:
-        tot = sum(lvl_out[level].values())
+        tot = sum(lvl_out[level].values()) - excl_per_level[level]
         row = "  ".join(
             ["%6d" % level] +
             ["%*s" % (col_w[c], outcome_fmt(lvl_out[level].get(c, 0), tot)) for c in cols] +
