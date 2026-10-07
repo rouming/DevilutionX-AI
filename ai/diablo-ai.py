@@ -960,6 +960,10 @@ def make_diablo_parser():
     log_stats_parser.add_argument(
         "--dungeon-level", default=None, dest="level_filter",
         help="Show per-level stats only for these levels: '1', '1,10', '1-10,16'")
+    log_stats_parser.add_argument(
+        "--exclude", default=None, metavar="EVENTS",
+        help="Comma-separated column abbreviations to exclude from outcome table "
+             "and success rate (e.g. 'retreat,death')")
 
     return incompatible_options, parser, train_ai_parser
 
