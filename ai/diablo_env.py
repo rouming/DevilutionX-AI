@@ -2321,6 +2321,18 @@ class DiabloEnv_ClearAllLevels_v25(DiabloEnv_ClearAllLevels_v17):
         return rewards, done, truncated
 
 
+class DiabloEnv_ClearAllLevels_v26(DiabloEnv_ClearAllLevels_v25):
+    """Like v25 but raises CollectItem and ActivateObject rewards from +0.08
+    to +0.15. Both are one-shot per episode (no farming risk); the higher
+    value brings them in line with KillMonster reward magnitude."""
+    ENV_VERSION = 26
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v25.REWARDS,
+        RewardEvent.ActivateObject: +0.15,
+        RewardEvent.CollectItem:    +0.15,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2390,6 +2402,8 @@ DIABLO_ENVS = [
     #   'entry_point': DiabloEnv_ClearAllLevels_v24 },
     { 'id': 'Diablo-ClearAllLevels-v25',
       'entry_point': DiabloEnv_ClearAllLevels_v25 },
+    { 'id': 'Diablo-ClearAllLevels-v26',
+      'entry_point': DiabloEnv_ClearAllLevels_v26 },
 
     # HRL Environment Classes
 
