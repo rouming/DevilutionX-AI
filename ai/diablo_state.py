@@ -731,6 +731,78 @@ def automap_frontier(d):
     return _automap_frontier_kernel(d, has_passage)
 
 @njit(cache=True)
+def _frontier_fill(d, explored_map, frontier_map, x0, x1, y0, y1):
+    """Recompute frontier_map for [x0,x1)x[y0,y1) from explored_map.
+    explored_map is model-viewport-clipped: only tiles the model has seen."""
+    W, H = explored_map.shape
+    for x in range(x0, x1):
+        for y in range(y0, y1):
+            if not explored_map[x, y] or is_wall(d, (x, y)):
+                frontier_map[x, y] = False
+                continue
+            is_frontier = False
+            for ddx, ddy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nx, ny = x + ddx, y + ddy
+                if not (0 <= nx < W and 0 <= ny < H) or not explored_map[nx, ny]:
+                    is_frontier = True
+                    break
+            frontier_map[x, y] = is_frontier
+
+
+@njit(cache=True)
+def init_frontier_map(d):
+    """Seed explored_map from full dFlags.Explored and build frontier_map.
+    Called at episode reset (including level revisit). The engine persists
+    dFlags.Explored per level, so the full copy correctly restores the model's
+    accumulated exploration. Assumes LOS = view_radius in normal training.
+    Returns (explored_map, frontier_map) as full-dungeon bool arrays (W, H)."""
+    W, H = dungeon_dim(d)
+    explored_map = np.zeros((W, H), dtype=np.bool_)
+    frontier_map = np.zeros((W, H), dtype=np.bool_)
+    explored = dx.DungeonFlag.Explored.value
+    for x in range(W):
+        for y in range(H):
+            if d.dFlags[x, y] & explored:
+                explored_map[x, y] = True
+    _frontier_fill(d, explored_map, frontier_map, 0, W, 0, H)
+    return explored_map, frontier_map
+
+
+@njit(cache=True)
+def update_frontier_map(d, explored_map, frontier_map, radius):
+    """Expand explored_map for the current view and patch frontier_map.
+    model-explored = dFlags.Explored AND within view radius: frontier stays
+    within the model's viewport regardless of the engine LOS radius."""
+    W, H = dungeon_dim(d)
+    px, py = player_position(d)
+    x0, x1 = max(0, px - radius), min(W, px + radius + 1)
+    y0, y1 = max(0, py - radius), min(H, py + radius + 1)
+    explored = dx.DungeonFlag.Explored.value
+    for x in range(x0, x1):
+        for y in range(y0, y1):
+            if d.dFlags[x, y] & explored:
+                explored_map[x, y] = True
+    _frontier_fill(d, explored_map, frontier_map, x0, x1, y0, y1)
+
+
+def frontier_local_view(frontier_map, d, radius):
+    """Crop global frontier_map to the local view centered on the player.
+    Returns bool array (view_w, view_h) matching get_environment output shape."""
+    env_rect = EnvRect(d, radius)
+    sx  = int(env_rect.srect.lt[0])
+    sy  = int(env_rect.srect.lt[1])
+    sw  = int(env_rect.srect.width)
+    sh  = int(env_rect.srect.height)
+    lx  = int(env_rect.drect.lt[0])
+    ly  = int(env_rect.drect.lt[1])
+    dw  = int(env_rect.drect.width)
+    dh  = int(env_rect.drect.height)
+    local = np.zeros((dw, dh), dtype=np.bool_)
+    local[lx:lx + sw, ly:ly + sh] = frontier_map[sx:sx + sw, sy:sy + sh]
+    return local
+
+
+@njit(cache=True)
 def to_trigger(d, pos):
     for trig in d.trigs[:d.numtrigs.value]:
         if trig.position.x == pos[0] and trig.position.y == pos[1]:
