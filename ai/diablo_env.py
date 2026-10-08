@@ -2333,6 +2333,91 @@ class DiabloEnv_ClearAllLevels_v26(DiabloEnv_ClearAllLevels_v25):
     }
 
 
+class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
+    """Like v26 but adds a frontier observation channel (bit 19) and replaces
+    the v25 retreat-fog termination with a fog-threat score.
+
+    Frontier channel: explored non-wall tile adjacent to unexplored territory,
+    clipped to the model's viewport. Gives the model persistent memory of where
+    exploration has not yet reached. Adds 1 env channel (19->20).
+
+    Fog-threat score: increments each step a newly explored tile contains a
+    monster; scales down proportionally when monsters are killed; resets when
+    no monsters are visible. Terminates when score >= RETREAT_SCORE_THRESHOLD.
+    v25 retreat check is skipped entirely (super(v25) in evaluate_step MRO)."""
+
+    ENV_VERSION = 27
+
+    RETREAT_SCORE_THRESHOLD = 4
+
+    def __init__(self, *args, **kwargs):
+        # Set before super().__init__() so _build_obs / evaluate_step are safe on first reset.
+        self._frontier_map    = None
+        self._explored_map    = None
+        self._retreat_score   = 0.0
+        self._threat_baseline = 0
+        super().__init__(*args, **kwargs)
+
+    @property
+    def nr_env_channels(self):
+        EnvFlag = diablo_state.EnvironmentFlag
+        return list(EnvFlag).index(EnvFlag.Frontier) + 1
+
+    def _get_scalars(self, d):
+        base = diablo_state.compute_scalars(d)
+        retreat_norm = min(self._retreat_score / self.RETREAT_SCORE_THRESHOLD, 1.0)
+        return np.append(base, np.float32(retreat_norm)).astype(np.float32)
+
+    def reset(self, **kwargs):
+        self._retreat_score   = 0.0
+        self._threat_baseline = 0
+        obs, info = super().reset(**kwargs)
+        d = self.game.state
+        self._explored_map, self._frontier_map = diablo_state.init_frontier_map(d)
+        goal_pos = self.goal_pos if self.used_goal is not None else None
+        env = diablo_state.get_environment(d, radius=self.view_radius, goal_pos=goal_pos)
+        obs = self._build_obs(d, env)
+        return obs, info
+
+    def evaluate_step(self, d, env, action):
+        old_explored = self._explored_map.copy()
+        diablo_state.update_frontier_map(d, self._explored_map, self._frontier_map, self.view_radius)
+
+        # Skip v25 in the MRO (super(v25,self) starts lookup after v25, landing on v17).
+        # v25 only adds the old retreat-fog counter which this class replaces entirely.
+        rewards, done, truncated = super(DiabloEnv_ClearAllLevels_v25, self).evaluate_step(d, env, action)
+
+        if not done and not truncated:
+            m_vis = diablo_state.count_visible_monsters(env)
+            newly_explored      = self._explored_map & ~old_explored
+            new_exp_local       = diablo_state.frontier_local_view(newly_explored, d, self.view_radius)
+            monster_flag        = diablo_state.EnvironmentFlag.Monster.value
+            new_monsters_in_fog = bool(np.any(new_exp_local & ((env & monster_flag) > 0)))
+
+            if new_monsters_in_fog:
+                self._retreat_score  += 1.0
+                self._threat_baseline = m_vis
+            elif m_vis == 0:
+                self._retreat_score   = 0.0
+                self._threat_baseline = 0
+            elif self._threat_baseline > 0 and m_vis < self._threat_baseline:
+                self._retreat_score  *= m_vis / self._threat_baseline
+                self._threat_baseline = m_vis
+
+            if self._retreat_score >= self.RETREAT_SCORE_THRESHOLD:
+                r = self.REWARDS[RewardEvent.RetreatedIntoFog]
+                print("Retreat into fog, R %.2f" % r, file=self.log)
+                return [r], True, False
+
+        return rewards, done, truncated
+
+    def _build_obs(self, d, env):
+        if self._frontier_map is not None:
+            local = diablo_state.frontier_local_view(self._frontier_map, d, self.view_radius)
+            env[local] |= diablo_state.EnvironmentFlag.Frontier.value
+        return super()._build_obs(d, env)
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2404,6 +2489,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v25 },
     { 'id': 'Diablo-ClearAllLevels-v26',
       'entry_point': DiabloEnv_ClearAllLevels_v26 },
+    { 'id': 'Diablo-ClearAllLevels-v27',
+      'entry_point': DiabloEnv_ClearAllLevels_v27 },
 
     # HRL Environment Classes
 

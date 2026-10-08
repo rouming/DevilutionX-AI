@@ -1080,6 +1080,7 @@ class EnvironmentFlag(enum.Enum):
     Interactable   = 1<<16
     Open           = 1<<17
     Goal           = 1<<18
+    Frontier       = 1<<19
 
 
 @njit(cache=True)

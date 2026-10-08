@@ -17,8 +17,9 @@ dict_path = "best-train-status.pt" if args.best_train else ("best-status.pt" if 
 pretrained_dict = torch.load(dict_path, map_location='cpu', weights_only=False)['model_state']
 
 # 2. Channel layout
-# v2 conv input: 19 env bit-planes (EnvironmentFlag bit positions 0..18)
-#                + 9 monster attribute channels (compute_monster_attrs, indices 19..27)
+# v2 conv input: 19 env bit-planes (EnvironmentFlag bit positions 0..18) for v17-v26
+#                20 env bit-planes (EnvironmentFlag bit positions 0..19) for v27+
+#                + 9 monster attribute channels (compute_monster_attrs, indices 19..27 or 20..28)
 ENV_CHANNEL_NAMES = [
     "Player",       # bit 0
     "Wall",         # bit 1
@@ -39,6 +40,7 @@ ENV_CHANNEL_NAMES = [
     "Interactable", # bit 16
     "Open",         # bit 17
     "Goal",         # bit 18
+    "Frontier",     # bit 19
 ]
 NR_ENV_CHANNELS = len(ENV_CHANNEL_NAMES)  # 19
 
