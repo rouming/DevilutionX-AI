@@ -1965,8 +1965,8 @@ def display_diablo_state(game, stdscr, events, envlog, view_radius):
     spell_sum = _spell_summary(d)
     active_flags = _active_flags(p)
 
-    ep, stk = int(game.agent_state.episode_steps), int(game.agent_state.stuck_steps)
-    env_str = "%d/%d" % (stk, ep) if ep or stk else "-/-"
+    ep, stk, fog = int(game.agent_state.ep_pct), int(game.agent_state.stk_pct), int(game.agent_state.fog_pct)
+    env_str = "%d%%/%d%%/%d%%" % (stk, ep, fog) if ep or stk or fog else "-%%/-%%/-%%"
     msg = "Ticks: %4d  Env: %s  Pos: %d:%d  HP: %3d%%  MP: %3d%%  Spl: %s  State: %s%s" % (
         game.ticks(d),
         env_str,

@@ -894,8 +894,8 @@ class DiabloEnv(gym.Env):
                 "true" if self.episode_success else "false",
                 self.steps_cnt, self.total_reward), file=self.log)
 
-        self.game.agent_state.episode_steps = self.steps_cnt
-        self.game.agent_state.stuck_steps   = self.steps_cnt - self.last_steps_cnt
+        self.game.agent_state.ep_pct  = min(self.steps_cnt * 100 // self.EPISODE_TIMEOUT, 100)
+        self.game.agent_state.stk_pct = min((self.steps_cnt - self.last_steps_cnt) * 100 // self.STUCK_TIMEOUT, 100)
 
         obss = self._build_obs(d, env)
         info = {"hierarchy/opt-changed": self._opt_changed(action),
@@ -2403,6 +2403,8 @@ class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
             elif self._threat_baseline > 0 and m_vis < self._threat_baseline:
                 self._retreat_score  *= m_vis / self._threat_baseline
                 self._threat_baseline = m_vis
+
+            self.game.agent_state.fog_pct = min(int(self._retreat_score * 100 / self.RETREAT_SCORE_THRESHOLD), 100)
 
             if self._retreat_score >= self.RETREAT_SCORE_THRESHOLD:
                 r = self.REWARDS[RewardEvent.RetreatedIntoFog]
