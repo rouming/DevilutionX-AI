@@ -712,6 +712,8 @@ struct GameplayOptions : OptionCategoryBase {
 	OptionEntryBoolean noPrimaryActionDoors;
 	/** @brief Force-identify all non-normal items on creation (unfair play for AI training) */
 	OptionEntryBoolean allItemsIdentified;
+	/** @brief Comma-separated list of ItemType:MiscId name pairs to keep on pickup; non-matching items silently destroyed while picking up from the floor. Empty = disabled. */
+	OptionEntryString invKeepFilter;
 };
 
 struct ControllerOptions : OptionCategoryBase {

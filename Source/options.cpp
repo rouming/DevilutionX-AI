@@ -949,6 +949,7 @@ GameplayOptions::GameplayOptions()
     , heroPotionsMax("Hero potions max", OptionEntryFlags::Invisible, "", "", 20)
     , noPrimaryActionDoors("Disable doors on primary action", OptionEntryFlags::Invisible, "", "", false)
     , allItemsIdentified("All items identified", OptionEntryFlags::Invisible, "", "", false)
+    , invKeepFilter("Inventory keep filter", OptionEntryFlags::Invisible, "", "", "")
 {
 }
 
@@ -1025,6 +1026,7 @@ std::vector<OptionEntryBase *> GameplayOptions::GetEntries()
 		&heroPotionsMax,
 		&noPrimaryActionDoors,
 		&allItemsIdentified,
+		&invKeepFilter,
 	};
 }
 

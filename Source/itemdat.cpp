@@ -615,6 +615,18 @@ void LoadItemAffixesDat(std::string_view filename, std::vector<PLStruct> &out)
 
 } // namespace
 
+int ItemTypeFromName(std::string_view name)
+{
+	auto r = ParseItemType(name);
+	return r ? static_cast<int>(*r) : -1;
+}
+
+int ItemMiscIdFromName(std::string_view name)
+{
+	auto r = ParseItemMiscId(name);
+	return r ? static_cast<int>(*r) : -1;
+}
+
 void LoadItemData()
 {
 	LoadItemDat();

@@ -1104,6 +1104,65 @@ int CreateGoldItemInInventorySlot(Player &player, int slotIndex, int value)
 	return value;
 }
 
+struct InvKeepFilter {
+	struct Entry { uint8_t itype; uint8_t imiscid; };
+	std::vector<Entry> entries;
+
+	bool active() const { return !entries.empty(); }
+
+	bool matches(const Item &item) const
+	{
+		auto t = static_cast<uint8_t>(static_cast<int>(item._itype));
+		auto m = static_cast<uint8_t>(static_cast<int>(item._iMiscId));
+		for (const Entry &e : entries) {
+			if (e.itype == t && e.imiscid == m)
+				return true;
+		}
+		return false;
+	}
+};
+
+// Parse one name-or-hex token. Returns -1 on failure.
+// nameParser is called first; if it returns -1, strtoul with base 0 is tried.
+static int ParseNameOrHex(const char *p, const char **end, int (*nameParser)(std::string_view))
+{
+	// Collect the token (up to ':', ',', whitespace, or end).
+	const char *q = p;
+	while (*q != '\0' && *q != ':' && *q != ',' && *q != ' ' && *q != '\t') q++;
+	int val = nameParser(std::string_view(p, q - p));
+	if (val != -1) { *end = q; return val; }
+	char *e;
+	unsigned long n = strtoul(p, &e, 0);
+	*end = e;
+	return (e != p) ? static_cast<int>(n) : -1;
+}
+
+// Parse "ItemType:MiscId, ..." pairs. Names (e.g. "Misc:FULLHEAL") or hex (e.g. "0x0:0x2").
+static InvKeepFilter ParseInvKeepFilter(const std::string &csv)
+{
+	InvKeepFilter f;
+	const char *p = csv.c_str();
+	while (*p != '\0') {
+		while (*p == ' ' || *p == '\t' || *p == ',') p++;
+		if (*p == '\0') break;
+		const char *end;
+		int itype = ParseNameOrHex(p, &end, ItemTypeFromName);
+		if (itype < 0 || *end != ':') { p = end; continue; }
+		p = end + 1;
+		int imiscid = ParseNameOrHex(p, &end, ItemMiscIdFromName);
+		if (imiscid >= 0)
+			f.entries.push_back({ static_cast<uint8_t>(itype), static_cast<uint8_t>(imiscid) });
+		p = end;
+	}
+	return f;
+}
+
+const InvKeepFilter &GetInvKeepFilter()
+{
+	static InvKeepFilter filter = ParseInvKeepFilter(*GetOptions().Gameplay.invKeepFilter);
+	return filter;
+}
+
 } // namespace
 
 void InvDrawSlotBack(const Surface &out, Point targetPosition, Size size, item_quality itemQuality)
@@ -1726,6 +1785,13 @@ void AutoGetItem(Player &player, Item *itemPointer, int ii)
 
 	if (dItem[item.position.x][item.position.y] == 0)
 		return;
+
+	// Silently destroy items not matching the keep filter (CollectItem reward still fires in Python).
+	const InvKeepFilter &filter = GetInvKeepFilter();
+	if (filter.active() && !filter.matches(item)) {
+		CleanupItems(ii);
+		return;
+	}
 
 	item._iCreateInfo &= ~CF_PREGEN;
 	CheckQuestItem(player, item);

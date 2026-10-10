@@ -300,6 +300,9 @@ enum class ItemType : int8_t {
 };
 
 std::string_view ItemTypeToString(ItemType itemType);
+// Returns -1 if name is unknown.
+int ItemTypeFromName(std::string_view name);
+int ItemMiscIdFromName(std::string_view name);
 
 enum unique_base_item : int8_t {
 	UITYPE_NONE,
