@@ -1957,6 +1957,7 @@ class DiabloGame:
                          1 if config.get("no-primary-action-doors") else 0,
                          all_items_identified=
                          1 if config.get("all-items-identified") else 0,
+                         inv_keep_filter=config.get("inv-keep-filter", ""),
                          hero_hp_min_pct=config.get("hero-hp-min-pct", 100),
                          hero_hp_max_pct=config.get("hero-hp-max-pct", 100),
                          hero_mana_min_pct=config.get("hero-mana-min-pct", 100),

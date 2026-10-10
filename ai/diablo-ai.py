@@ -597,6 +597,14 @@ def make_diablo_parser():
         formatter_class=IndentedHelpFormatter)
     # General game env parameters
     train_ai_parser.add_argument(
+        "--inv-keep-filter",
+        default="Misc:FULLHEAL,Misc:HEAL,Misc:MANA,Misc:FULLMANA,Misc:REJUV,Misc:FULLREJUV,Misc:SCROLL",
+        metavar="PAIRS",
+        help="Comma-separated ItemType:MiscId name pairs to keep on pickup; "
+             "non-matching items are silently destroyed after granting CollectItem reward. "
+             "Empty string disables the filter. "
+             "(default: all potions and scrolls)")
+    train_ai_parser.add_argument(
         "--log-to-stdout", action="store_true",
         help="Write logs to stdout instead of env.log.")
     train_ai_parser.add_argument(
@@ -3258,6 +3266,7 @@ def main():
         "no-auto-walk-on-seconday-action": True, # Changed by old environments
         "no-primary-action-doors": args.no_primary_action_doors,
         "all-items-identified": args.all_items_identified,
+        "inv-keep-filter": getattr(args, 'inv_keep_filter', ''),
         "view-radius": args.view_radius,
         "game-ticks-per-step": args.game_ticks_per_step,
         "step-mode": not args.real_time,

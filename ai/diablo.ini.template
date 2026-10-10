@@ -124,6 +124,7 @@ Char level up table={char_level_up_table}
 Char level up attrs={char_level_up_attrs}
 Char gear stats={char_gear_stats}
 Char gear combat={char_gear_combat}
+Inventory keep filter={inv_keep_filter}
 
 [Network]
 Port=6112
