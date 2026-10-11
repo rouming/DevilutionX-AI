@@ -2420,6 +2420,20 @@ class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
         return super()._build_obs(d, env)
 
 
+class DiabloEnv_ClearAllLevels_v28(DiabloEnv_ClearAllLevels_v27):
+    """Like v27 but retreat-into-fog penalty raised from -10 to -40.
+
+    At -10 the model rationally preferred retreat (half the -20 death penalty).
+    At -40 the ordering becomes Goal > Death > Retreat, removing the incentive."""
+
+    ENV_VERSION = 28
+
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v27.REWARDS,
+        RewardEvent.RetreatedIntoFog: -40.0,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2493,6 +2507,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v26 },
     { 'id': 'Diablo-ClearAllLevels-v27',
       'entry_point': DiabloEnv_ClearAllLevels_v27 },
+    { 'id': 'Diablo-ClearAllLevels-v28',
+      'entry_point': DiabloEnv_ClearAllLevels_v28 },
 
     # HRL Environment Classes
 
