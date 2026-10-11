@@ -2554,6 +2554,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         success_per_episode = utils.synthesize(
             [1 if s else 0 for s in logs["success_per_episode"]])
         success_rate = success_per_episode['mean']
+        n_ep = logs["num_episodes"]
+        raw_success_rate = np.mean([1 if s else 0 for s in logs["success_per_episode"][-n_ep:]]) if n_ep > 0 else float('nan')
         train_success_sum += success_rate
         train_success_count += 1
         r = np.mean(np.array(logs["return_per_episode"]), axis=0)
@@ -2576,8 +2578,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             for i, rr in enumerate(rreturn_per_episode):
                 header += [f"rreturn{i}_" + key for key in rr.keys()]
                 data += rr.values()
-            header += ["success_rate"]
-            data += [success_rate]
+            header += ["success_rate", "raw_success_rate", "num_episodes"]
+            data += [success_rate, raw_success_rate, n_ep]
             header += ["num_frames_" + key for key in num_frames_per_episode.keys()]
             data += num_frames_per_episode.values()
 
@@ -2600,7 +2602,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             bar_metrics = {"kl", "clip_frac"}
             txt_logger.info(
                 f"U {update} | F {_fmt_frames(num_frames)} | FPS {fps:04.0f} | D {_fmt_duration(duration)}"
-                f" | S {success_rate:.2f} | ∇ {grad:.3f}{grad_bar}")
+                f" | S {success_rate:.2f} | rS {raw_success_rate:.2f} | ep {n_ep} | ∇ {grad:.3f}{grad_bar}")
             for i in range(L):
                 rr = list(rreturn_per_episode[i].values())
                 mv_items = []

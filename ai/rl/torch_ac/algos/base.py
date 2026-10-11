@@ -312,6 +312,7 @@ class BaseAlgo(ABC):
             "reshaped_return_per_episode": self.log_reshaped_return[-keep:],
             "num_frames_per_episode": self.log_num_frames[-keep:],
             "success_per_episode": self.log_success[-keep:],
+            "num_episodes": self.log_done_counter,
             "num_frames": self.num_frames
         }
 
