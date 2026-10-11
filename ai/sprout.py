@@ -294,7 +294,7 @@ def make_cli_opts(parser, params, all_params=False, skip_params=None, params_ove
             if isinstance(default_val, bool):
                 opts.append(_bool_opt_string(meta, new_val))
             else:
-                opts.append(f"{meta['option_strings'][0]} {new_val}")
+                opts.append(f"{meta['option_strings'][0]} {shlex.quote(str(new_val))}")
 
         # Still output if params is required
         elif required:
@@ -302,7 +302,7 @@ def make_cli_opts(parser, params, all_params=False, skip_params=None, params_ove
                 if default_val:
                     opts.append(_bool_opt_string(meta, default_val))
             else:
-                opts.append(f"{meta['option_strings'][0]} {default_val}")
+                opts.append(f"{meta['option_strings'][0]} {shlex.quote(str(default_val))}")
 
         # Param exists in current code but was not stored: post-run addition.
         # Skip any caller-specified skip_params.
@@ -313,7 +313,7 @@ def make_cli_opts(parser, params, all_params=False, skip_params=None, params_ove
                 if default_val:
                     opts.append(_bool_opt_string(meta, default_val))
             elif default_val is not None:
-                opts.append(f"{meta['option_strings'][0]} {default_val}")
+                opts.append(f"{meta['option_strings'][0]} {shlex.quote(str(default_val))}")
 
     return [parser.prog] + opts + missing, new_params
 
