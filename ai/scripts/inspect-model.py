@@ -42,7 +42,7 @@ ENV_CHANNEL_NAMES = [
     "Goal",         # bit 18
     "Frontier",     # bit 19
 ]
-NR_ENV_CHANNELS = len(ENV_CHANNEL_NAMES)  # 19
+NR_ENV_CHANNELS = len(ENV_CHANNEL_NAMES)  # max; trimmed to model's actual count below
 
 MONSTER_ATTR_NAMES = [
     "hp_ratio",     # 19
@@ -124,10 +124,13 @@ biases  = pretrained_dict[bias_key] if bias_key in pretrained_dict else None
 print(f"--- Conv layer '{weight_key}' ---")
 print(f"Shape: {weights.shape}  (out_channels, in_channels, kH, kW)")
 
+# Actual env channel count = total input channels minus the 9 monster attr channels.
+NR_ENV_CHANNELS = weights.shape[1] - len(MONSTER_ATTR_NAMES)
+
 # 5. Env bit-plane channel stats
 hdr = f"\n{'idx':<5} {'name':<16} {'mean':>10} {'std':>10} {'rms':>10} {'min':>10} {'max':>10}"
 print(f"\n--- Env bit-plane channel stats (0..{NR_ENV_CHANNELS-1}) ---{hdr}")
-for idx, name in enumerate(ENV_CHANNEL_NAMES):
+for idx, name in enumerate(ENV_CHANNEL_NAMES[:NR_ENV_CHANNELS]):
     w = weights[:, idx, :, :]
     rms = w.pow(2).mean().sqrt().item()
     print(f"{idx:<5} {name:<16} {w.mean().item():>10.6f} {w.std().item():>10.6f} "
