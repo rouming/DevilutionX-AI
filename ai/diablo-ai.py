@@ -2362,9 +2362,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         eval_gameconfig['hero-potions-min'] = args.eval_hero_potions_at_start[0]
         eval_gameconfig['hero-potions-max'] = args.eval_hero_potions_at_start[1]
         eval_gameconfig['goal-far-bias']          = False
-        eval_gameconfig['eval-kill-threshold']    = args.eval_kill_threshold
-        eval_gameconfig['eval-max-steps-per-level'] = args.eval_max_steps_per_level
-        eval_gameconfig['eval-no-stuck-timeout']  = args.eval_no_stuck_timeout
+        eval_gameconfig['kill-threshold']    = args.eval_kill_threshold
+        eval_gameconfig['max-steps-per-level'] = args.eval_max_steps_per_level
+        eval_gameconfig['no-stuck-timeout']  = args.eval_no_stuck_timeout
         eval_offset = world_size * args.env_runners
         for i in range(args.eval_env_runners):
             env_config = copy.deepcopy(eval_gameconfig)
@@ -3061,8 +3061,9 @@ def agent_ai(args, gameconfig):
     # Create one env instance to obtain obs/action space metadata and a game
     env_config = copy.deepcopy(gameconfig)
     env_config['index'] = 0
-    env_config['eval-kill-threshold']      = args.kill_threshold
-    env_config['eval-max-steps-per-level'] = args.max_steps_per_level
+    env_config['kill-threshold']      = args.kill_threshold
+    env_config['max-steps-per-level'] = args.max_steps_per_level
+    env_config['agent-mode']               = True
     EnvClass = utils.get_env_class(args.env)
     EnvClass.tune_config(env_config)
     game = diablo_state.DiabloGame.run_or_attach(env_config)
@@ -3110,7 +3111,7 @@ def agent_ai(args, gameconfig):
 
     def make_supervisor():
         return AgentAI(
-            game, model_runners,
+            game, model_runners, env,
             view_radius=gameconfig['view-radius'],
             kill_threshold=args.kill_threshold,
             repair_threshold=args.repair_threshold,

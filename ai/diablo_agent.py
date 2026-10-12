@@ -817,8 +817,8 @@ def run_agent_loop(seeds, env, make_supervisor):
     SEP = "=" * 40
     for seed in seeds:
         print(f"{SEP}\n  seed {seed}\n{SEP}", flush=True)
-        env.reset(seed=seed)
-        make_supervisor().run()
+        obs, _ = env.reset(seed=seed)
+        make_supervisor().run(obs)
         print(f"{SEP}\n  seed {seed} done\n{SEP}", flush=True)
 
 
@@ -878,7 +878,7 @@ class AgentAI:
         DEAD     = "dead"
         DONE     = "done"
 
-    def __init__(self, game, model_runners, view_radius=10,
+    def __init__(self, game, model_runners, env, view_radius=10,
                  kill_threshold=0.5, repair_threshold=0.25,
                  max_steps_per_level=3000, no_gear_management=False,
                  keep_mana_potions=False, use_two_hand_weapon=False,
@@ -888,6 +888,8 @@ class AgentAI:
         # model_runners: dict mapping dungeon level (1-16) -> ModelRunner.
         # All 16 entries must be present; multiple levels may share the same object.
         self._model_runners = model_runners
+        self._env           = env   # gym env; used for step() to build version-correct obs
+        self._obs           = None  # latest obs from env.step / env.reset
         self.model          = None  # set on first _on_level_change
         if stat_strategy in AgentAI._STAT_STRATEGIES:
             self._stat_strategy = AgentAI._STAT_STRATEGIES[stat_strategy]
@@ -977,7 +979,10 @@ class AgentAI:
     # Public
     # -----------------------------------------------------------------------
 
-    def run(self, max_steps=None):
+    def run(self, initial_obs, max_steps=None):
+        d = self.game.safe_state
+        self._apply_masked_tiles(d, initial_obs["env"])
+        self._obs = initial_obs
         step = 0
         while self.state not in (AgentAI.State.DEAD, AgentAI.State.DONE):
             if max_steps is not None and step >= max_steps:
@@ -1191,6 +1196,8 @@ class AgentAI:
         if self.model is not None:
             self.model.reset()
 
+        self._env.unwrapped.reinit(d)
+
         if new_level == 0:
             self.state = AgentAI.State.TOWN
             print(f"agent {self._tick_count}: in town", file=self.log)
@@ -1227,22 +1234,22 @@ class AgentAI:
     def _tick_town(self, d):
         trig = diablo_state.find_trigger(d, dx.interface_mode.WM_DIABNEXTLVL)
         if trig is None:
-            self._submit(diablo_env.ActionEnum.Stand.value)
+            self._step(diablo_env.ActionEnum.Stand.value)
             return
 
         goal = (int(trig.position.x), int(trig.position.y))
         player = diablo_state.player_position(d)
 
         if player == goal:
-            self._submit(diablo_env.ActionEnum.Stand.value)
+            self._step(diablo_env.ActionEnum.Stand.value)
             return
 
         if self._pathfinder._goal != goal:
             self._pathfinder.set_goal(goal)
 
         action = self._pathfinder.next_action()
-        self._submit(action if action is not None
-                     else diablo_env.ActionEnum.Stand.value)
+        self._step(action if action is not None
+                                 else diablo_env.ActionEnum.Stand.value)
 
     def _tick_dungeon(self, d):
         self.level_steps += 1
@@ -1279,8 +1286,7 @@ class AgentAI:
             self.state = AgentAI.State.PATHFIND
             return
 
-        obs    = self._build_obs(d)
-        action = self.model.act(obs)
+        action = self.model.act(self._obs)
         # Hard-block any walk action that would land on a return trigger.
         blocked = self._return_triggers.get(self.cur_level, frozenset())
         if blocked:
@@ -1289,14 +1295,14 @@ class AgentAI:
                 px, py = diablo_state.player_position(d)
                 if (px + delta[0], py + delta[1]) in blocked:
                     action = diablo_env.ActionEnum.Stand.value
-        self._submit(action)
+        self._step(action)
 
     def _tick_pathfind(self, d):
         player = diablo_state.player_position(d)
 
         if player == self.stairs_pos:
             # Stepped on stairs; level change will be caught next tick
-            self._submit(diablo_env.ActionEnum.Stand.value)
+            self._step(diablo_env.ActionEnum.Stand.value)
             return
 
         # If last tick pressed X for an item and item is still there, give up
@@ -1310,7 +1316,7 @@ class AgentAI:
 
         # Attack any adjacent monster before moving
         if _monster_adjacent(d, player):
-            self._submit(diablo_env.ActionEnum.PrimaryAction.value)
+            self._step(diablo_env.ActionEnum.PrimaryAction.value)
             return
 
         action = self._pathfinder.next_action()
@@ -1328,7 +1334,7 @@ class AgentAI:
                       file=self.log)
                 self._pathfind_stall_logged = now
                 self.state = AgentAI.State.DONE
-            self._submit(diablo_env.ActionEnum.Stand.value)
+            self._step(diablo_env.ActionEnum.Stand.value)
             return
 
         # Track item pickup attempts to detect failure next tick
@@ -1337,7 +1343,7 @@ class AgentAI:
             if len(path) >= 2 and self._tile_has_item(d, path[1]):
                 self._pending_item_at = (self.cur_level, path[1])
 
-        self._submit(action)
+        self._step(action)
 
     # -----------------------------------------------------------------------
     # Helpers
@@ -1402,38 +1408,16 @@ class AgentAI:
         px, py = diablo_state.player_position(d)
         _apply_masked_tiles(self._masked_tiles, int(d.currlevel.value), env, px, py, self.view_radius)
 
-    def _build_obs(self, d):
-        env = diablo_state.get_environment(d, radius=self.view_radius)
-        self._apply_masked_tiles(d, env)
-        scalars = diablo_state.compute_scalars(d)
-        max_level  = max(int(d.max_monster_level.value),  1)
-        max_walk   = max(int(d.max_walk_frames.value),    1)
-        max_attack = max(int(d.max_attack_frames.value),  1)
-        monster_attrs = diablo_state.compute_monster_attrs(
-            d, self.view_radius, max_level, max_walk, max_attack,
-            diablo_state.ranged_ai_ids_array())
-        obs = {"env": env, "scalars": scalars, "monster_attrs": monster_attrs}
-        if getattr(self.model.acmodel, 'has_automap', False):
-            obs["automap"] = diablo_env.get_automap_obs(d)
-        return obs
-
-    def _submit(self, action):
-        RE = ring.RingEntryType
-        ae = diablo_env.ActionEnum(int(action))
-        data = (0, 0)
-        if ae == diablo_env.ActionEnum.RestoreHealth:
-            slot = self.game.find_restore_item(diablo_env._RESTORE_HEALTH_CANDIDATES)
-            key = RE.RING_ENTRY_KEY_INV_USE_ITEM if slot >= 0 else RE.RING_ENTRY_KEY_NOOP
-            data = (slot, 0) if slot >= 0 else (0, 0)
-        elif ae == diablo_env.ActionEnum.RestoreMana:
-            slot = self.game.find_restore_item(diablo_env._RESTORE_MANA_CANDIDATES)
-            key = RE.RING_ENTRY_KEY_INV_USE_ITEM if slot >= 0 else RE.RING_ENTRY_KEY_NOOP
-            data = (slot, 0) if slot >= 0 else (0, 0)
-        elif (spell := diablo_env._ACTION_TO_SPELL.get(ae)) is not None:
-            key, data = RE.RING_ENTRY_KEY_CAST_SPELL, (int(spell.value), 0)
-        else:
-            key = diablo_env.DiabloEnv.action_to_key(action)
-        self.game.submit_key(key | RE.RING_ENTRY_F_SINGLE_TICK_PRESS, data=data)
+    def _step(self, action):
+        """Submit action via env (updates per-step tracking such as frontier map),
+        then apply masked tiles to obs["env"] in-place so the model sees the
+        correct version-specific channels with supervisor masking applied.
+        done/truncated from env.step() are intentionally ignored: the agent
+        has its own termination logic (kill threshold, step budget, death)."""
+        obs, *_ = self._env.step(np.array([action]))
+        d = self.game.safe_state
+        self._apply_masked_tiles(d, obs["env"])
+        self._obs = obs
 
     def _assign_stat_points(self, d):
         pts = int(d.player._pStatPts)
