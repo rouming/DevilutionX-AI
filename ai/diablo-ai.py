@@ -23,6 +23,9 @@ import subprocess
 import sys
 import time
 
+# Flush stdout after every newline so output is visible immediately when piped.
+sys.stdout.reconfigure(line_buffering=True)
+
 import numpy as np
 import procutils
 import sprout
