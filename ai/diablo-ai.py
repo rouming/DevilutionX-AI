@@ -3054,6 +3054,8 @@ def agent_ai(args, gameconfig):
     from rl.hrl_model import HRLACModel
     from rl.utils import device
 
+    print("{}\n".format(" ".join(sys.argv)))
+    print("{}\n".format(args))
     print(f"Device: {device}\n")
 
     # Create one env instance to obtain obs/action space metadata and a game
