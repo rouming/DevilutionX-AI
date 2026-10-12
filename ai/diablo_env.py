@@ -285,9 +285,10 @@ class DiabloEnv(gym.Env):
         # kill_threshold > 0: succeed when killed/total >= threshold.
         # max_steps_per_level > 0: succeed when steps reach the limit (not failure).
         # no_stuck_timeout: disable stuck-timeout when no goal placement is active.
-        self._kill_threshold    = self.config.get('eval-kill-threshold', 0.0)
-        self._max_steps_per_level = self.config.get('eval-max-steps-per-level', 0)
-        self._no_stuck_timeout  = self.config.get('eval-no-stuck-timeout', False)
+        self._kill_threshold      = self.config.get('kill-threshold', 0.0)
+        self._max_steps_per_level = self.config.get('max-steps-per-level', 0)
+        self._no_stuck_timeout    = self.config.get('no-stuck-timeout', False)
+        self._agent_mode          = self.config.get('agent-mode', False)
         ticks_scale = 10 / self.config.get('game-ticks-per-step', 10)
         self.EPISODE_TIMEOUT = int(self.__class__.EPISODE_TIMEOUT * ticks_scale)
         self.STUCK_TIMEOUT   = int(self.__class__.STUCK_TIMEOUT   * ticks_scale)
@@ -562,7 +563,7 @@ class DiabloEnv(gym.Env):
 
         d = self.game.safe_state
 
-        if self._no_goal_placement():
+        if self._no_goal_placement() or self._agent_mode:
             self.used_goal    = None
             self.goal_pos     = (-1, -1)
             self.regions_doors  = {}
@@ -632,6 +633,8 @@ class DiabloEnv(gym.Env):
         return self.steps_cnt >= self.EPISODE_TIMEOUT
 
     def is_agent_stuck(self, d, was_exploring):
+        if self._agent_mode:
+            return False
         if self.is_agent_timedout():
             return True
         if self._no_stuck_timeout:
@@ -1432,6 +1435,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
     def is_agent_stuck(self, d, made_progress):
         """Override: drop the position-based counter reset.
         Counter resets on combat/item progress (made_progress)."""
+        if self._agent_mode:
+            return False
         if self.is_agent_timedout():
             return True
         if self._no_stuck_timeout:
@@ -1499,7 +1504,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
             done = True
             self.episode_success = True
             print("Goal, R %.2f" % reward, file=self.log)
-        elif self._no_goal_placement():
+        elif self._no_goal_placement() and not self._agent_mode:
             killed = self.initial_monsters_cnt - monsters_cnt
             kill_success = (self._kill_threshold > 0 and
                             self.initial_monsters_cnt > 0 and
@@ -2319,7 +2324,9 @@ class DiabloEnv_ClearAllLevels_v25(DiabloEnv_ClearAllLevels_v17):
             elif m_vis == 0:
                 self._retreat_fog_count = 0
 
-            if self._retreat_fog_count >= self.RETREAT_FOG_THRESHOLD:
+            if self._agent_mode:
+                pass
+            elif self._retreat_fog_count >= self.RETREAT_FOG_THRESHOLD:
                 r = self.REWARDS[RewardEvent.RetreatedIntoFog]
                 print("Retreat into fog, R %.2f" % r, file=self.log)
                 return [r], True, False
@@ -2407,7 +2414,9 @@ class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
 
             self.game.agent_state.fog_pct = min(int(self._retreat_score * 100 / self.RETREAT_SCORE_THRESHOLD), 100)
 
-            if self._retreat_score >= self.RETREAT_SCORE_THRESHOLD:
+            if self._agent_mode:
+                pass
+            elif self._retreat_score >= self.RETREAT_SCORE_THRESHOLD:
                 r = self.REWARDS[RewardEvent.RetreatedIntoFog]
                 print("Retreat into fog, R %.2f" % r, file=self.log)
                 return [r], True, False
