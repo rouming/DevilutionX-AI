@@ -583,39 +583,44 @@ class DiabloEnv(gym.Env):
         env = diablo_state.get_environment(d, radius=self.view_radius,
                                            goal_pos=goal_pos)
 
-        obj_cnt = diablo_state.count_active_objects(d)
-        closed_doors_ids = diablo_state.get_closed_doors_ids(d)
-        items_cnt = diablo_state.count_active_items(d)
-        monsters_cnt = diablo_state.count_active_monsters(d)
-        mon_total_hp = diablo_state.count_active_monsters_total_hp(d)
-        explored_cnt = diablo_state.count_explored_tiles(d)
-        hp = d.player._pHitPoints
-        pos = diablo_state.player_position(d)
-
-        self.prev_obj_cnt = obj_cnt
-        self.prev_closed_doors_ids = closed_doors_ids
-        self.opened_doors_ids = []
-        self.prev_m_vis = 0
-        self.prev_items_cnt = items_cnt
-        self.prev_monsters_cnt    = monsters_cnt
-        self.initial_monsters_cnt = monsters_cnt
-        self.prev_mon_total_hp = mon_total_hp
-        self.prev_explored_cnt = explored_cnt
-        self.prev_hp = hp
-        self.total_reward = 0.0
-        self.exploration_reward = 0.0
-        self.episode_success = False
-        self.hist_player_pos = collections.deque([pos], maxlen=3)
-        self.last_player_pos = pos
-        self.last_steps_cnt = 0
-        self.steps_cnt = 0
-
-        # Starting dungeon level
-        self.start_dungeon_level = d.player.plrlevel
+        self.reinit(d)
 
         obss = self._build_obs(d, env)
         info = {"env-counters": (self.resets_cnt, self.steps_cnt)}
         return obss, info
+
+    def reinit(self, d):
+        """Initialize per-level tracking state from the current game state d.
+
+        Called by reset() after the game starts, and by the agent on level
+        change to refresh tracking without restarting the game."""
+        obj_cnt          = diablo_state.count_active_objects(d)
+        closed_doors_ids = diablo_state.get_closed_doors_ids(d)
+        items_cnt        = diablo_state.count_active_items(d)
+        monsters_cnt     = diablo_state.count_active_monsters(d)
+        mon_total_hp     = diablo_state.count_active_monsters_total_hp(d)
+        explored_cnt     = diablo_state.count_explored_tiles(d)
+        hp               = d.player._pHitPoints
+        pos              = diablo_state.player_position(d)
+
+        self.prev_obj_cnt          = obj_cnt
+        self.prev_closed_doors_ids = closed_doors_ids
+        self.opened_doors_ids      = []
+        self.prev_m_vis            = 0
+        self.prev_items_cnt        = items_cnt
+        self.prev_monsters_cnt     = monsters_cnt
+        self.initial_monsters_cnt  = monsters_cnt
+        self.prev_mon_total_hp     = mon_total_hp
+        self.prev_explored_cnt     = explored_cnt
+        self.prev_hp               = hp
+        self.total_reward          = 0.0
+        self.exploration_reward    = 0.0
+        self.episode_success       = False
+        self.hist_player_pos       = collections.deque([pos], maxlen=3)
+        self.last_player_pos       = pos
+        self.last_steps_cnt        = 0
+        self.steps_cnt             = 0
+        self.start_dungeon_level   = d.player.plrlevel
 
     def _no_goal_placement(self):
         return self._kill_threshold > 0 or self._max_steps_per_level > 0
@@ -1438,17 +1443,18 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         return self.steps_cnt - self.last_steps_cnt >= self.STUCK_TIMEOUT
 
     def reset(self, *, seed=None, options=None):
-        obs, info = super().reset(seed=seed, options=options)
-        d = self.game.state
-        self.prev_mana = int(d.player._pMana)
+        return super().reset(seed=seed, options=options)
+
+    def reinit(self, d):
+        super().reinit(d)
+        self.prev_mana        = int(d.player._pMana)
         self.prev_mana_shield = bool(d.player.pManaShield)
-        self.prev_pmode = int(d.player._pmode)
-        self.prev_hp_pots = self._hp_pot_sum(d)
-        self.prev_mana_pots = self._mana_pot_sum(d)
-        self.v2_spells_used = set()
-        self.prev_mon_hp = diablo_state.alloc_monster_hp(d)
+        self.prev_pmode       = int(d.player._pmode)
+        self.prev_hp_pots     = self._hp_pot_sum(d)
+        self.prev_mana_pots   = self._mana_pot_sum(d)
+        self.v2_spells_used   = set()
+        self.prev_mon_hp      = diablo_state.alloc_monster_hp(d)
         diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
-        return obs, info
 
     def evaluate_step(self, d, env, action):
         R                = self.REWARDS
@@ -2289,9 +2295,9 @@ class DiabloEnv_ClearAllLevels_v25(DiabloEnv_ClearAllLevels_v17):
         self._retreat_fog_count = 0
         super().__init__(*args, **kwargs)
 
-    def reset(self, **kwargs):
+    def reinit(self, d):
         self._retreat_fog_count = 0
-        return super().reset(**kwargs)
+        super().reinit(d)
 
     def _get_scalars(self, d):
         base = diablo_state.compute_scalars(d)
@@ -2368,16 +2374,11 @@ class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
         retreat_norm = min(self._retreat_score / self.RETREAT_SCORE_THRESHOLD, 1.0)
         return np.append(base, np.float32(retreat_norm)).astype(np.float32)
 
-    def reset(self, **kwargs):
+    def reinit(self, d):
         self._retreat_score   = 0.0
         self._threat_baseline = 0
-        obs, info = super().reset(**kwargs)
-        d = self.game.state
         self._explored_map, self._frontier_map = diablo_state.init_frontier_map(d)
-        goal_pos = self.goal_pos if self.used_goal is not None else None
-        env = diablo_state.get_environment(d, radius=self.view_radius, goal_pos=goal_pos)
-        obs = self._build_obs(d, env)
-        return obs, info
+        super().reinit(d)
 
     def evaluate_step(self, d, env, action):
         old_explored = self._explored_map.copy()
