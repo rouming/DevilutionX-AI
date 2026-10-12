@@ -3078,9 +3078,11 @@ def agent_ai(args, gameconfig):
 
     obs_space, preprocess_obss = utils.get_obss_preprocessor(obs_space)
 
-    # Build {dungeon_level: ModelRunner}.  Multiple levels may share one runner
-    # object when they map to the same model name.
-    level_to_name   = AgentAI.parse_model_spec(args.model)
+    # Build {dungeon_level: ModelRunner} and {dungeon_level: gym.Env}.
+    # Multiple levels may share one runner or env when they map to the same name/key.
+    level_to_spec   = AgentAI.parse_model_spec(args.model)
+    level_to_name   = {lvl: spec[0] for lvl, spec in level_to_spec.items()}
+    level_to_env_key = {lvl: spec[1] or args.env for lvl, spec in level_to_spec.items()}
     unique_names    = dict.fromkeys(level_to_name.values())  # preserves order, dedupes
     name_to_runner  = {}
     for model_name in unique_names:
@@ -3112,9 +3114,20 @@ def agent_ai(args, gameconfig):
 
     model_runners = {lvl: name_to_runner[name] for lvl, name in level_to_name.items()}
 
+    # Build {dungeon_level: gym.Env}; reuse the already-created env for args.env.
+    unique_env_keys = dict.fromkeys(level_to_env_key.values())
+    env_instances = {}
+    for env_key in unique_env_keys:
+        if env_key == args.env:
+            env_instances[env_key] = env
+        else:
+            env_instances[env_key] = utils.make_env(env_key, env_config, game)
+            print(f"Created env: {env_key}")
+    envs = {lvl: env_instances[ek] for lvl, ek in level_to_env_key.items()}
+
     def make_supervisor():
         return AgentAI(
-            game, model_runners, env,
+            game, model_runners, envs,
             view_radius=gameconfig['view-radius'],
             kill_threshold=args.kill_threshold,
             repair_threshold=args.repair_threshold,

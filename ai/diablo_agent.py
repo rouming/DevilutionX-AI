@@ -878,7 +878,7 @@ class AgentAI:
         DEAD     = "dead"
         DONE     = "done"
 
-    def __init__(self, game, model_runners, env, view_radius=10,
+    def __init__(self, game, model_runners, envs, view_radius=10,
                  kill_threshold=0.5, repair_threshold=0.25,
                  max_steps_per_level=3000, no_gear_management=False,
                  keep_mana_potions=False, use_two_hand_weapon=False,
@@ -888,7 +888,10 @@ class AgentAI:
         # model_runners: dict mapping dungeon level (1-16) -> ModelRunner.
         # All 16 entries must be present; multiple levels may share the same object.
         self._model_runners = model_runners
-        self._env           = env   # gym env; used for step() to build version-correct obs
+        # envs: dict mapping dungeon level (1-16) -> gym.Env.
+        # self._env is updated on each level change; None until first _on_level_change.
+        self._envs          = envs
+        self._env           = None
         self._obs           = None  # latest obs from env.step / env.reset
         self.model          = None  # set on first _on_level_change
         if stat_strategy in AgentAI._STAT_STRATEGIES:
@@ -1196,6 +1199,7 @@ class AgentAI:
         if self.model is not None:
             self.model.reset()
 
+        self._env = self._envs.get(new_level, self._envs[min(self._envs)])
         self._env.unwrapped.reinit(d)
 
         if new_level == 0:
@@ -1539,7 +1543,7 @@ class AgentAI:
           - If every range maps to the same model, reject: use a plain name instead.
         """
         if '=' not in s:
-            return s   # plain model name, valid as-is
+            return s   # plain model name (with optional @env), valid as-is
         covered = set()
         models  = []
         for entry in s.split(','):
@@ -1548,6 +1552,13 @@ class AgentAI:
             lvl_part, model_name = entry.split('=', 1)
             lvl_part   = lvl_part.strip()
             model_name = model_name.strip()
+            if '@' in model_name:
+                model_part, env_part = model_name.split('@', 1)
+                if not model_part:
+                    raise ValueError("model-spec: empty model name before '@' in %r" % entry)
+                if not env_part:
+                    raise ValueError("model-spec: empty env key after '@' in %r" % entry)
+                model_name = model_part
             if not model_name:
                 raise ValueError("model-spec: empty model name in segment %r" % entry)
             try:
@@ -1583,17 +1594,25 @@ class AgentAI:
 
     @staticmethod
     def parse_model_spec(s):
-        """Parse a validated model spec into a dict {dungeon_level: model_name}.
+        """Parse a validated model spec into a dict {dungeon_level: (model_name, env_key)}.
 
+        env_key is None when no '@env' suffix is present; the caller supplies a default.
         Plain name (no '=') maps to all 16 levels.
         """
+        def _split_model_env(token):
+            if '@' in token:
+                m, e = token.split('@', 1)
+                return m.strip(), e.strip()
+            return token.strip(), None
+
         if '=' not in s:
-            return {lvl: s for lvl in range(1, 17)}
+            model_name, env_key = _split_model_env(s)
+            return {lvl: (model_name, env_key) for lvl in range(1, 17)}
         result = {}
         for entry in s.split(','):
-            lvl_part, model_name = entry.split('=', 1)
+            lvl_part, rest = entry.split('=', 1)
             lvl_part   = lvl_part.strip()
-            model_name = model_name.strip()
+            model_name, env_key = _split_model_env(rest)
             if '-' in lvl_part:
                 a, b = lvl_part.split('-', 1)
                 lo = int(a)
@@ -1601,7 +1620,7 @@ class AgentAI:
             else:
                 lo = hi = int(lvl_part)
             for lvl in range(lo, hi + 1):
-                result[lvl] = model_name
+                result[lvl] = (model_name, env_key)
         return result
 
     @staticmethod
