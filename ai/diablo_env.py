@@ -623,6 +623,70 @@ class DiabloEnv(gym.Env):
         self.steps_cnt             = 0
         self.start_dungeon_level   = d.player.plrlevel
 
+    def state_dict(self):
+        """Return serializable snapshot of all mutable per-episode state."""
+        return {
+            # counters
+            'seed':                  self.seed,
+            'resets_cnt':            self.resets_cnt,
+            'auto_reset_counter':    self.auto_reset_counter,
+            'steps_cnt':             self.steps_cnt,
+            # reinit() baselines
+            'prev_obj_cnt':          self.prev_obj_cnt,
+            'prev_closed_doors_ids': list(self.prev_closed_doors_ids),
+            'opened_doors_ids':      list(self.opened_doors_ids),
+            'prev_m_vis':            self.prev_m_vis,
+            'prev_items_cnt':        self.prev_items_cnt,
+            'prev_monsters_cnt':     self.prev_monsters_cnt,
+            'initial_monsters_cnt':  self.initial_monsters_cnt,
+            'prev_mon_total_hp':     self.prev_mon_total_hp,
+            'prev_explored_cnt':     self.prev_explored_cnt,
+            'prev_hp':               self.prev_hp,
+            'total_reward':          self.total_reward,
+            'exploration_reward':    self.exploration_reward,
+            'episode_success':       self.episode_success,
+            'hist_player_pos':       list(self.hist_player_pos),
+            'last_player_pos':       self.last_player_pos,
+            'last_steps_cnt':        self.last_steps_cnt,
+            'start_dungeon_level':   self.start_dungeon_level,
+            # reset() goal/map state
+            'used_goal':             self.used_goal,
+            'goal_pos':              self.goal_pos,
+            'regions_doors':         self.regions_doors,
+            'labeled_regions':       self.labeled_regions,
+            'regions_path':          list(self.regions_path),
+        }
+
+    def load_state_dict(self, sd):
+        """Restore all mutable per-episode state from a state dict."""
+        self.seed               = sd['seed']
+        self.resets_cnt         = sd['resets_cnt']
+        self.auto_reset_counter = sd['auto_reset_counter']
+        self.steps_cnt          = sd['steps_cnt']
+        self.prev_obj_cnt          = sd.get('prev_obj_cnt', 0)
+        self.prev_closed_doors_ids = sd.get('prev_closed_doors_ids', [])
+        self.opened_doors_ids      = sd.get('opened_doors_ids', [])
+        self.prev_m_vis            = sd.get('prev_m_vis', 0)
+        self.prev_items_cnt        = sd.get('prev_items_cnt', 0)
+        self.prev_monsters_cnt     = sd.get('prev_monsters_cnt', 0)
+        self.initial_monsters_cnt  = sd.get('initial_monsters_cnt', 0)
+        self.prev_mon_total_hp     = sd.get('prev_mon_total_hp', 0)
+        self.prev_explored_cnt     = sd.get('prev_explored_cnt', 0)
+        self.prev_hp               = sd.get('prev_hp', 0)
+        self.total_reward          = sd.get('total_reward', 0.0)
+        self.exploration_reward    = sd.get('exploration_reward', 0.0)
+        self.episode_success       = sd.get('episode_success', False)
+        hist = sd.get('hist_player_pos', [(0, 0)])
+        self.hist_player_pos       = collections.deque(hist, maxlen=3)
+        self.last_player_pos       = sd.get('last_player_pos', (0, 0))
+        self.last_steps_cnt        = sd.get('last_steps_cnt', 0)
+        self.start_dungeon_level   = sd.get('start_dungeon_level', 1)
+        self.used_goal             = sd.get('used_goal', None)
+        self.goal_pos              = sd.get('goal_pos', (-1, -1))
+        self.regions_doors         = sd.get('regions_doors', {})
+        self.labeled_regions       = sd.get('labeled_regions', None)
+        self.regions_path          = sd.get('regions_path', [])
+
     def _no_goal_placement(self):
         return self._kill_threshold > 0 or self._max_steps_per_level > 0
 
@@ -1460,6 +1524,29 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
         self.v2_spells_used   = set()
         self.prev_mon_hp      = diablo_state.alloc_monster_hp(d)
         diablo_state.snapshot_monster_hp(d, self.prev_mon_hp)
+
+    def state_dict(self):
+        sd = super().state_dict()
+        sd.update({
+            'prev_mana':        self.prev_mana,
+            'prev_mana_shield': self.prev_mana_shield,
+            'prev_pmode':       self.prev_pmode,
+            'prev_hp_pots':     self.prev_hp_pots,
+            'prev_mana_pots':   self.prev_mana_pots,
+            'v2_spells_used':   list(self.v2_spells_used),
+            'prev_mon_hp':      self.prev_mon_hp,
+        })
+        return sd
+
+    def load_state_dict(self, sd):
+        super().load_state_dict(sd)
+        self.prev_mana        = sd.get('prev_mana', 0)
+        self.prev_mana_shield = sd.get('prev_mana_shield', False)
+        self.prev_pmode       = sd.get('prev_pmode', 0)
+        self.prev_hp_pots     = sd.get('prev_hp_pots', 0)
+        self.prev_mana_pots   = sd.get('prev_mana_pots', 0)
+        self.v2_spells_used   = set(sd.get('v2_spells_used', []))
+        self.prev_mon_hp      = sd.get('prev_mon_hp', None)
 
     def evaluate_step(self, d, env, action):
         R                = self.REWARDS
@@ -2304,6 +2391,15 @@ class DiabloEnv_ClearAllLevels_v25(DiabloEnv_ClearAllLevels_v17):
         self._retreat_fog_count = 0
         super().reinit(d)
 
+    def state_dict(self):
+        sd = super().state_dict()
+        sd['_retreat_fog_count'] = self._retreat_fog_count
+        return sd
+
+    def load_state_dict(self, sd):
+        super().load_state_dict(sd)
+        self._retreat_fog_count = sd.get('_retreat_fog_count', 0)
+
     def _get_scalars(self, d):
         base = diablo_state.compute_scalars(d)
         retreat_norm = min(self._retreat_fog_count / self.RETREAT_FOG_THRESHOLD, 1.0)
@@ -2386,6 +2482,23 @@ class DiabloEnv_ClearAllLevels_v27(DiabloEnv_ClearAllLevels_v26):
         self._threat_baseline = 0
         self._explored_map, self._frontier_map = diablo_state.init_frontier_map(d)
         super().reinit(d)
+
+    def state_dict(self):
+        sd = super().state_dict()
+        sd.update({
+            '_retreat_score':   self._retreat_score,
+            '_threat_baseline': self._threat_baseline,
+            '_explored_map':    self._explored_map,
+            '_frontier_map':    self._frontier_map,
+        })
+        return sd
+
+    def load_state_dict(self, sd):
+        super().load_state_dict(sd)
+        self._retreat_score   = sd.get('_retreat_score', 0.0)
+        self._threat_baseline = sd.get('_threat_baseline', 0)
+        self._explored_map    = sd.get('_explored_map', None)
+        self._frontier_map    = sd.get('_frontier_map', None)
 
     def evaluate_step(self, d, env, action):
         old_explored = self._explored_map.copy()

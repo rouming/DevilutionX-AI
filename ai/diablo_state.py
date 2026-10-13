@@ -1861,6 +1861,20 @@ class DiabloGame:
         self.events_queue_read_idx += 1
         return entry
 
+    def save_engine(self):
+        """Trigger engine save and return save file bytes."""
+        self.submit_key(ring.RingEntryType.RING_ENTRY_KEY_SAVE |
+                        ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS)
+        with open(self.state_path + "/single_0.sv", "rb") as f:
+            return f.read()
+
+    def load_engine(self, data):
+        """Write data to save file and trigger engine load."""
+        with open(self.state_path + "/single_0.sv", "wb") as f:
+            f.write(data)
+        self.submit_key(ring.RingEntryType.RING_ENTRY_KEY_LOAD |
+                        ring.RingEntryType.RING_ENTRY_F_SINGLE_TICK_PRESS)
+
     def submit_key(self, key, data=(0, 0)):
         key = movement_to_true_north(key)
         request_tag = (time.time_ns() & 0xffffffff)

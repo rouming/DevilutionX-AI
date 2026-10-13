@@ -587,9 +587,17 @@ def make_diablo_parser():
     agent_ai_parser.add_argument(
         "--pause", type=float, default=0,
         help="Seconds to pause between agent steps, useful in GUI mode (default: 0)")
-    agent_ai_parser.add_argument(
-        "--seeds", type=parse_seed_range, default=parse_seed_range("1"), metavar="SEEDS",
+    _seeds_group = agent_ai_parser.add_mutually_exclusive_group()
+    _seeds_group.add_argument(
+        "--seeds", type=parse_seed_range, metavar="SEEDS",
         help="Seeds to run: single 'A', range 'A-B', list 'A,B,C', or mixed 'A-B,C' (default: 1)")
+    _seeds_group.add_argument(
+        "--load-state", metavar="PATH", default=None,
+        help="Checkpoint file to resume from; seed is taken from the checkpoint")
+    agent_ai_parser.set_defaults(seeds=parse_seed_range("1"))
+    agent_ai_parser.add_argument(
+        "--state-dir", metavar="DIR", default=None,
+        help="Directory to write per-level agent checkpoints (agent-seedXXX-lvlYY-sZZZZZZ.pt)")
 
     #
     # train-ai
@@ -3126,6 +3134,11 @@ def agent_ai(args, gameconfig):
             print(f"Created env: {env_key}")
     envs = {lvl: env_instances[ek] for lvl, ek in level_to_env_key.items()}
 
+    state_dir = getattr(args, 'state_dir', None)
+    if state_dir:
+        os.makedirs(state_dir, exist_ok=True)
+        print(f"Checkpoint dir: {state_dir}")
+
     def make_supervisor():
         return AgentAI(
             game, model_runners, envs,
@@ -3138,11 +3151,13 @@ def agent_ai(args, gameconfig):
             all_items_identified=args.all_items_identified,
             safe_radius=args.safe_radius,
             pause=args.pause,
-            stat_strategy=args.stat_strategy)
+            stat_strategy=args.stat_strategy,
+            state_dir=state_dir)
 
     # Recording is stopped via atexit on both normal exit and Ctrl-C.
     _record_screen_start(game, args)
-    run_agent_loop(args.seeds, env, make_supervisor)
+    load_state = getattr(args, 'load_state', None)
+    run_agent_loop(args.seeds, env, make_supervisor, load_state=load_state)
 
     env.close()
     return 0

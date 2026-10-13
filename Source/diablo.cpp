@@ -902,10 +902,12 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 				printf(">> %s: received B\n", __func__);
 
 		} else if (bit == RING_ENTRY_KEY_SAVE) {
-			sdl_sym  = SDLK_F2;
-			sdl_scan = SDL_SCANCODE_F2;
-			if (sdl_type == SDL_KEYDOWN)
-				printf(">> %s: received SAVE\n", __func__);
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN) {
+				SaveGame();
+				printf(">> %s: SAVE done\n", __func__);
+			}
+			continue;
 
 		} else if (bit == RING_ENTRY_KEY_NEW) {
 			// Pretend the NEW key was injected
@@ -929,10 +931,12 @@ inject_sdl_events(uint32_t *old_keys, uint32_t new_keys,
 
 			continue;
 		} else if (bit == RING_ENTRY_KEY_LOAD) {
-			sdl_sym  = SDLK_F3;
-			sdl_scan = SDL_SCANCODE_F3;
-			if (sdl_type == SDL_KEYDOWN)
-				printf(">> %s: received LOAD\n", __func__);
+			injected = true;
+			if (sdl_type == SDL_KEYDOWN) {
+				gamemenu_load_game(false);
+				printf(">> %s: LOAD done\n", __func__);
+			}
+			continue;
 
 		} else if (bit == RING_ENTRY_KEY_PAUSE) {
 			sdl_sym  = SDLK_PAUSE;

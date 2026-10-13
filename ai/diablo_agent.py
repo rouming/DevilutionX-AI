@@ -17,6 +17,7 @@ Author: Roman Penyaev <r.peniaev@gmail.com>
 """
 
 import enum
+import os
 import re
 import sys
 import time
@@ -806,19 +807,58 @@ class Pathfinder:
 # Seed loop
 # ---------------------------------------------------------------------------
 
-def run_agent_loop(seeds, env, make_supervisor):
+def run_agent_loop(seeds, env, make_supervisor, load_state=None):
     """Run the agent sequentially over seeds, resetting the game for each.
 
-    seeds:          iterable of integer seed values
-    env:            gym env; env.reset(seed=s) starts a new game with seed s
+    seeds:           iterable of integer seed values
+    env:             gym env; env.reset(seed=s) starts a new game with seed s
     make_supervisor: callable() -> AgentAI; called fresh for each seed so all
-                    episode state is clean
+                     episode state is clean
+    load_state:      optional path to a checkpoint file; the matching seed
+                     resumes from that checkpoint instead of starting fresh
     """
+    import torch
     SEP = "=" * 40
+    load_ckpt = None
+    load_seed = None
+    if load_state:
+        load_ckpt = torch.load(load_state, map_location='cpu', weights_only=False)
+        load_seed = load_ckpt.get('env', {}).get('seed')
+        print(f"Checkpoint loaded from {load_state} (seed {load_seed})")
+        seeds = [load_seed]
+
     for seed in seeds:
         print(f"{SEP}\n  seed {seed}\n{SEP}", flush=True)
-        obs, _ = env.reset(seed=seed)
-        make_supervisor().run(obs)
+        supervisor = make_supervisor()
+        if load_ckpt is not None and seed == load_seed:
+            supervisor.game.load_engine(load_ckpt['engine'])
+            if load_ckpt.get('env'):
+                env.unwrapped.load_state_dict(load_ckpt['env'])
+            supervisor._load_state_dict(load_ckpt['agent'])
+            cur = supervisor.cur_level
+            supervisor.model = supervisor._model_runners.get(cur)
+            supervisor._env = supervisor._envs.get(cur, supervisor._envs[min(supervisor._envs)])
+            # Mark all per-level envs as reset so the OrderEnforcing wrapper
+            # allows step() without requiring an actual env.reset() call.
+            for e in supervisor._envs.values():
+                w = e
+                while w is not None:
+                    if hasattr(w, '_has_reset'):
+                        w._has_reset = True
+                    w = getattr(w, 'env', None)
+            # To be aligned with restored engine ticks we need to do dummy saves
+            supervisor._dummy_saves = True
+            print(f"Resumed from checkpoint (seed {seed})")
+            print(f"agent {supervisor._tick_count}: resumed from checkpoint"
+                  f" lvl={supervisor.cur_level}", file=supervisor.log, flush=True)
+            for pos in sorted(supervisor._return_triggers.get(supervisor.cur_level, [])):
+                print(f"agent {supervisor._tick_count}: return trigger (restored) at {pos}",
+                      file=supervisor.log, flush=True)
+            load_ckpt = None  # apply only once
+            supervisor.run(supervisor._obs)
+        else:
+            obs, _ = env.reset(seed=seed)
+            supervisor.run(obs)
         print(f"{SEP}\n  seed {seed} done\n{SEP}", flush=True)
 
 
@@ -894,7 +934,8 @@ class AgentAI:
                  max_steps_per_level=3000, no_gear_management=False,
                  keep_mana_potions=False, use_two_hand_weapon=False,
                  all_items_identified=False,
-                 safe_radius=2, pause=0.0, log=None, stat_strategy='dex-rush'):
+                 safe_radius=2, pause=0.0, log=None, stat_strategy='dex-rush',
+                 state_dir=None):
         self.game          = game
         # model_runners: dict mapping dungeon level (1-16) -> ModelRunner.
         # All 16 entries must be present; multiple levels may share the same object.
@@ -988,6 +1029,8 @@ class AgentAI:
         # Share the masked-tiles dict with the pathfinder so it sees the same view
         # as the model and does not try to interact with masked items.
         self._pathfinder._masked_tiles = self._masked_tiles
+        self._state_dir = state_dir
+        self._dummy_saves = False
 
     # -----------------------------------------------------------------------
     # Public
@@ -997,7 +1040,7 @@ class AgentAI:
         d = self.game.safe_state
         self._apply_masked_tiles(d, initial_obs["env"])
         self._obs = initial_obs
-        step = 0
+        step = self._tick_count
         while self.state not in (AgentAI.State.DEAD, AgentAI.State.DONE):
             if max_steps is not None and step >= max_steps:
                 print(f"agent {self._tick_count}: max_steps {max_steps} reached", file=self.log)
@@ -1008,6 +1051,111 @@ class AgentAI:
                 time.sleep(self.pause)
         print(f"agent {self._tick_count}: done - state={self.state.value} steps={step}",
               file=self.log)
+
+    def _state_dict(self):
+        """Return serializable snapshot of agent state (excludes model weights)."""
+        memory = {}
+        for lvl, runner in self._model_runners.items():
+            if runner.memory is not None:
+                memory[lvl] = runner.memory.cpu()
+        return {
+            'state':               self.state.value,
+            'cur_level':           self.cur_level,
+            'level_steps':         self.level_steps,
+            'initial_monster_cnt': self.initial_monster_cnt,
+            'stairs_pos':          self.stairs_pos,
+            '_level_monsters':     self._level_monsters,
+            '_level_stairs':       self._level_stairs,
+            '_masked_tiles':       self._masked_tiles,
+            '_return_triggers':    {k: list(v) for k, v in self._return_triggers.items()},
+            '_butcher_searched':   list(self._butcher_searched),
+            '_tick_count':         self._tick_count,
+            '_obs':                self._obs,
+            '_inv_prev':           list(self._inv_prev) if self._inv_prev else None,
+            '_pending_equip':      self._pending_equip,
+            '_action_queue':       self._action_queue,
+            '_queued_seeds':       list(self._queued_seeds),
+            '_backup_for_item':    self._backup_for_item,
+            '_backup_resolved':    list(self._backup_resolved),
+            '_body_id_state':      self._body_id_state,
+            '_inv_warn_issued':    self._inv_warn_issued,
+            '_masked_positions':   list(self._masked_positions),
+            '_pending_item_at':    self._pending_item_at,
+            '_pending_drop_seeds':     self._pending_drop_seeds,
+            '_identify_pending_seeds': list(self._identify_pending_seeds),
+            '_inv_changed':        self._inv_changed,
+            '_cur_dlvl':           self._cur_dlvl,
+            '_pf_path':            self._pathfinder._path,
+            '_pf_goal':            self._pathfinder._goal,
+            '_pf_skip_items':      list(self._pathfinder._skip_items),
+            'memory':              memory,
+        }
+
+    def _load_state_dict(self, sd):
+        """Restore agent state from a state dict."""
+        self.state              = AgentAI.State(sd['state'])
+        self.cur_level          = sd['cur_level']
+        self.level_steps        = sd['level_steps']
+        self.initial_monster_cnt = sd['initial_monster_cnt']
+        self.stairs_pos         = sd['stairs_pos']
+        self._level_monsters    = sd['_level_monsters']
+        self._level_stairs      = sd['_level_stairs']
+        self._masked_tiles      = sd['_masked_tiles']
+        self._return_triggers   = {k: frozenset(map(tuple, v))
+                                   for k, v in sd['_return_triggers'].items()}
+        self._butcher_searched  = set(sd['_butcher_searched'])
+        self._tick_count        = sd['_tick_count']
+        self._obs               = sd['_obs']
+        self._inv_prev          = frozenset(tuple(x) for x in sd['_inv_prev']) \
+                                  if sd['_inv_prev'] else None
+        self._pending_equip     = sd['_pending_equip']
+        self._action_queue      = sd['_action_queue']
+        self._queued_seeds      = set(sd['_queued_seeds'])
+        self._backup_for_item   = sd['_backup_for_item']
+        self._backup_resolved   = set(sd['_backup_resolved'])
+        self._body_id_state     = sd['_body_id_state']
+        self._inv_warn_issued   = sd['_inv_warn_issued']
+        self._masked_positions  = set(map(tuple, sd['_masked_positions']))
+        self._pending_item_at   = sd['_pending_item_at']
+        self._pending_drop_seeds     = sd['_pending_drop_seeds']
+        self._identify_pending_seeds = set(sd['_identify_pending_seeds'])
+        self._inv_changed       = sd['_inv_changed']
+        self._cur_dlvl          = sd['_cur_dlvl']
+        self._pathfinder._path       = sd['_pf_path']
+        self._pathfinder._goal       = sd['_pf_goal']
+        self._pathfinder._skip_items = set(map(tuple, sd['_pf_skip_items']))
+        # Re-sync after restoring _masked_tiles
+        self._pathfinder._masked_tiles = self._masked_tiles
+        for lvl, mem in sd.get('memory', {}).items():
+            if lvl in self._model_runners:
+                runner = self._model_runners[lvl]
+                runner.memory = mem.to(runner.device) if mem is not None else None
+
+    def save(self, path):
+        """Save full agent checkpoint (engine + env + agent state) to path."""
+        import torch
+        import os
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        checkpoint = {
+            'engine': self.game.save_engine(),
+            'env':    self._env.unwrapped.state_dict() if self._env else {},
+            'agent':  self._state_dict(),
+        }
+        torch.save(checkpoint, path)
+        print(f"agent {self._tick_count}: checkpoint saved to {path}", file=self.log)
+
+    @staticmethod
+    def load_checkpoint(path, game, env, agent):
+        """Load checkpoint from path into game/env/agent. Call before agent.run()."""
+        import torch
+        checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+        game.load_engine(checkpoint['engine'])
+        if checkpoint.get('env'):
+            env.unwrapped.load_state_dict(checkpoint['env'])
+        agent._load_state_dict(checkpoint['agent'])
+        print(f"agent checkpoint loaded from {path}", file=agent.log)
 
     # -----------------------------------------------------------------------
     # Tick
@@ -1161,6 +1309,7 @@ class AgentAI:
         cur_level = int(d.currlevel.value)
         if cur_level != self.cur_level:
             self._on_level_change(d, cur_level)
+            return  # level-change tick takes no action; next tick starts fresh
 
         if not self._inv_warn_issued:
             inv_grid = np.asarray(d.player.InvGrid)
@@ -1229,6 +1378,7 @@ class AgentAI:
               f" hero stats: {_player_gear_str(d.player)}", file=self.log)
         self._init_butcher_door_mask(d)
         self._mask_return_triggers(d, new_level)
+        self._apply_masked_tiles(d, self._obs["env"])
         self.state = AgentAI.State.DUNGEON
 
         # Evaluate all InvList items carried into this level. Set _inv_prev to
@@ -1241,6 +1391,18 @@ class AgentAI:
             self._inv_prev = inv_now
         else:
             self._inv_prev = self._inv_snapshot(d.player)
+
+        if self._state_dir:
+            seed = self._env.unwrapped.seed
+            fname = (f"agent-seed{seed:03d}"
+                     f"-lvl{new_level:02d}"
+                     f"-s{self._tick_count:06d}.pt")
+            self.save(os.path.join(self._state_dir, fname))
+        elif self._dummy_saves:
+            # Do dummy engine save to be aligned with restored state
+            self.game.save_engine()
+            print(f"agent {self._tick_count}: dummy save (engine tick only)",
+                  file=self.log, flush=True)
 
     # -----------------------------------------------------------------------
     # State handlers
