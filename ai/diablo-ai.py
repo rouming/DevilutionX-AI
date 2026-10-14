@@ -448,6 +448,9 @@ def make_diablo_parser():
              "or '1-16=auto' / '1-3=auto,4-16=20' (auto weights from env-stats.txt "
              "for marked levels; missing levels floored at CURRICULUM_WEIGHT_STEP). "
              "Default: 1")
+    common_parser.add_argument(
+        "--cpu", action="store_true", default=False,
+        help="Force CPU for all model operations (disables GPU/CUDA)")
 
     #
     # sprout: reuse sprout's parser
@@ -3271,6 +3274,12 @@ def main():
         return model_drop_best(args)
     if args.command == 'env-stats':
         return diablo_state.env_stats(args)
+
+    if args.cpu:
+        import rl.utils.other
+        rl.utils.other.set_device("cpu")
+        if hasattr(args, "gpus"):
+            args.gpus = 0
 
     # Set seed for all randomness sources
     utils.seed(args.seed)
