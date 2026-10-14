@@ -3109,7 +3109,8 @@ def agent_ai(args, gameconfig):
         acmodel.to(device)
         acmodel.eval()
         name_to_runner[model_name] = ModelRunner(acmodel, preprocess_obss, device,
-                                                 argmax=args.argmax)
+                                                 argmax=args.argmax,
+                                                 global_seed=args.seed)
         print(f"Loaded model: {model_name}")
 
     model_runners = {lvl: name_to_runner[name] for lvl, name in level_to_name.items()}

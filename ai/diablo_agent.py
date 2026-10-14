@@ -829,11 +829,13 @@ def run_agent_loop(seeds, env, make_supervisor):
 class ModelRunner:
     """Wraps an AC model for step-by-step inference, maintaining LSTM state."""
 
-    def __init__(self, acmodel, preprocess_obss, device, argmax=False):
+    def __init__(self, acmodel, preprocess_obss, device, argmax=False,
+                 global_seed=0):
         self.acmodel         = acmodel
         self.preprocess_obss = preprocess_obss
         self.device          = device
         self.argmax          = argmax
+        self.global_seed     = global_seed
         self.memory          = None
         self.reset()
 
@@ -843,19 +845,28 @@ class ModelRunner:
         else:
             self.memory = None
 
-    def act(self, obs):
+    def act(self, obs, env_seed=0, env_resets=0, env_steps=0):
         """obs: dict matching the env observation_space. Returns int action."""
+        from rl.torch_ac.utils.sampling import calculate_deterministic_noise, deterministic_sample
         preprocessed = self.preprocess_obss([obs], device=self.device)
+        if not self.argmax:
+            num_levels = getattr(self.acmodel, 'num_hierarchy_levels', 1)
+            env_seeds_t  = torch.tensor([env_seed],  dtype=torch.int64, device=self.device)
+            env_resets_t = torch.tensor([env_resets], dtype=torch.int64, device=self.device)
+            env_steps_t  = torch.tensor([env_steps],  dtype=torch.int64, device=self.device)
+            noise = calculate_deterministic_noise(
+                self.global_seed, env_seeds_t, env_resets_t, env_steps_t, dims=num_levels)
+        else:
+            noise = None
         with torch.no_grad():
             if self.acmodel.recurrent:
                 dist, _, self.memory = self.acmodel(
-                    preprocessed, self.memory, noise=None)
+                    preprocessed, self.memory, noise=noise)
             else:
-                dist, _ = self.acmodel(preprocessed, noise=None)
-        # dist is a list (one entry per hierarchy level); use the first
+                dist, _ = self.acmodel(preprocessed, noise=noise)
         if self.argmax:
             return dist[0].probs.argmax(dim=1).item()
-        return dist[0].sample().item()
+        return deterministic_sample(dist[0].probs, noise[:, 0]).item()
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +1301,10 @@ class AgentAI:
             self.state = AgentAI.State.PATHFIND
             return
 
-        action = self.model.act(self._obs)
+        env = self._env.unwrapped
+        action = self.model.act(self._obs,
+                                env_seed=env.seed, env_resets=env.resets_cnt,
+                                env_steps=env.steps_cnt)
         # Hard-block any walk action that would land on a return trigger.
         blocked = self._return_triggers.get(self.cur_level, frozenset())
         if blocked:
