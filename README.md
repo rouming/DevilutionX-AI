@@ -6,9 +6,10 @@
 
 # DevilutionX-AI
 
-A hybrid agent for *Diablo* that combines a reinforcement learning model with an
-algorithmic supervisor, playing Ironman - one life, no town returns, 16 dungeon levels
-in sequence. Eval results (no stat inflation, no cheats):
+A hybrid agent for *Diablo* that combines a reinforcement learning
+model with an algorithmic supervisor, playing Ironman - all quests are
+disabled, one life, no town returns, 16 dungeon levels in
+sequence. Eval results (no stat inflation, no cheats):
 
 ```
 runs=97  min=2  max=9  mean=5.49  std=1.67
