@@ -1,3 +1,9 @@
+<div style="width:100%;">
+  <a href="https://youtu.be/Xzd6nIsBe_s" target="_blank">
+    <img src="https://github.com/user-attachments/assets/7675203e-0215-4eed-9845-ca61347e3fd2" style="width:100%; height:auto;" />
+  </a>
+</div>
+
 # DevilutionX-AI
 
 A hybrid agent for *Diablo* that combines a reinforcement learning model with an
