@@ -39,10 +39,8 @@ RUN /root/venv/bin/pip install -r /tmp/requirements.txt && \
 ##
 ## Copy DevilutionX-AI and build it
 ##
-COPY ai/models /root/devel/ai-models/
 COPY .git /root/devel/DevilutionX-AI-copy/.git
 RUN git clone /root/devel/DevilutionX-AI-copy /root/devel/DevilutionX-AI && \
-    mv /root/devel/ai-models /root/devel/DevilutionX-AI/ai/models && \
     rm -rf /root/devel/DevilutionX-AI-copy
 
 RUN cmake -S /root/devel/DevilutionX-AI -B /root/devel/DevilutionX-AI/build \
