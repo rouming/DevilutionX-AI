@@ -433,17 +433,42 @@ Two images are available on [Docker Hub](https://hub.docker.com/r/romanpen/):
 
 **Full environment** - `romanpen/devilutionx-ai-ubuntu24.04`
 
-Includes CUDA 12.9, build tools, compiled DevilutionX binary, Diablo Shareware asset,
-and a pre-configured Python virtualenv. This is the image for training and evaluation.
+Includes CUDA 12.9, compiled DevilutionX binary, Diablo Shareware asset, and a
+pre-configured Python virtualenv. Does not include model checkpoints - those are
+pulled separately (see below).
 
-NVIDIA Container Toolkit must be installed first. See the
+**Model checkpoints** - `romanpen/devilutionx-ai-models`
+
+A minimal image (`FROM scratch`) containing only the trained model files.
+
+---
+
+Pull both images first:
+
+```shell
+docker pull romanpen/devilutionx-ai-ubuntu24.04:latest
+docker pull romanpen/devilutionx-ai-models:latest
+```
+
+Extract models to a local directory:
+
+```shell
+docker create --name tmp romanpen/devilutionx-ai-models:latest
+docker cp tmp:/models/. ai/models/
+docker rm tmp
+```
+
+NVIDIA Container Toolkit must be installed before running. See the
 [NVIDIA instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+Run the container with models mounted from the local directory:
 
 ```shell
 docker run \
    --runtime=nvidia --gpus all \
    -dit \
    --name devilutionx-ai \
+   -v $(pwd)/ai/models:/root/devel/DevilutionX-AI/ai/models \
    romanpen/devilutionx-ai-ubuntu24.04:latest
 ```
 
@@ -458,6 +483,7 @@ docker run \
    --name devilutionx-ai \
    -e DISPLAY=$DISPLAY \
    -v /tmp/.X11-unix:/tmp/.X11-unix \
+   -v $(pwd)/ai/models:/root/devel/DevilutionX-AI/ai/models \
    romanpen/devilutionx-ai-ubuntu24.04:latest
 ```
 
@@ -465,17 +491,6 @@ Both commands start the container in the background with a `tmux` session:
 
 ```shell
 docker exec -it devilutionx-ai tmux -u attach
-```
-
-**Model checkpoints only** - `romanpen/devilutionx-ai-models`
-
-A minimal image (`FROM scratch`) containing only the trained model files.
-Useful for restoring checkpoints without pulling the full environment:
-
-```shell
-docker create --name tmp romanpen/devilutionx-ai-models:latest
-docker cp tmp:/models/. ai/models/
-docker rm tmp
 ```
 
 ## Building and Running
