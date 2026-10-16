@@ -493,6 +493,15 @@ Both commands start the container in the background with a `tmux` session:
 docker exec -it devilutionx-ai tmux -u attach
 ```
 
+**Game assets**
+
+On first run the agent automatically downloads `spawn.mpq` (the Diablo
+Shareware) and places it alongside the `devilutionx` binary in the `build/`
+directory. The Shareware only covers the first four dungeon floors and the
+game content differs from the full game. To train or run the agent on all 16
+floors, buy a copy of Diablo 1 and place `DIABDAT.MPQ` in the same `build/`
+directory.
+
 ## Building and Running
 
 Build the DevilutionX binary:
