@@ -938,6 +938,15 @@ def make_diablo_parser():
     )
 
     #
+    # warmup
+    #
+    subparsers.add_parser(
+        "warmup",
+        help="Pre-generate debug symbol bindings and compile numba JIT caches. "
+             "Run once after building the engine binary or pulling a new container."
+    )
+
+    #
     # model-drop-optimizer
     #
     model_drop_optimizer_parser = subparsers.add_parser(
@@ -3279,6 +3288,9 @@ def main():
         return model_drop_best(args)
     if args.command == 'env-stats':
         return diablo_state.env_stats(args)
+    if args.command == 'warmup':
+        print("Warmup complete: debug symbol bindings generated, numba JIT caches compiled.")
+        return 0
 
     if args.cpu:
         import rl.utils.other
