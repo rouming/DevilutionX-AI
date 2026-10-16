@@ -4,7 +4,7 @@
 #   docker push USER/devilutionx-ai-models:TAG
 #
 # Restore:
-#   docker create --name tmp USER/devilutionx-ai-models:TAG
+#   docker create --name tmp USER/devilutionx-ai-models:TAG /dummy
 #   docker cp tmp:/models/. ai/models/
 #   docker rm tmp
 

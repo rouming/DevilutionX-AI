@@ -453,7 +453,7 @@ docker pull romanpen/devilutionx-ai-models:latest
 Extract models to a local directory:
 
 ```shell
-docker create --name tmp romanpen/devilutionx-ai-models:latest
+docker create --name tmp romanpen/devilutionx-ai-models:latest /dummy
 docker cp tmp:/models/. ai/models/
 docker rm tmp
 ```
