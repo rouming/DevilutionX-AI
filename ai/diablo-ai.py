@@ -3246,8 +3246,13 @@ def main():
             tables['char level up attrs'] = AgentAI.stat_strategy_to_attrs(a.stat_strategy)
         return tables
 
-    if not (diablo_build_path / "spawn.mpq").exists():
-        print(f"Error: Shareware file \"spawn.mpq\" for Diablo content does not exist. Please download and place the file alongside the `devilutionx` binary with the following command:\n\twget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq -P {diablo_build_path}")
+    if not (diablo_build_path / "DIABDAT.MPQ").exists() and \
+       not (diablo_build_path / "spawn.mpq").exists():
+        print(f"Error: no Diablo game data found in {diablo_build_path}.\n"
+              f"For the full game (all 16 floors) place DIABDAT.MPQ there - "
+              f"this is the original Diablo 1 data file that comes with a purchased copy of the game.\n"
+              f"For the Shareware (floors 1-4 only) download spawn.mpq:\n"
+              f"\twget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq -P {diablo_build_path}")
         sys.exit(1)
 
     diablo_bin_path = str(diablo_build_path / "devilutionx")
