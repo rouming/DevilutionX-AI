@@ -73,6 +73,12 @@ RUN make -C /root/devel/DevilutionX-AI/build -j$(nproc)
 RUN wget -nc https://github.com/diasurgical/devilutionx-assets/releases/download/v2/spawn.mpq \
           -P /root/devel/DevilutionX-AI/build
 
+##
+## Pre-generate debug symbol bindings and compile numba JIT caches
+##
+RUN cd /root/devel/DevilutionX-AI/ai && \
+    /root/venv/bin/python diablo-ai.py warmup
+
 
 # Start new detached tmux session and run bash
 CMD ["/bin/bash", "-c", "tmux new-session -d && exec bash"]
