@@ -173,7 +173,32 @@ class _StandModel:
     acmodel = type('acmodel', (), {'has_automap': False})()
 
     def reset(self): pass
-    def act(self, obs): return self._STAND
+    def act(self, obs, **kwargs): return self._STAND
+
+
+class _StubEnv:
+    """Minimal env stub for tests that don't drive the RL loop."""
+    seed       = 0
+    resets_cnt = 0
+    steps_cnt  = 0
+
+    @property
+    def unwrapped(self): return self
+
+    def reinit(self, d): pass
+    def state_dict(self): return {}
+    def step(self, action): return {"env": np.zeros((21, 21), dtype=np.uint32)}, 0.0, False, False, {}
+
+
+def _make_agent(game, **kwargs):
+    stand   = _StandModel()
+    runners = {lvl: stand for lvl in range(1, 17)}
+    stub    = _StubEnv()
+    envs    = {lvl: stub for lvl in range(1, 17)}
+    agent   = AgentAI(game, model_runners=runners, envs=envs, log=sys.stdout,
+                      use_two_hand_weapon=True, **kwargs)
+    agent._obs = stub.step(None)[0]
+    return agent
 
 
 class InvTests:
@@ -181,9 +206,7 @@ class InvTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._s0 = None  # full state after test_01 (reference baseline)
 
@@ -495,9 +518,7 @@ class Inv2HBackupTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL = None   # HAND_LEFT cii
         self._HR = None   # HAND_RIGHT cii
@@ -667,9 +688,7 @@ class InvIdentifyTests:
     def __init__(self, game, cursed=False):
         self.game    = game
         self._cursed = cursed
-        stand        = _StandModel()
-        runners      = {lvl: stand for lvl in range(1, 17)}
-        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL = None
         self._HR = None
@@ -805,9 +824,7 @@ class Inv2HIdentifyTests:
     def __init__(self, game, cursed=False):
         self.game    = game
         self._cursed = cursed
-        stand        = _StandModel()
-        runners      = {lvl: stand for lvl in range(1, 17)}
-        self.agent   = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL = None
         self._HR = None
@@ -932,9 +949,7 @@ class _Inv2HWithBackupBase:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1100,9 +1115,7 @@ class _Inv1HWithBackupBase:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1253,9 +1266,7 @@ class _Inv1HShWithBackupBase:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._HL      = None
         self._HR      = None
@@ -1409,9 +1420,7 @@ class InvDurabilityTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
 
     def _settle(self):
@@ -1508,9 +1517,7 @@ class Inv2HStaleBackupTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
@@ -1682,9 +1689,7 @@ class InvBeatBackupSpamTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
@@ -1811,9 +1816,7 @@ class Inv2HOscillationTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._bk_sw_seed = None
         self._bk_sh_seed = None
@@ -1942,10 +1945,7 @@ class InvUnidentifiedUpgradeTests:
     def __init__(self, game, has_identify_scroll=True):
         self.game               = game
         self.has_identify_scroll = has_identify_scroll
-        stand                   = _StandModel()
-        runners                 = {lvl: stand for lvl in range(1, 17)}
-        self.agent              = AgentAI(game, model_runners=runners, log=sys.stdout,
-                                          use_two_hand_weapon=True)
+        self.agent              = _make_agent(game)
         self.agent._test_mode   = True
         self._HL      = None
         self._HR      = None
@@ -2101,9 +2101,7 @@ class InvJewelryTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout, use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         self.agent._test_mode = True
         self._RL = None   # INVITEM_RING_LEFT cii
         self._RR = None   # INVITEM_RING_RIGHT cii
@@ -2278,6 +2276,7 @@ def _start_game(binary, mshared):
         "game-ticks-per-step": 1,
         "step-mode":           True,
         "gui":                 False,
+        "animation":           False,
         "dungeon-level":       [(1, 1)],
     }
     return diablo_state.DiabloGame.run(config)
@@ -2296,10 +2295,7 @@ class InvGoldDropRetryTests:
 
     def __init__(self, game):
         self.game  = game
-        stand      = _StandModel()
-        runners    = {lvl: stand for lvl in range(1, 17)}
-        self.agent = AgentAI(game, model_runners=runners, log=sys.stdout,
-                             use_two_hand_weapon=True)
+        self.agent = _make_agent(game)
         # We do the real drop, not the drop AND destroy
         self.agent._test_mode = False
 
