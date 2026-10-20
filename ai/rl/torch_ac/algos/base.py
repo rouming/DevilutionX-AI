@@ -110,6 +110,14 @@ class BaseAlgo(ABC):
         self.num_procs = len(self.env.p.envs)
         self.num_frames = self.num_frames_per_proc * self.num_procs
 
+        # Credit assigner (optional) - set by caller after construction:
+        #   algo.ca_buffer : CreditAssignerBuffer or None
+        #   algo.ca_model  : CreditAssigner or None  (inference, enabled phase only)
+        #   algo.ca_alpha  : float reward contribution weight (default 0.1)
+        self.ca_buffer = None
+        self.ca_model  = None
+        self.ca_alpha  = 0.1
+
         # Initialize experience values
 
         # - T is self.num_frames_per_proc
@@ -237,17 +245,25 @@ class BaseAlgo(ABC):
             self.log_episode_reshaped_return += self.rewards[i]
             self.log_episode_num_frames += torch.ones(self.num_procs, device=self.device)
 
-            for i, done_ in enumerate(done):
+            for p, done_ in enumerate(done):
                 if done_:
                     self.log_done_counter += 1
-                    self.log_return.append(self.log_episode_return[i].tolist())
-                    self.log_reshaped_return.append(self.log_episode_reshaped_return[i].tolist())
-                    self.log_num_frames.append(self.log_episode_num_frames[i].item())
-                    self.log_success.append(info[i].get("success", False))
+                    self.log_return.append(self.log_episode_return[p].tolist())
+                    self.log_reshaped_return.append(self.log_episode_reshaped_return[p].tolist())
+                    self.log_num_frames.append(self.log_episode_num_frames[p].item())
+                    self.log_success.append(info[p].get("success", False))
 
             self.log_episode_return *= self.mask.unsqueeze(1)
             self.log_episode_reshaped_return *= self.mask.unsqueeze(1)
             self.log_episode_num_frames *= self.mask
+
+            # Accumulate (hidden_state, reward, done) for credit assigner training.
+            # memories[i] is the LSTM h||c state entering step i; take only h (first half).
+            if self.ca_buffer is not None and self.recurrent:
+                h = self.memories[i, :, :self.memory_size // 2].detach().cpu()
+                r = self.rewards[i, :, 0].detach().cpu()
+                d = (self.mask == 0).cpu()
+                self.ca_buffer.step(h, r, d)
 
         # Add advantage and return to experiences
 
@@ -263,6 +279,16 @@ class BaseAlgo(ABC):
                     noise=noise)
             else:
                 _, next_value = self.acmodel(preprocessed_obs, noise=noise)
+
+        # Inject credit assigner contributions into rewards before GAE so that
+        # advantages and returns both reflect the credit signal.  contributions
+        # are (P, T) -> permuted to (T, P, 1) and added to self.rewards (T, P, L).
+        if self.ca_model is not None and self.recurrent:
+            with torch.no_grad():
+                h = self.memories[:, :, :self.memory_size // 2]  # (T, P, D)
+                h_perm = h.permute(1, 0, 2).contiguous()          # (P, T, D)
+                contribs = self.ca_model(h_perm.detach())          # (P, T)
+                self.rewards += contribs.t().unsqueeze(-1) * self.ca_alpha
 
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask

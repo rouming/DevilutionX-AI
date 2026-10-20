@@ -783,6 +783,32 @@ def make_diablo_parser():
         "--eval-no-stuck-timeout", action="store_true",
         help="Disable stuck-timeout during eval episodes")
 
+    # Credit assigner
+    ca_phase_grp = train_ai_parser.add_mutually_exclusive_group()
+    ca_phase_grp.add_argument(
+        "--warmup-credit-assigner", action="store_true",
+        help="Phase 1: freeze CNN/LSTM/policy/critic, train only the credit assigner transformer. "
+             "The assigner learns to decompose episode returns into per-step contributions.")
+    ca_phase_grp.add_argument(
+        "--enable-credit-assigner", action="store_true",
+        help="Phase 2: train all parameters and inject credit assigner contributions "
+             "into per-step rewards before GAE, sharpening credit assignment.")
+    train_ai_parser.add_argument(
+        "--credit-assigner-window", type=int, default=400, metavar="W",
+        help="Number of LSTM states in the credit assigner window (default: 400)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-alpha", type=float, default=0.1, metavar="A",
+        help="Weight of credit assigner contributions added to shaped rewards (default: 0.1)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-entropy", type=float, default=0.01, metavar="L",
+        help="Entropy sparsity coefficient in credit assigner loss (default: 0.01)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-lr", type=float, default=1e-4, metavar="LR",
+        help="Learning rate for the credit assigner optimizer (default: 1e-4)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-batch", type=int, default=8, metavar="B",
+        help="Number of completed episodes per credit assigner update (default: 8)")
+
     #
     # demos-il
     #
@@ -2459,6 +2485,36 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         txt_logger.info("Model loaded\n")
         txt_logger.info("{}\n".format(acmodel_raw))
 
+    # Credit assigner (optional, main rank only in non-DDP; all ranks if DDP)
+    credit_assigner = None
+    ca_optimizer = None
+    ca_buffer = None
+    use_ca = getattr(args, 'warmup_credit_assigner', False) or \
+             getattr(args, 'enable_credit_assigner', False)
+    if use_ca and acmodel_raw.recurrent:
+        from rl.credit_assigner import CreditAssigner, CreditAssignerBuffer
+        ca_window = args.credit_assigner_window
+        credit_assigner = CreditAssigner(
+            hidden_dim=acmodel_raw.semi_memory_size,
+            window=ca_window)
+        credit_assigner.to(local_device)
+        if "credit_assigner_state" in status:
+            credit_assigner.load_state_dict(status["credit_assigner_state"])
+            if is_main:
+                txt_logger.info("Credit assigner state loaded\n")
+        ca_optimizer = torch.optim.Adam(
+            credit_assigner.parameters(), lr=args.credit_assigner_lr)
+        if "credit_assigner_optimizer_state" in status:
+            ca_optimizer.load_state_dict(status["credit_assigner_optimizer_state"])
+        ca_buffer = CreditAssignerBuffer(
+            num_envs=args.env_runners,
+            window=ca_window)
+        if is_main:
+            txt_logger.info(f"Credit assigner: window={ca_window} "
+                            f"alpha={args.credit_assigner_alpha} "
+                            f"entropy={args.credit_assigner_entropy} "
+                            f"lr={args.credit_assigner_lr}\n")
+
     # Load algo
     seeds = range(args.seed_base + runner_offset,
                   args.seed_base + runner_offset + len(penv_pool.envs))
@@ -2489,6 +2545,30 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     load_optimizer_state(algo.optimizer, status, local_device,
                          current_ebs=args.batch_size * world_size,
                          logger=txt_logger if is_main else None)
+
+    # Wire credit assigner into algo and optionally freeze main model.
+    if credit_assigner is not None:
+        # Buffer accumulation runs on every rank; training and inference only on rank 0.
+        # In DDP phase 2, rank 0 broadcasts the trained assigner weights to all ranks
+        # after each update so every rank injects consistent contributions.
+        algo.ca_buffer = ca_buffer
+        algo.ca_alpha  = args.credit_assigner_alpha
+        if getattr(args, 'enable_credit_assigner', False):
+            # Phase 2: inject contributions into rewards before GAE.
+            # Set on all ranks; weights kept in sync via broadcast after each update.
+            algo.ca_model = credit_assigner
+        if getattr(args, 'warmup_credit_assigner', False):
+            # Phase 1: freeze all main model params; only transformer trains.
+            for param in acmodel_raw.parameters():
+                param.requires_grad_(False)
+            if is_main:
+                txt_logger.info("Warmup phase: main model frozen, training credit assigner only\n")
+        # DDP: broadcast initial CA weights from rank 0 so all ranks start identical.
+        # Without this, a fresh start (no checkpoint) gives each rank its own random init.
+        if ddp:
+            import torch.distributed as dist
+            for param in credit_assigner.parameters():
+                dist.broadcast(param.data, src=0)
 
     # Create exponential decay LR scheduler, so every N steps LR
     # reduced by gamma
@@ -2542,8 +2622,40 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         exps, logs1 = algo.collect_experiences()
         if ddp:
             acmodel_raw.train()
-        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run)
-        logs = {**logs1, **logs2}
+
+        # Train credit assigner on completed episodes (both phases).
+        # Drain the buffer with up to N updates per rollout to avoid dropping episodes.
+        logs_ca = {}
+        if credit_assigner is not None and is_main:
+            from rl.credit_assigner import credit_assigner_loss
+            ca_steps = 0
+            while True:
+                batch = ca_buffer.pop_batch(args.credit_assigner_batch)
+                if batch is None:
+                    break
+                states, returns, lengths = batch
+                states  = states.to(local_device)
+                returns = returns.to(local_device)
+                ca_optimizer.zero_grad()
+                contribs = credit_assigner(states)
+                ca_loss, logs_ca = credit_assigner_loss(
+                    contribs, returns, lengths, args.credit_assigner_entropy)
+                ca_loss.backward()
+                ca_optimizer.step()
+                ca_steps += 1
+        # DDP: broadcast freshly trained weights from rank 0 to all ranks.
+        # dist.broadcast is a collective - must be called on every rank, so it
+        # lives outside the is_main guard.  Unconditional broadcast is harmless
+        # (idempotent when ca_steps=0) and avoids cross-rank ca_steps sync.
+        if ddp and credit_assigner is not None and getattr(args, 'enable_credit_assigner', False):
+            import torch.distributed as dist
+            for param in credit_assigner.parameters():
+                dist.broadcast(param.data, src=0)
+
+        # Phase 1: skip PPO update (main model frozen).
+        warmup = getattr(args, 'warmup_credit_assigner', False)
+        logs2 = algo.update_parameters(exps, apply_update=not args.dry_run and not warmup)
+        logs = {**logs1, **logs2, **logs_ca}
 
         if _ae is not None:
             _h_cur = float(np.mean(logs2["entropy"]))
@@ -2621,6 +2733,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             header += ["grad_norm"]
             data += [logs["grad_norm"]]
 
+            # Credit assigner metrics (present only when a batch was trained this update)
+            for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_sum_abs_err"):
+                if ca_key in logs:
+                    header += [ca_key]
+                    data   += [logs[ca_key]]
+
             grad = logs["grad_norm"]
             grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
             bar_metrics = {"kl", "clip_frac"}
@@ -2655,6 +2773,15 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
                     f" | {mv}"
                     f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
+
+            if credit_assigner is not None and "ca_loss" in logs:
+                txt_logger.info(
+                    f"  CA | loss {logs['ca_loss']:.4f}"
+                    f" | mse {logs['ca_mse']:.4f}"
+                    f" | ent {logs['ca_entropy']:.4f}"
+                    f" | sum_err {logs['ca_sum_abs_err']:.4f}"
+                    f" | blame_pos {logs['ca_blame_pos']:.3f}"
+                    f" | buf {ca_buffer.completed_count}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
@@ -2712,6 +2839,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                       "effective_batch_size": args.batch_size * world_size,
                       "optimizer_state": algo.optimizer.state_dict()}
             acmodel_raw.save_to_status(status)
+            if credit_assigner is not None:
+                status["credit_assigner_state"] = credit_assigner.state_dict()
+                status["credit_assigner_optimizer_state"] = ca_optimizer.state_dict()
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
