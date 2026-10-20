@@ -2729,6 +2729,29 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     onset   = (first_sig.float().argmax().float() / max(W - 1, 1)
                                if first_sig.any() else torch.tensor(1.0, device=local_device))
                     logs_ca["ca_hent_onset"] = onset.item()
+                    # Linear-regression onset: fit a line to the right-side signal
+                    # (frames above noise_floor + 2*std), extrapolate back to where
+                    # it crosses the noise floor estimated from the left 30%.
+                    onset_lr = 1.0
+                    valid_idx = torch.where(valid)[0]
+                    if valid_idx.numel() >= 6:
+                        left_n     = max(1, valid_idx.numel() * 3 // 10)
+                        left_gap   = gap_t[valid_idx[:left_n]]
+                        nf_mean    = left_gap.mean()
+                        nf_std     = left_gap.std().clamp(min=1e-6)
+                        threshold  = nf_mean + 2.0 * nf_std
+                        sig_mask   = (gap_t > threshold) & valid
+                        if sig_mask.sum() >= 2:
+                            x = torch.where(sig_mask)[0].float() / max(W - 1, 1)
+                            y = gap_t[sig_mask]
+                            xm, ym = x.mean(), y.mean()
+                            slope  = ((x - xm) * (y - ym)).sum() / \
+                                     ((x - xm)**2).sum().clamp(min=1e-8)
+                            intercept = ym - slope * xm
+                            if slope > 1e-4:
+                                onset_lr = float(((threshold - intercept) / slope)
+                                                 .clamp(0.0, 1.0).item())
+                    logs_ca["ca_hent_onset_lr"] = onset_lr
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
         # lives outside the is_main guard.  Unconditional broadcast is harmless
@@ -2829,7 +2852,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                              for i in range(6)
                              for g in ("s", "f")
                              for m in ("std", "ent")),
-                           "ca_hent_onset"):
+                           "ca_hent_onset",
+                           "ca_hent_onset_lr"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2889,7 +2913,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     gap_str = " ".join(f"{p}:{v:+.2f}" for p, v in zip(pct, g6))
                     txt_logger.info(
                         f"  CA gap | {gap_str}"
-                        f" | onset:{logs.get('ca_hent_onset', 0):.2f}")
+                        f" | onset:{logs.get('ca_hent_onset', 0):.2f}"
+                        f" lr:{logs.get('ca_hent_onset_lr', 0):.2f}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
