@@ -2512,7 +2512,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             ca_optimizer.load_state_dict(status["credit_assigner_optimizer_state"])
         ca_buffer = CreditAssignerBuffer(
             num_envs=args.env_runners,
-            window=ca_window)
+            window=ca_window,
+            batch_size=args.credit_assigner_batch)
         if is_main:
             txt_logger.info(f"Credit assigner: window={ca_window} "
                             f"alpha={args.credit_assigner_alpha} "

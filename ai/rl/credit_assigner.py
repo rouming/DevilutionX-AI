@@ -89,16 +89,18 @@ class CreditAssignerBuffer:
     so the transformer can learn which h-state patterns differentiate them.
     """
 
-    def __init__(self, num_envs, window, max_completed=512):
+    def __init__(self, num_envs, window, batch_size=8):
         self.window     = window
         self._states    = [deque(maxlen=window) for _ in range(num_envs)]
         self._returns   = [0.0] * num_envs
-        # Separate queues; each holds up to max_completed episodes independently.
-        # Do NOT share the capacity (// 2) - the two types arrive at different
-        # rates and the faster-filling queue must be able to buffer while waiting
-        # for the slower one.
-        self._successes = deque(maxlen=max_completed)
-        self._failures  = deque(maxlen=max_completed)
+        # Each queue holds exactly half a batch.  Once both queues are full,
+        # one pop_batch call drains them both to zero and the next rollout
+        # starts fresh.  This prevents stale episodes from many rollouts ago
+        # from polluting training and avoids unbounded queue growth on floors
+        # where one outcome type dominates.
+        half = batch_size // 2
+        self._successes = deque(maxlen=half)
+        self._failures  = deque(maxlen=half)
 
     def step(self, memories_h, rewards, dones, successes):
         """
