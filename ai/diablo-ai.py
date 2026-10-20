@@ -811,6 +811,9 @@ def make_diablo_parser():
     train_ai_parser.add_argument(
         "--credit-assigner-pos", type=float, default=0.1, metavar="P",
         help="Directional positional penalty: push failure blame early, success credit late (default: 0.1)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-epochs", type=int, default=4, metavar="E",
+        help="Gradient steps per batch: reuse same episodes E times before discarding (default: 4)")
 
     #
     # demos-il
@@ -2645,17 +2648,20 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 # transformer can attend across episode boundaries and learn which
                 # h-state patterns differentiate success from failure.
                 B, W, D = states.shape
-                ep_ids      = torch.arange(B, device=local_device).repeat_interleave(W)
-                states_cat  = states.reshape(1, B * W, D)
-                ca_optimizer.zero_grad()
-                contribs_cat = credit_assigner(states_cat, episode_ids=ep_ids)
-                contribs     = contribs_cat.reshape(B, W)
-                ca_loss, logs_ca = credit_assigner_loss(
-                    contribs, returns, lengths,
-                    args.credit_assigner_entropy, args.credit_assigner_pos,
-                    is_success=is_success)
-                ca_loss.backward()
-                ca_optimizer.step()
+                ep_ids     = torch.arange(B, device=local_device).repeat_interleave(W)
+                states_cat = states.reshape(1, B * W, D)
+                # Multiple gradient steps on the same batch so CA can converge
+                # within a rollout rather than oscillating across rollouts.
+                for _ in range(args.credit_assigner_epochs):
+                    ca_optimizer.zero_grad()
+                    contribs_cat = credit_assigner(states_cat, episode_ids=ep_ids)
+                    contribs     = contribs_cat.reshape(B, W)
+                    ca_loss, logs_ca = credit_assigner_loss(
+                        contribs, returns, lengths,
+                        args.credit_assigner_entropy, args.credit_assigner_pos,
+                        is_success=is_success)
+                    ca_loss.backward()
+                    ca_optimizer.step()
                 ca_steps += 1
 
                 # H-state entropy diagnostics - observe whether failure episodes
