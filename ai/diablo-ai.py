@@ -2692,25 +2692,33 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     logs_ca["ca_h_f_std"]  = hf.std().item()
                     logs_ca["ca_h_f_min"]  = hf.min().item()
                     logs_ca["ca_h_f_max"]  = hf.max().item()
-                    # H-state std at three anchor frames: start, blame, end.
+                    # H-state std and ent at three anchor frames: start, blame, end.
                     # Compares s vs f at each point to see where the gap opens.
                     ep_idx  = torch.arange(B, device=local_device)
                     fr_idx  = fr.squeeze(1).long()                               # (B,) first real
                     bl_idx  = (contribs.detach().abs() * mp).argmax(dim=1)       # (B,) blamed
                     en_idx  = torch.full((B,), W - 1,
                                          dtype=torch.long, device=local_device)  # (B,) last
-                    def _std2(idx):
-                        h = states[ep_idx, idx]     # (B, D)
-                        return h[:half].std().item(), h[half:].std().item()
-                    ss, fs = _std2(fr_idx)
-                    sb, fb = _std2(bl_idx)
-                    se, fe = _std2(en_idx)
-                    logs_ca["ca_hf_start_s"] = ss
-                    logs_ca["ca_hf_start_f"] = fs
-                    logs_ca["ca_hf_blame_s"] = sb
-                    logs_ca["ca_hf_blame_f"] = fb
-                    logs_ca["ca_hf_end_s"]   = se
-                    logs_ca["ca_hf_end_f"]   = fe
+                    def _frame_stats(idx):
+                        h  = states[ep_idx, idx]        # (B, D)
+                        he = h_ent[ep_idx, idx]         # (B,) entropy at that frame
+                        return (h[:half].std().item(),  h[half:].std().item(),
+                                he[:half].mean().item(), he[half:].mean().item())
+                    ss, fs, es, ef = _frame_stats(fr_idx)
+                    logs_ca["ca_hf_start_s_std"] = ss
+                    logs_ca["ca_hf_start_f_std"] = fs
+                    logs_ca["ca_hf_start_s_ent"] = es
+                    logs_ca["ca_hf_start_f_ent"] = ef
+                    ss, fs, es, ef = _frame_stats(bl_idx)
+                    logs_ca["ca_hf_blame_s_std"] = ss
+                    logs_ca["ca_hf_blame_f_std"] = fs
+                    logs_ca["ca_hf_blame_s_ent"] = es
+                    logs_ca["ca_hf_blame_f_ent"] = ef
+                    ss, fs, es, ef = _frame_stats(en_idx)
+                    logs_ca["ca_hf_end_s_std"]   = ss
+                    logs_ca["ca_hf_end_f_std"]   = fs
+                    logs_ca["ca_hf_end_s_ent"]   = es
+                    logs_ca["ca_hf_end_f_ent"]   = ef
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
         # lives outside the is_main guard.  Unconditional broadcast is harmless
@@ -2807,9 +2815,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                            "ca_hent_s", "ca_hent_f", "ca_hent_peak",
                            "ca_h_s_mean", "ca_h_s_std", "ca_h_s_min", "ca_h_s_max",
                            "ca_h_f_mean", "ca_h_f_std", "ca_h_f_min", "ca_h_f_max",
-                           "ca_hf_start_s", "ca_hf_start_f",
-                           "ca_hf_blame_s", "ca_hf_blame_f",
-                           "ca_hf_end_s",   "ca_hf_end_f"):
+                           "ca_hf_start_s_std", "ca_hf_start_f_std",
+                           "ca_hf_start_s_ent", "ca_hf_start_f_ent",
+                           "ca_hf_blame_s_std", "ca_hf_blame_f_std",
+                           "ca_hf_blame_s_ent", "ca_hf_blame_f_ent",
+                           "ca_hf_end_s_std",   "ca_hf_end_f_std",
+                           "ca_hf_end_s_ent",   "ca_hf_end_f_ent"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2863,13 +2874,19 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" | hstd s:{logs.get('ca_h_s_std', 0):.3f}"
                     f" f:{logs.get('ca_h_f_std', 0):.3f}"
                     f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
-                if "ca_hf_blame_s" in logs:
+                if "ca_hf_blame_s_std" in logs:
                     bp = logs.get('ca_blame_pos', 0)
                     txt_logger.info(
                         f"  CA frames"
-                        f" | start s:{logs['ca_hf_start_s']:.3f} f:{logs['ca_hf_start_f']:.3f}"
-                        f" | blame({bp:.2f}) s:{logs['ca_hf_blame_s']:.3f} f:{logs['ca_hf_blame_f']:.3f}"
-                        f" | end s:{logs['ca_hf_end_s']:.3f} f:{logs['ca_hf_end_f']:.3f}")
+                        f" | start"
+                        f" s:{logs['ca_hf_start_s_std']:.3f}/{logs['ca_hf_start_s_ent']:.2f}"
+                        f" f:{logs['ca_hf_start_f_std']:.3f}/{logs['ca_hf_start_f_ent']:.2f}"
+                        f" | blame({bp:.2f})"
+                        f" s:{logs['ca_hf_blame_s_std']:.3f}/{logs['ca_hf_blame_s_ent']:.2f}"
+                        f" f:{logs['ca_hf_blame_f_std']:.3f}/{logs['ca_hf_blame_f_ent']:.2f}"
+                        f" | end"
+                        f" s:{logs['ca_hf_end_s_std']:.3f}/{logs['ca_hf_end_s_ent']:.2f}"
+                        f" f:{logs['ca_hf_end_f_std']:.3f}/{logs['ca_hf_end_f_ent']:.2f}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
