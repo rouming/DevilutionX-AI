@@ -807,7 +807,10 @@ def make_diablo_parser():
         help="Learning rate for the credit assigner optimizer (default: 1e-4)")
     train_ai_parser.add_argument(
         "--credit-assigner-batch", type=int, default=8, metavar="B",
-        help="Number of completed episodes per credit assigner update (default: 8)")
+        help="Episodes per credit assigner update: half success, half failure (default: 8)")
+    train_ai_parser.add_argument(
+        "--credit-assigner-pos", type=float, default=0.1, metavar="P",
+        help="Directional positional penalty: push failure blame early, success credit late (default: 0.1)")
 
     #
     # demos-il
@@ -2496,7 +2499,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         ca_window = args.credit_assigner_window
         credit_assigner = CreditAssigner(
             hidden_dim=acmodel_raw.semi_memory_size,
-            window=ca_window)
+            window=ca_window,
+            max_group=args.credit_assigner_batch)
         credit_assigner.to(local_device)
         if "credit_assigner_state" in status:
             credit_assigner.load_state_dict(status["credit_assigner_state"])
@@ -2633,13 +2637,22 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 batch = ca_buffer.pop_batch(args.credit_assigner_batch)
                 if batch is None:
                     break
-                states, returns, lengths = batch
-                states  = states.to(local_device)
-                returns = returns.to(local_device)
+                states, returns, lengths, is_success = batch
+                states     = states.to(local_device)
+                returns    = returns.to(local_device)
+                # Cross-episode: concatenate all N episodes into one sequence so the
+                # transformer can attend across episode boundaries and learn which
+                # h-state patterns differentiate success from failure.
+                B, W, D = states.shape
+                ep_ids      = torch.arange(B, device=local_device).repeat_interleave(W)
+                states_cat  = states.reshape(1, B * W, D)
                 ca_optimizer.zero_grad()
-                contribs = credit_assigner(states)
+                contribs_cat = credit_assigner(states_cat, episode_ids=ep_ids)
+                contribs     = contribs_cat.reshape(B, W)
                 ca_loss, logs_ca = credit_assigner_loss(
-                    contribs, returns, lengths, args.credit_assigner_entropy)
+                    contribs, returns, lengths,
+                    args.credit_assigner_entropy, args.credit_assigner_pos,
+                    is_success=is_success)
                 ca_loss.backward()
                 ca_optimizer.step()
                 ca_steps += 1
@@ -2734,7 +2747,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             data += [logs["grad_norm"]]
 
             # Credit assigner metrics (present only when a batch was trained this update)
-            for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_sum_abs_err"):
+            for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_pos",
+                           "ca_sum_err", "ca_blame_pos"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2779,9 +2793,10 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f"  CA | loss {logs['ca_loss']:.4f}"
                     f" | mse {logs['ca_mse']:.4f}"
                     f" | ent {logs['ca_entropy']:.4f}"
-                    f" | sum_err {logs['ca_sum_abs_err']:.4f}"
+                    f" | pos {logs['ca_pos']:.4f}"
+                    f" | sum_err {logs['ca_sum_err']:.4f}"
                     f" | blame_pos {logs['ca_blame_pos']:.3f}"
-                    f" | buf {ca_buffer.completed_count}")
+                    f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]

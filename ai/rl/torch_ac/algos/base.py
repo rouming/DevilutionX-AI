@@ -263,7 +263,8 @@ class BaseAlgo(ABC):
                 h = self.memories[i, :, :self.memory_size // 2].detach().cpu()
                 r = self.rewards[i, :, 0].detach().cpu()
                 d = (self.mask == 0).cpu()
-                self.ca_buffer.step(h, r, d)
+                s = numpy.array([inf.get("success", False) for inf in info], dtype=bool)
+                self.ca_buffer.step(h, r, d, s)
 
         # Add advantage and return to experiences
 
