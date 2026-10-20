@@ -2692,33 +2692,35 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     logs_ca["ca_h_f_std"]  = hf.std().item()
                     logs_ca["ca_h_f_min"]  = hf.min().item()
                     logs_ca["ca_h_f_max"]  = hf.max().item()
-                    # H-state std and ent at three anchor frames: start, blame, end.
-                    # Compares s vs f at each point to see where the gap opens.
-                    ep_idx  = torch.arange(B, device=local_device)
-                    fr_idx  = fr.squeeze(1).long()                               # (B,) first real
-                    bl_idx  = (contribs.detach().abs() * mp).argmax(dim=1)       # (B,) blamed
-                    en_idx  = torch.full((B,), W - 1,
-                                         dtype=torch.long, device=local_device)  # (B,) last
-                    def _frame_stats(idx):
-                        h  = states[ep_idx, idx]        # (B, D)
-                        he = h_ent[ep_idx, idx]         # (B,) entropy at that frame
-                        return (h[:half].std().item(),  h[half:].std().item(),
-                                he[:half].mean().item(), he[half:].mean().item())
-                    ss, fs, es, ef = _frame_stats(fr_idx)
-                    logs_ca["ca_hf_start_s_std"] = ss
-                    logs_ca["ca_hf_start_f_std"] = fs
-                    logs_ca["ca_hf_start_s_ent"] = es
-                    logs_ca["ca_hf_start_f_ent"] = ef
-                    ss, fs, es, ef = _frame_stats(bl_idx)
-                    logs_ca["ca_hf_blame_s_std"] = ss
-                    logs_ca["ca_hf_blame_f_std"] = fs
-                    logs_ca["ca_hf_blame_s_ent"] = es
-                    logs_ca["ca_hf_blame_f_ent"] = ef
-                    ss, fs, es, ef = _frame_stats(en_idx)
-                    logs_ca["ca_hf_end_s_std"]   = ss
-                    logs_ca["ca_hf_end_f_std"]   = fs
-                    logs_ca["ca_hf_end_s_ent"]   = es
-                    logs_ca["ca_hf_end_f_ent"]   = ef
+                    # 6 evenly-spaced anchor points across each episode's real window.
+                    ep_idx = torch.arange(B, device=local_device)
+                    fr_f   = fr.squeeze(1).float()                               # (B,)
+                    t6     = torch.linspace(0, 1, 6, device=local_device)        # (6,)
+                    # pts6[b, i] = position of i-th anchor in episode b
+                    pts6   = (fr_f.unsqueeze(1) +
+                              t6.unsqueeze(0) * (W - 1 - fr_f).unsqueeze(1)
+                              ).long().clamp(0, W - 1)                           # (B, 6)
+                    gap6   = []
+                    for pi in range(6):
+                        h_p  = states[ep_idx, pts6[:, pi]]                      # (B, D)
+                        he_p = h_ent[ep_idx, pts6[:, pi]]                       # (B,)
+                        logs_ca[f"ca_hf{pi}_s_std"] = h_p[:half].std().item()
+                        logs_ca[f"ca_hf{pi}_f_std"] = h_p[half:].std().item()
+                        logs_ca[f"ca_hf{pi}_s_ent"] = he_p[:half].mean().item()
+                        logs_ca[f"ca_hf{pi}_f_ent"] = he_p[half:].mean().item()
+                        gap6.append(he_p[half:].mean().item() - he_p[:half].mean().item())
+                    logs_ca["ca_hf_gap6"] = gap6                                 # list, not logged to CSV
+                    # Onset: argmax of gap derivative over the full W-point trajectory.
+                    # Uses the per-episode-masked means already computed for hent_s/f above.
+                    he_s_t = (h_ent[:half] * mp[:half]).sum(0) / \
+                             mp[:half].sum(0).clamp(min=1e-8)                   # (W,)
+                    he_f_t = (h_ent[half:] * mp[half:]).sum(0) / \
+                             mp[half:].sum(0).clamp(min=1e-8)                   # (W,)
+                    gap_t  = (he_f_t - he_s_t) * mp.mean(0)                    # (W,)
+                    dgap   = torch.zeros(W, device=local_device)
+                    dgap[1:] = (gap_t[1:] - gap_t[:-1]) * mp.mean(0)[1:]
+                    onset  = dgap.argmax().float() / max(W - 1, 1)
+                    logs_ca["ca_hent_onset"] = onset.item()
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
         # lives outside the is_main guard.  Unconditional broadcast is harmless
@@ -2815,12 +2817,11 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                            "ca_hent_s", "ca_hent_f", "ca_hent_peak",
                            "ca_h_s_mean", "ca_h_s_std", "ca_h_s_min", "ca_h_s_max",
                            "ca_h_f_mean", "ca_h_f_std", "ca_h_f_min", "ca_h_f_max",
-                           "ca_hf_start_s_std", "ca_hf_start_f_std",
-                           "ca_hf_start_s_ent", "ca_hf_start_f_ent",
-                           "ca_hf_blame_s_std", "ca_hf_blame_f_std",
-                           "ca_hf_blame_s_ent", "ca_hf_blame_f_ent",
-                           "ca_hf_end_s_std",   "ca_hf_end_f_std",
-                           "ca_hf_end_s_ent",   "ca_hf_end_f_ent"):
+                           *(f"ca_hf{i}_{g}_{m}"
+                             for i in range(6)
+                             for g in ("s", "f")
+                             for m in ("std", "ent")),
+                           "ca_hent_onset"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2874,19 +2875,13 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" | hstd s:{logs.get('ca_h_s_std', 0):.3f}"
                     f" f:{logs.get('ca_h_f_std', 0):.3f}"
                     f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
-                if "ca_hf_blame_s_std" in logs:
-                    bp = logs.get('ca_blame_pos', 0)
+                if "ca_hf_gap6" in logs:
+                    g6  = logs["ca_hf_gap6"]
+                    pct = ["0%", "20%", "40%", "60%", "80%", "100%"]
+                    gap_str = " ".join(f"{p}:{v:+.2f}" for p, v in zip(pct, g6))
                     txt_logger.info(
-                        f"  CA frames"
-                        f" | start"
-                        f" s:{logs['ca_hf_start_s_std']:.3f}/{logs['ca_hf_start_s_ent']:.2f}"
-                        f" f:{logs['ca_hf_start_f_std']:.3f}/{logs['ca_hf_start_f_ent']:.2f}"
-                        f" | blame({bp:.2f})"
-                        f" s:{logs['ca_hf_blame_s_std']:.3f}/{logs['ca_hf_blame_s_ent']:.2f}"
-                        f" f:{logs['ca_hf_blame_f_std']:.3f}/{logs['ca_hf_blame_f_ent']:.2f}"
-                        f" | end"
-                        f" s:{logs['ca_hf_end_s_std']:.3f}/{logs['ca_hf_end_s_ent']:.2f}"
-                        f" f:{logs['ca_hf_end_f_std']:.3f}/{logs['ca_hf_end_f_ent']:.2f}")
+                        f"  CA gap | {gap_str}"
+                        f" | onset:{logs.get('ca_hent_onset', 0):.2f}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
