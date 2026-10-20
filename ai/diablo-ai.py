@@ -2656,6 +2656,28 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 ca_loss.backward()
                 ca_optimizer.step()
                 ca_steps += 1
+
+                # H-state entropy diagnostics - observe whether failure episodes
+                # show more "committed" (lower entropy) h-states than success ones,
+                # and where the gap peaks temporally.  No gradient, no loss change.
+                with torch.no_grad():
+                    half   = B // 2
+                    abs_h  = states.abs()                                        # (B, W, D)
+                    h_w    = abs_h / abs_h.sum(-1, keepdim=True).clamp(min=1e-8)
+                    h_ent  = -(h_w * (h_w + 1e-8).log()).sum(-1)                # (B, W)
+                    fr     = (W - lengths.to(local_device)).unsqueeze(1)         # (B, 1)
+                    mp     = (torch.arange(W, device=local_device).unsqueeze(0)
+                              >= fr).float()                                     # (B, W)
+                    hent_s = ((h_ent[:half] * mp[:half]).sum()
+                              / mp[:half].sum().clamp(min=1e-8))
+                    hent_f = ((h_ent[half:] * mp[half:]).sum()
+                              / mp[half:].sum().clamp(min=1e-8))
+                    gap    = ((h_ent[:half].mean(0) - h_ent[half:].mean(0)).abs()
+                              * mp.mean(0))                                      # (W,)
+                    peak   = gap.argmax().float() / max(W - 1, 1)               # [0, 1]
+                    logs_ca["ca_hent_s"]    = hent_s.item()
+                    logs_ca["ca_hent_f"]    = hent_f.item()
+                    logs_ca["ca_hent_peak"] = peak.item()
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
         # lives outside the is_main guard.  Unconditional broadcast is harmless
@@ -2748,7 +2770,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
 
             # Credit assigner metrics (present only when a batch was trained this update)
             for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_pos",
-                           "ca_sum_err", "ca_blame_pos"):
+                           "ca_sum_err", "ca_blame_pos",
+                           "ca_hent_s", "ca_hent_f", "ca_hent_peak"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2796,6 +2819,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" | pos {logs['ca_pos']:.4f}"
                     f" | sum_err {logs['ca_sum_err']:.4f}"
                     f" | blame_pos {logs['ca_blame_pos']:.3f}"
+                    f" | hent s:{logs.get('ca_hent_s', 0):.2f}"
+                    f" f:{logs.get('ca_hent_f', 0):.2f}"
+                    f" peak:{logs.get('ca_hent_peak', 0):.2f}"
                     f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
 
             for i, rp in enumerate(return_per_episode):
