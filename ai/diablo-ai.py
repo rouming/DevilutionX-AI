@@ -2679,6 +2679,19 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     logs_ca["ca_hent_s"]    = hent_s.item()
                     logs_ca["ca_hent_f"]    = hent_f.item()
                     logs_ca["ca_hent_peak"] = peak.item()
+                    # Per-group h-state distribution stats (real positions only)
+                    ms = mp[:half].bool()                                        # (half, W)
+                    mf = mp[half:].bool()                                        # (half, W)
+                    hs = states[:half][ms]                                       # (N_s, D)
+                    hf = states[half:][mf]                                       # (N_f, D)
+                    logs_ca["ca_h_s_mean"] = hs.mean().item()
+                    logs_ca["ca_h_s_std"]  = hs.std().item()
+                    logs_ca["ca_h_s_min"]  = hs.min().item()
+                    logs_ca["ca_h_s_max"]  = hs.max().item()
+                    logs_ca["ca_h_f_mean"] = hf.mean().item()
+                    logs_ca["ca_h_f_std"]  = hf.std().item()
+                    logs_ca["ca_h_f_min"]  = hf.min().item()
+                    logs_ca["ca_h_f_max"]  = hf.max().item()
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
         # lives outside the is_main guard.  Unconditional broadcast is harmless
@@ -2772,7 +2785,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             # Credit assigner metrics (present only when a batch was trained this update)
             for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_pos",
                            "ca_sum_err", "ca_blame_pos",
-                           "ca_hent_s", "ca_hent_f", "ca_hent_peak"):
+                           "ca_hent_s", "ca_hent_f", "ca_hent_peak",
+                           "ca_h_s_mean", "ca_h_s_std", "ca_h_s_min", "ca_h_s_max",
+                           "ca_h_f_mean", "ca_h_f_std", "ca_h_f_min", "ca_h_f_max"):
                 if ca_key in logs:
                     header += [ca_key]
                     data   += [logs[ca_key]]
@@ -2823,6 +2838,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" | hent s:{logs.get('ca_hent_s', 0):.2f}"
                     f" f:{logs.get('ca_hent_f', 0):.2f}"
                     f" peak:{logs.get('ca_hent_peak', 0):.2f}"
+                    f" | hstd s:{logs.get('ca_h_s_std', 0):.3f}"
+                    f" f:{logs.get('ca_h_f_std', 0):.3f}"
                     f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
 
             for i, rp in enumerate(return_per_episode):
