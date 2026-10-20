@@ -2717,9 +2717,11 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     he_f_t = (h_ent[half:] * mp[half:]).sum(0) / \
                              mp[half:].sum(0).clamp(min=1e-8)                   # (W,)
                     gap_t  = (he_f_t - he_s_t) * mp.mean(0)                    # (W,)
-                    dgap   = torch.zeros(W, device=local_device)
-                    dgap[1:] = (gap_t[1:] - gap_t[:-1]) * mp.mean(0)[1:]
-                    onset  = dgap.argmax().float() / max(W - 1, 1)
+                    valid   = mp.mean(0) > 0.5
+                    gap_max = gap_t[valid].max().clamp(min=1e-6) if valid.any() else torch.tensor(1e-6)
+                    first_sig = (gap_t > 0.25 * gap_max) & valid
+                    onset   = (first_sig.float().argmax().float() / max(W - 1, 1)
+                               if first_sig.any() else torch.tensor(1.0, device=local_device))
                     logs_ca["ca_hent_onset"] = onset.item()
         # DDP: broadcast freshly trained weights from rank 0 to all ranks.
         # dist.broadcast is a collective - must be called on every rank, so it
