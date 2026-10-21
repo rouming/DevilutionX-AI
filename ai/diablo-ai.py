@@ -2530,6 +2530,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     train_success_count = 0
     train_return_sum = None
     train_window_start_time = time.time()
+    train_window_start_frames = num_frames
 
     while num_frames < args.frames_int:
         # Update model parameters
@@ -2699,7 +2700,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             train_success_sum = 0.0
             train_success_count = 0
             train_return_sum = None
+            _window_frames = num_frames - train_window_start_frames
             train_window_start_time = time.time()
+            train_window_start_frames = num_frames
 
             status = {"num_frames": num_frames,
                       "update": update,
@@ -2725,8 +2728,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             _session_frames = num_frames - session_start_frames
             _session_target = args.frames_int - session_start_frames
             _pct = min(100, 100 * _session_frames / _session_target) if _session_target > 0 else 100
-            _session_elapsed = time.time() - session_start_time
-            _eta = max(0, int(_session_elapsed * (args.frames_int - num_frames) / _session_frames)) if _session_frames > 0 else 0
+            _eta = max(0, int((args.frames_int - num_frames) * train_window_elapsed / _window_frames)) if _window_frames > 0 else 0
             txt_logger.info(f"Progress:   {_pct:.1f}% | ETA {_fmt_duration(_eta)}")
             txt_logger.info("Status saved")
 
