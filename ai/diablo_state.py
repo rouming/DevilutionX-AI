@@ -295,11 +295,16 @@ def env_stats(args):
     RE_LEVEL = re.compile(r'dungeon_level=(\d+)')
     RE_DONE  = re.compile(r'EPISODE DONE=(true|false) steps=(\d+)')
     RE_EVENT = re.compile(r'^(?!\s*#)(.+),\s*R\s*(\[[-\d.,\s]+\]|[-\d.]+)\s*$')
+    RE_END   = re.compile(r'^# end R ([-\d.]+)$')
 
-    counts    = {}
-    sums      = {}
-    lvl_out   = defaultdict(lambda: defaultdict(int))
-    lvl_steps = defaultdict(lambda: {'succ': [], 'fail': []})
+    counts          = {}
+    sums            = {}
+    lvl_out         = defaultdict(lambda: defaultdict(int))
+    lvl_steps       = defaultdict(lambda: {'succ': [], 'fail': []})
+    lbl_g0          = defaultdict(list)
+    lbl_steps       = defaultdict(list)
+    suicide_flagged = defaultdict(int)
+    suicide_total   = defaultdict(int)
 
     pattern = env_log_glob(eval=args.eval_runners)
     files = sorted(glob.glob(pattern))
@@ -322,7 +327,11 @@ def env_stats(args):
     succ_scanned = 0
 
     if args.last_episodes == 0:
-        cur_level = None
+        cur_level        = None
+        cur_ep_reward    = 0.0
+        cur_step_rewards = []
+        cur_terminal_lbl = None
+        cur_terminal_r   = None
         for path in files:
             try:
                 with open(path) as f:
@@ -330,7 +339,11 @@ def env_stats(args):
                         line = line.rstrip()
                         m = RE_LEVEL.search(line)
                         if m:
-                            cur_level = int(m.group(1))
+                            cur_level        = int(m.group(1))
+                            cur_ep_reward    = 0.0
+                            cur_step_rewards = []
+                            cur_terminal_lbl = None
+                            cur_terminal_r   = None
                             continue
                         m = RE_DONE.search(line)
                         if m:
@@ -340,6 +353,26 @@ def env_stats(args):
                                 if key == 'succ':
                                     succ_scanned += 1
                                 lvl_steps[cur_level][key].append(int(m.group(2)))
+                                if cur_terminal_lbl is not None:
+                                    lbl_g0[cur_terminal_lbl].append(cur_ep_reward)
+                                    lbl_steps[cur_terminal_lbl].append(int(m.group(2)))
+                                    if cur_terminal_r is not None and cur_terminal_r < 0 \
+                                            and cur_step_rewards:
+                                        suicide_total[cur_terminal_lbl] += 1
+                                        g_t = cur_terminal_r
+                                        for r in reversed(cur_step_rewards):
+                                            g_t = r + g_t
+                                            if g_t > 0:
+                                                suicide_flagged[cur_terminal_lbl] += 1
+                                                break
+                            cur_ep_reward    = 0.0
+                            cur_step_rewards = []
+                            cur_terminal_lbl = None
+                            cur_terminal_r   = None
+                            continue
+                        m = RE_END.match(line)
+                        if m:
+                            cur_step_rewards.append(float(m.group(1)))
                             continue
                         m = RE_EVENT.match(line)
                         if not m:
@@ -352,17 +385,22 @@ def env_stats(args):
                                 if vs.startswith('[') else float(vs)
                         counts[label] = counts.get(label, 0) + 1
                         sums[label]   = sums.get(label, 0.0) + val
-                        if label in TERMINAL and cur_level is not None:
-                            lvl_out[cur_level][label] += 1
+                        if label in TERMINAL:
+                            if cur_level is not None:
+                                lvl_out[cur_level][label] += 1
+                            cur_terminal_lbl = label
+                            cur_terminal_r   = val
+                        cur_ep_reward += val
             except OSError:
                 pass
     else:
         quota = (args.last_episodes + len(files) - 1) // len(files)
         for path in files:
-            ep_events = []
-            ep_done   = None
-            in_ep     = False
-            ep_count  = 0
+            ep_events       = []
+            ep_step_rewards = []
+            ep_done         = None
+            in_ep           = False
+            ep_count        = 0
             try:
                 for line in _reversed_lines(path):
                     line = line.rstrip()
@@ -382,10 +420,30 @@ def env_stats(args):
                                     if key == 'succ':
                                         succ_scanned += 1
                                     lvl_steps[level][key].append(ep_done[1])
-                            ep_count  += 1
-                            ep_events  = []
-                            ep_done    = None
-                            in_ep      = False
+                                    ep_return = sum(v for _, v in ep_events)
+                                    term_lbl = next(
+                                        (lbl for lbl, _ in ep_events if lbl in TERMINAL),
+                                        None)
+                                    if term_lbl is not None:
+                                        lbl_g0[term_lbl].append(ep_return)
+                                        lbl_steps[term_lbl].append(ep_done[1])
+                                        term_r = next(
+                                            (val for lbl, val in ep_events if lbl in TERMINAL),
+                                            None)
+                                        if term_r is not None and term_r < 0 \
+                                                and ep_step_rewards:
+                                            suicide_total[term_lbl] += 1
+                                            g_t = term_r
+                                            for r in ep_step_rewards:
+                                                g_t = r + g_t
+                                                if g_t > 0:
+                                                    suicide_flagged[term_lbl] += 1
+                                                    break
+                            ep_count        += 1
+                            ep_events        = []
+                            ep_step_rewards  = []
+                            ep_done          = None
+                            in_ep            = False
                             if ep_count >= quota:
                                 break
                         continue
@@ -395,6 +453,10 @@ def env_stats(args):
                         in_ep   = True
                         continue
                     if not in_ep:
+                        continue
+                    m = RE_END.match(line)
+                    if m:
+                        ep_step_rewards.append(float(m.group(1)))
                         continue
                     m = RE_EVENT.match(line)
                     if not m:
@@ -540,6 +602,87 @@ def env_stats(args):
              "%*s" % (step_w, steps_fmt(lvl_steps[level]['fail']))]
         )
         print(row)
+
+    # Reward sanity: G0 per terminal outcome, overlap fraction, suicide check.
+    SUCCESS_LABELS = frozenset({'Goal', 'Diablo killed'})
+    if lbl_g0:
+        def g0_fmt(lst):
+            if not lst:
+                return "-"
+            n    = len(lst)
+            mean = sum(lst) / n
+            std  = math.sqrt(sum((x - mean) ** 2 for x in lst) / n)
+            return "μ=%.1f σ=%.1f [%.1f..%.1f]" % (mean, std, min(lst), max(lst))
+
+        has_failure  = any(lbl not in SUCCESS_LABELS for lbl in lbl_g0)
+
+        ordered_lbl = ([c for c in OUTCOME_COLS if c in lbl_g0] +
+                       [l for l in sorted(lbl_g0) if l not in set(OUTCOME_COLS)])
+
+        label_w = max(len("label"),
+                      max((len(l) for l in ordered_lbl), default=1))
+        n_w     = max(len("n"),
+                      max((len(str(len(lbl_g0[l]))) for l in ordered_lbl), default=1))
+        g0_w    = max(len("G0"),
+                      max((len(g0_fmt(lbl_g0[l])) for l in ordered_lbl), default=1))
+
+        def pearson_r(xs, ys):
+            n = len(xs)
+            if n < 2:
+                return None
+            mx = sum(xs) / n
+            my = sum(ys) / n
+            cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+            sx  = math.sqrt(sum((x - mx) ** 2 for x in xs))
+            sy  = math.sqrt(sum((y - my) ** 2 for y in ys))
+            return cov / (sx * sy) if sx > 1e-8 and sy > 1e-8 else None
+
+        has_overlap  = has_failure
+        has_corr     = any(len(lbl_g0[l]) >= 2 for l in ordered_lbl)
+        has_suicide  = any(suicide_total[l] > 0 for l in ordered_lbl)
+
+        hdr_parts = ["%-*s" % (label_w, "label"),
+                     "%*s" % (n_w, "n"),
+                     "%-*s" % (g0_w, "G0")]
+        if has_overlap:
+            hdr_parts.append("%8s" % "overlap")
+        if has_corr:
+            hdr_parts.append("%7s" % "r(G0,T)")
+        if has_suicide:
+            hdr_parts.append("%8s" % "suicide")
+        hdr = "  ".join(hdr_parts)
+        print()
+        print("Reward sanity (G0 = undiscounted episode return by terminal):")
+        print(hdr)
+        print("-" * len(hdr))
+        for lbl in ordered_lbl:
+            lst  = lbl_g0[lbl]
+            row  = ["%-*s" % (label_w, lbl),
+                    "%*d" % (n_w, len(lst)),
+                    "%-*s" % (g0_w, g0_fmt(lst))]
+            if has_overlap:
+                if lbl not in SUCCESS_LABELS and lst:
+                    n_over = sum(1 for g in lst if g > 0)
+                    row.append("%7.1f%%" % (100.0 * n_over / len(lst)))
+                else:
+                    row.append("%8s" % "-")
+            if has_corr:
+                r = pearson_r(lbl_g0[lbl], lbl_steps[lbl])
+                row.append("%+7.2f" % r if r is not None else "%7s" % "-")
+            if has_suicide:
+                total = suicide_total[lbl]
+                if total > 0:
+                    row.append("%7.1f%%" % (100.0 * suicide_flagged[lbl] / total))
+                else:
+                    row.append("%8s" % "-")
+            print("  ".join(row))
+        print("  n: episodes  G0: mean/std/[min..max] of undiscounted return")
+        if has_overlap:
+            print("  overlap: % failure eps with G0 > 0 (net positive despite failure)")
+        if has_corr:
+            print("  r(G0,T): Pearson(G0, episode steps) - positive = longer eps earn more")
+        if has_suicide:
+            print("  suicide: % failure eps where backward G_t > 0 at any step (killed but was profitable)")
 
     WEIGHT_STEP = CURRICULUM_WEIGHT_STEP
     sugg = {}
