@@ -2559,6 +2559,35 @@ class DiabloEnv_ClearAllLevels_v28(DiabloEnv_ClearAllLevels_v27):
     }
 
 
+class DiabloEnv_ClearAllLevels_v29(DiabloEnv_ClearAllLevels_v17):
+    """Like v17 but raises Goal reward and restores object/item shaping.
+
+    Two observed problems motivated this change:
+
+    1. Goal reward too low relative to penalty accumulation.  A long goal
+       episode (heavy damage, many wasted actions) could net G0 < 0, making
+       the success/failure return distributions overlap near zero and rendering
+       the overlap metric meaningless.  Raising Goal from +40 to +70 gives a
+       comfortable margin: the worst observed step-reward accumulation was
+       -59.1, leaving G0 >= +10.9 for any successful episode.
+
+    2. Agent ignores objects and floor items.  ActivateObject and CollectItem
+       were cut to +0.08 in v5 to reduce farming incentive; with finite objects
+       per level there is no farming risk, and the low reward is insufficient
+       to overcome the movement cost of detouring to activate a chest or pick
+       up an item.  Raising both to +0.15 (the original v0 value) restores
+       the incentive to interact with the environment."""
+
+    ENV_VERSION = 17
+
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v17.REWARDS,
+        RewardEvent.Goal:           +70.0,
+        RewardEvent.ActivateObject: +0.15,
+        RewardEvent.CollectItem:    +0.15,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2634,6 +2663,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v27 },
     { 'id': 'Diablo-ClearAllLevels-v28',
       'entry_point': DiabloEnv_ClearAllLevels_v28 },
+    { 'id': 'Diablo-ClearAllLevels-v29',
+      'entry_point': DiabloEnv_ClearAllLevels_v29 },
 
     # HRL Environment Classes
 
