@@ -1937,6 +1937,8 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
                         reward += r
                         print("Wasted secondary, R %.2f" % r, file=self.log)
 
+        if not truncated:
+            print("# end R %.2f" % float(reward), file=self.log)
         return [reward], False, truncated
 
 
