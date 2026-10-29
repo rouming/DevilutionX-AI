@@ -2618,6 +2618,30 @@ class DiabloEnv_ClearAllLevels_v30(DiabloEnv_ClearAllLevels_v29):
     }
 
 
+class DiabloEnv_ClearAllLevels_v31(DiabloEnv_ClearAllLevels_v30):
+    """Like v30 but softens the Death penalty from -40 back to -30.
+
+    v30 eliminated kill-farming (overlap/suicide dropped from ~9% to ~0.6%)
+    but doubled the Stuck rate across all levels (1.9-2.4% -> 3.2-4.6%).
+    The doubled Death penalty (-40) made the agent avoid combat too
+    aggressively, pushing it into corners and triggering Stuck more often.
+
+    -30 is a midpoint between v29 (-20) and v30 (-40): enough to keep
+    farming suppressed while reducing the over-cautious behavior that
+    raised the Stuck rate. All other v30 penalties are unchanged:
+
+      Escape   -50
+      Stuck    -50
+      Timedout -50"""
+
+    ENV_VERSION = 17
+
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v30.REWARDS,
+        RewardEvent.Death: -30.0,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2697,6 +2721,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v29 },
     { 'id': 'Diablo-ClearAllLevels-v30',
       'entry_point': DiabloEnv_ClearAllLevels_v30 },
+    { 'id': 'Diablo-ClearAllLevels-v31',
+      'entry_point': DiabloEnv_ClearAllLevels_v31 },
 
     # HRL Environment Classes
 
