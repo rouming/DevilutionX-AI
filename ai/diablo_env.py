@@ -2588,6 +2588,36 @@ class DiabloEnv_ClearAllLevels_v29(DiabloEnv_ClearAllLevels_v17):
     }
 
 
+class DiabloEnv_ClearAllLevels_v30(DiabloEnv_ClearAllLevels_v29):
+    """Like v29 but doubles all failure terminal penalties.
+
+    v29 data showed Death r(G0,T) trending upward (+0.26) and consistent
+    overlap/suicide around 8-9%, indicating mild kill-farming before dying.
+    Doubling the penalties sharpens the cost of all failure outcomes:
+
+      Death    -20 -> -40
+      Escape   -25 -> -50
+      Stuck    -25 -> -50
+      Timedout -25 -> -50
+
+    Goal (+70) is unchanged.  The goal/death ratio improves from 3.5x to
+    1.75x on raw rewards, but the shaped G0 gap (mean goal ~+81 vs mean
+    death ~-18) already far exceeds the terminal reward difference, so the
+    agent's learned policy is driven more by shaping than by the terminal
+    alone.  The doubled penalties make each failure meaningfully more
+    costly and should reduce the farming incentive."""
+
+    ENV_VERSION = 17
+
+    REWARDS = {
+        **DiabloEnv_ClearAllLevels_v29.REWARDS,
+        RewardEvent.Death:     -40.0,
+        RewardEvent.Escape:    -50.0,
+        RewardEvent.Stuck:     -50.0,
+        RewardEvent.Timedout:  -50.0,
+    }
+
+
 from gymnasium.envs.registration import register
 
 DIABLO_ENVS = [
@@ -2665,6 +2695,8 @@ DIABLO_ENVS = [
       'entry_point': DiabloEnv_ClearAllLevels_v28 },
     { 'id': 'Diablo-ClearAllLevels-v29',
       'entry_point': DiabloEnv_ClearAllLevels_v29 },
+    { 'id': 'Diablo-ClearAllLevels-v30',
+      'entry_point': DiabloEnv_ClearAllLevels_v30 },
 
     # HRL Environment Classes
 
