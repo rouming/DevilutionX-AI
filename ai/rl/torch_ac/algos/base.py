@@ -109,14 +109,11 @@ class BaseAlgo(ABC):
 
         self.num_procs = len(self.env.p.envs)
         self.num_frames = self.num_frames_per_proc * self.num_procs
+        self.semi_memory_size = _m.semi_memory_size if _m.recurrent else 0
 
-        # Credit assigner (optional) - set by caller after construction:
-        #   algo.ca_buffer : CreditAssignerBuffer or None
-        #   algo.ca_model  : CreditAssigner or None  (inference, enabled phase only)
-        #   algo.ca_alpha  : float reward contribution weight (default 0.1)
-        self.ca_buffer = None
-        self.ca_model  = None
-        self.ca_alpha  = 0.1
+        # Q-critic (optional) - set by caller after construction:
+        #   algo.q_critic : QCritic or None  (set when --enable-q-critic is active)
+        self.q_critic = None
 
         # Initialize experience values
 
@@ -257,15 +254,6 @@ class BaseAlgo(ABC):
             self.log_episode_reshaped_return *= self.mask.unsqueeze(1)
             self.log_episode_num_frames *= self.mask
 
-            # Accumulate (hidden_state, reward, done) for credit assigner training.
-            # memories[i] is the LSTM h||c state entering step i; take only h (first half).
-            if self.ca_buffer is not None and self.recurrent:
-                h = self.memories[i, :, :self.memory_size // 2].detach().cpu()
-                r = self.rewards[i, :, 0].detach().cpu()
-                d = (self.mask == 0).cpu()
-                s = numpy.array([inf.get("success", False) for inf in info], dtype=bool)
-                self.ca_buffer.step(h, r, d, s)
-
         # Add advantage and return to experiences
 
         with torch.no_grad():
@@ -280,16 +268,6 @@ class BaseAlgo(ABC):
                     noise=noise)
             else:
                 _, next_value = self.acmodel(preprocessed_obs, noise=noise)
-
-        # Inject credit assigner contributions into rewards before GAE so that
-        # advantages and returns both reflect the credit signal.  contributions
-        # are (P, T) -> permuted to (T, P, 1) and added to self.rewards (T, P, L).
-        if self.ca_model is not None and self.recurrent:
-            with torch.no_grad():
-                h = self.memories[:, :, :self.memory_size // 2]  # (T, P, D)
-                h_perm = h.permute(1, 0, 2).contiguous()          # (P, T, D)
-                contribs = self.ca_model(h_perm.detach())          # (P, T)
-                self.rewards += contribs.t().unsqueeze(-1) * self.ca_alpha
 
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask

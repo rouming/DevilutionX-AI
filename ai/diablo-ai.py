@@ -783,37 +783,25 @@ def make_diablo_parser():
         "--eval-no-stuck-timeout", action="store_true",
         help="Disable stuck-timeout during eval episodes")
 
-    # Credit assigner
-    ca_phase_grp = train_ai_parser.add_mutually_exclusive_group()
-    ca_phase_grp.add_argument(
-        "--warmup-credit-assigner", action="store_true",
-        help="Phase 1: freeze CNN/LSTM/policy/critic, train only the credit assigner transformer. "
-             "The assigner learns to decompose episode returns into per-step contributions.")
-    ca_phase_grp.add_argument(
-        "--enable-credit-assigner", action="store_true",
-        help="Phase 2: train all parameters and inject credit assigner contributions "
-             "into per-step rewards before GAE, sharpening credit assignment.")
+    # Q-critic
+    qc_phase_grp = train_ai_parser.add_mutually_exclusive_group()
+    qc_phase_grp.add_argument(
+        "--warmup-q-critic", action="store_true",
+        help="Phase 1: freeze CNN/LSTM/policy/critic, train only the Q-critic. "
+             "Q values converge against the frozen policy before any policy update.")
+    qc_phase_grp.add_argument(
+        "--enable-q-critic", action="store_true",
+        help="Phase 2: use Q-critic advantage in place of GAE for actor updates. "
+             "Q-critic continues training each rollout.")
     train_ai_parser.add_argument(
-        "--credit-assigner-window", type=int, default=400, metavar="W",
-        help="Number of LSTM states in the credit assigner window (default: 400)")
+        "--q-critic-lr", type=float, default=1e-4, metavar="LR",
+        help="Learning rate for the Q-critic optimizer (default: 1e-4)")
     train_ai_parser.add_argument(
-        "--credit-assigner-alpha", type=float, default=0.1, metavar="A",
-        help="Weight of credit assigner contributions added to shaped rewards (default: 0.1)")
+        "--q-critic-epochs", type=int, default=4, metavar="E",
+        help="Gradient steps per rollout for Q-critic training (default: 4)")
     train_ai_parser.add_argument(
-        "--credit-assigner-entropy", type=float, default=0.01, metavar="L",
-        help="Entropy sparsity coefficient in credit assigner loss (default: 0.01)")
-    train_ai_parser.add_argument(
-        "--credit-assigner-lr", type=float, default=1e-4, metavar="LR",
-        help="Learning rate for the credit assigner optimizer (default: 1e-4)")
-    train_ai_parser.add_argument(
-        "--credit-assigner-batch", type=int, default=8, metavar="B",
-        help="Episodes per credit assigner update: half success, half failure (default: 8)")
-    train_ai_parser.add_argument(
-        "--credit-assigner-pos", type=float, default=0.1, metavar="P",
-        help="Directional positional penalty: push failure blame early, success credit late (default: 0.1)")
-    train_ai_parser.add_argument(
-        "--credit-assigner-epochs", type=int, default=4, metavar="E",
-        help="Gradient steps per batch: reuse same episodes E times before discarding (default: 4)")
+        "--q-critic-quantiles", type=int, default=32, metavar="N",
+        help="Number of quantiles per action in the Q-critic histogram (default: 32)")
 
     #
     # demos-il
@@ -2491,37 +2479,37 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         txt_logger.info("Model loaded\n")
         txt_logger.info("{}\n".format(acmodel_raw))
 
-    # Credit assigner (optional, main rank only in non-DDP; all ranks if DDP)
-    credit_assigner = None
-    ca_optimizer = None
-    ca_buffer = None
-    use_ca = getattr(args, 'warmup_credit_assigner', False) or \
-             getattr(args, 'enable_credit_assigner', False)
-    if use_ca and acmodel_raw.recurrent:
-        from rl.credit_assigner import CreditAssigner, CreditAssignerBuffer
-        ca_window = args.credit_assigner_window
-        credit_assigner = CreditAssigner(
+    # Q-critic (optional, main rank only in non-DDP; all ranks if DDP)
+    q_critic = None
+    qc_optimizer = None
+    use_qc = getattr(args, 'warmup_q_critic', False) or \
+             getattr(args, 'enable_q_critic', False)
+    if use_qc and acmodel_raw.recurrent:
+        from rl.q_critic import QCritic
+        if hasattr(acmodel_raw, 'worker_actor'):
+            num_actions_per_level = [
+                acmodel_raw.worker_actor[-1].out_features,
+                acmodel_raw.manager_actor[-1].out_features,
+            ]
+        else:
+            num_actions_per_level = [acmodel_raw.actor[-1].out_features]
+        q_critic = QCritic(
             hidden_dim=acmodel_raw.semi_memory_size,
-            window=ca_window,
-            max_group=args.credit_assigner_batch)
-        credit_assigner.to(local_device)
-        if "credit_assigner_state" in status:
-            credit_assigner.load_state_dict(status["credit_assigner_state"])
+            num_actions_per_level=num_actions_per_level,
+            num_quantiles=args.q_critic_quantiles)
+        q_critic.to(local_device)
+        if "q_critic_state" in status:
+            q_critic.load_state_dict(status["q_critic_state"])
             if is_main:
-                txt_logger.info("Credit assigner state loaded\n")
-        ca_optimizer = torch.optim.Adam(
-            credit_assigner.parameters(), lr=args.credit_assigner_lr)
-        if "credit_assigner_optimizer_state" in status:
-            ca_optimizer.load_state_dict(status["credit_assigner_optimizer_state"])
-        ca_buffer = CreditAssignerBuffer(
-            num_envs=args.env_runners,
-            window=ca_window,
-            batch_size=args.credit_assigner_batch)
+                txt_logger.info("Q-critic state loaded\n")
+        qc_optimizer = torch.optim.Adam(
+            q_critic.parameters(), lr=args.q_critic_lr)
+        if "q_critic_optimizer_state" in status:
+            qc_optimizer.load_state_dict(status["q_critic_optimizer_state"])
         if is_main:
-            txt_logger.info(f"Credit assigner: window={ca_window} "
-                            f"alpha={args.credit_assigner_alpha} "
-                            f"entropy={args.credit_assigner_entropy} "
-                            f"lr={args.credit_assigner_lr}\n")
+            txt_logger.info(f"Q-critic: actions={num_actions_per_level} "
+                            f"quantiles={args.q_critic_quantiles} "
+                            f"lr={args.q_critic_lr}\n")
 
     # Load algo
     seeds = range(args.seed_base + runner_offset,
@@ -2554,28 +2542,22 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                          current_ebs=args.batch_size * world_size,
                          logger=txt_logger if is_main else None)
 
-    # Wire credit assigner into algo and optionally freeze main model.
-    if credit_assigner is not None:
-        # Buffer accumulation runs on every rank; training and inference only on rank 0.
-        # In DDP phase 2, rank 0 broadcasts the trained assigner weights to all ranks
-        # after each update so every rank injects consistent contributions.
-        algo.ca_buffer = ca_buffer
-        algo.ca_alpha  = args.credit_assigner_alpha
-        if getattr(args, 'enable_credit_assigner', False):
-            # Phase 2: inject contributions into rewards before GAE.
+    # Wire Q-critic into algo and optionally freeze main model.
+    if q_critic is not None:
+        if getattr(args, 'enable_q_critic', False):
+            # Phase 2: Q-based advantage replaces GAE in PPO actor update.
             # Set on all ranks; weights kept in sync via broadcast after each update.
-            algo.ca_model = credit_assigner
-        if getattr(args, 'warmup_credit_assigner', False):
-            # Phase 1: freeze all main model params; only transformer trains.
+            algo.q_critic = q_critic
+        if getattr(args, 'warmup_q_critic', False):
+            # Phase 1: freeze all main model params; only Q-critic trains.
             for param in acmodel_raw.parameters():
                 param.requires_grad_(False)
             if is_main:
-                txt_logger.info("Warmup phase: main model frozen, training credit assigner only\n")
-        # DDP: broadcast initial CA weights from rank 0 so all ranks start identical.
-        # Without this, a fresh start (no checkpoint) gives each rank its own random init.
+                txt_logger.info("Warmup phase: main model frozen, training Q-critic only\n")
+        # DDP: broadcast initial Q-critic weights from rank 0 so all ranks start identical.
         if ddp:
             import torch.distributed as dist
-            for param in credit_assigner.parameters():
+            for param in q_critic.parameters():
                 dist.broadcast(param.data, src=0)
 
     # Create exponential decay LR scheduler, so every N steps LR
@@ -2631,140 +2613,83 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         if ddp:
             acmodel_raw.train()
 
-        # Train credit assigner on completed episodes (both phases).
-        # Drain the buffer with up to N updates per rollout to avoid dropping episodes.
-        logs_ca = {}
-        if credit_assigner is not None and is_main:
-            from rl.credit_assigner import credit_assigner_loss
-            ca_steps = 0
-            while True:
-                batch = ca_buffer.pop_batch(args.credit_assigner_batch)
-                if batch is None:
-                    break
-                states, returns, lengths, is_success = batch
-                states     = states.to(local_device)
-                returns    = returns.to(local_device)
-                # Cross-episode: concatenate all N episodes into one sequence so the
-                # transformer can attend across episode boundaries and learn which
-                # h-state patterns differentiate success from failure.
-                B, W, D = states.shape
-                ep_ids     = torch.arange(B, device=local_device).repeat_interleave(W)
-                states_cat = states.reshape(1, B * W, D)
-                # Multiple gradient steps on the same batch so CA can converge
-                # within a rollout rather than oscillating across rollouts.
-                for _ in range(args.credit_assigner_epochs):
-                    ca_optimizer.zero_grad()
-                    contribs_cat = credit_assigner(states_cat, episode_ids=ep_ids)
-                    contribs     = contribs_cat.reshape(B, W)
-                    ca_loss, logs_ca = credit_assigner_loss(
-                        contribs, returns, lengths,
-                        args.credit_assigner_entropy, args.credit_assigner_pos,
-                        is_success=is_success)
-                    ca_loss.backward()
-                    ca_optimizer.step()
-                ca_steps += 1
+        # Train Q-critic on rollout data (both phases).
+        # On-policy distributional TD: use consecutive (t, t+1) step pairs.
+        # Drop the last frame per proc (no next action stored for it).
+        logs_qc = {}
+        if q_critic is not None and is_main:
+            from rl.q_critic import qr_loss
+            T   = algo.num_frames_per_proc
+            P   = algo.num_procs
+            hs  = algo.semi_memory_size
 
-                # H-state entropy diagnostics - observe whether failure episodes
-                # show more "committed" (lower entropy) h-states than success ones,
-                # and where the gap peaks temporally.  No gradient, no loss change.
-                with torch.no_grad():
-                    half   = B // 2
-                    abs_h  = states.abs()                                        # (B, W, D)
-                    h_w    = abs_h / abs_h.sum(-1, keepdim=True).clamp(min=1e-8)
-                    h_ent  = -(h_w * (h_w + 1e-8).log()).sum(-1)                # (B, W)
-                    fr     = (W - lengths.to(local_device)).unsqueeze(1)         # (B, 1)
-                    mp     = (torch.arange(W, device=local_device).unsqueeze(0)
-                              >= fr).float()                                     # (B, W)
-                    hent_s = ((h_ent[:half] * mp[:half]).sum()
-                              / mp[:half].sum().clamp(min=1e-8))
-                    hent_f = ((h_ent[half:] * mp[half:]).sum()
-                              / mp[half:].sum().clamp(min=1e-8))
-                    gap    = ((h_ent[:half].mean(0) - h_ent[half:].mean(0)).abs()
-                              * mp.mean(0))                                      # (W,)
-                    peak   = gap.argmax().float() / max(W - 1, 1)               # [0, 1]
-                    logs_ca["ca_hent_s"]    = hent_s.item()
-                    logs_ca["ca_hent_f"]    = hent_f.item()
-                    logs_ca["ca_hent_peak"] = peak.item()
-                    # Per-group h-state distribution stats (real positions only)
-                    ms = mp[:half].bool()                                        # (half, W)
-                    mf = mp[half:].bool()                                        # (half, W)
-                    hs = states[:half][ms]                                       # (N_s, D)
-                    hf = states[half:][mf]                                       # (N_f, D)
-                    logs_ca["ca_h_s_mean"] = hs.mean().item()
-                    logs_ca["ca_h_s_std"]  = hs.std().item()
-                    logs_ca["ca_h_s_min"]  = hs.min().item()
-                    logs_ca["ca_h_s_max"]  = hs.max().item()
-                    logs_ca["ca_h_f_mean"] = hf.mean().item()
-                    logs_ca["ca_h_f_std"]  = hf.std().item()
-                    logs_ca["ca_h_f_min"]  = hf.min().item()
-                    logs_ca["ca_h_f_max"]  = hf.max().item()
-                    # 6 evenly-spaced anchor points across each episode's real window.
-                    ep_idx = torch.arange(B, device=local_device)
-                    fr_f   = fr.squeeze(1).float()                               # (B,)
-                    t6     = torch.linspace(0, 1, 6, device=local_device)        # (6,)
-                    # pts6[b, i] = position of i-th anchor in episode b
-                    pts6   = (fr_f.unsqueeze(1) +
-                              t6.unsqueeze(0) * (W - 1 - fr_f).unsqueeze(1)
-                              ).long().clamp(0, W - 1)                           # (B, 6)
-                    gap6   = []
-                    for pi in range(6):
-                        h_p  = states[ep_idx, pts6[:, pi]]                      # (B, D)
-                        he_p = h_ent[ep_idx, pts6[:, pi]]                       # (B,)
-                        logs_ca[f"ca_hf{pi}_s_std"] = h_p[:half].std().item()
-                        logs_ca[f"ca_hf{pi}_f_std"] = h_p[half:].std().item()
-                        logs_ca[f"ca_hf{pi}_s_ent"] = he_p[:half].mean().item()
-                        logs_ca[f"ca_hf{pi}_f_ent"] = he_p[half:].mean().item()
-                        gap6.append(he_p[half:].mean().item() - he_p[:half].mean().item())
-                    logs_ca["ca_hf_gap6"] = gap6                                 # list, not logged to CSV
-                    # Onset: argmax of gap derivative over the full W-point trajectory.
-                    # Uses the per-episode-masked means already computed for hent_s/f above.
-                    he_s_t = (h_ent[:half] * mp[:half]).sum(0) / \
-                             mp[:half].sum(0).clamp(min=1e-8)                   # (W,)
-                    he_f_t = (h_ent[half:] * mp[half:]).sum(0) / \
-                             mp[half:].sum(0).clamp(min=1e-8)                   # (W,)
-                    gap_t  = (he_f_t - he_s_t) * mp.mean(0)                    # (W,)
-                    valid   = mp.mean(0) > 0.5
-                    gap_max = gap_t[valid].max().clamp(min=1e-6) if valid.any() else torch.tensor(1e-6)
-                    first_sig = (gap_t > 0.25 * gap_max) & valid
-                    onset   = (first_sig.float().argmax().float() / max(W - 1, 1)
-                               if first_sig.any() else torch.tensor(1.0, device=local_device))
-                    logs_ca["ca_hent_onset"] = onset.item()
-                    # Linear-regression onset: fit a line to the right-side signal
-                    # (frames above noise_floor + 2*std), extrapolate back to where
-                    # it crosses the noise floor estimated from the left 30%.
-                    onset_lr = 1.0
-                    valid_idx = torch.where(valid)[0]
-                    if valid_idx.numel() >= 6:
-                        left_n     = max(1, valid_idx.numel() * 3 // 10)
-                        left_gap   = gap_t[valid_idx[:left_n]]
-                        nf_mean    = left_gap.mean()
-                        nf_std     = left_gap.std().clamp(min=1e-6)
-                        threshold  = nf_mean + 2.0 * nf_std
-                        sig_mask   = (gap_t > threshold) & valid
-                        if sig_mask.sum() >= 2:
-                            x = torch.where(sig_mask)[0].float() / max(W - 1, 1)
-                            y = gap_t[sig_mask]
-                            xm, ym = x.mean(), y.mean()
-                            slope  = ((x - xm) * (y - ym)).sum() / \
-                                     ((x - xm)**2).sum().clamp(min=1e-8)
-                            intercept = ym - slope * xm
-                            if slope > 1e-4:
-                                onset_lr = float(((threshold - intercept) / slope)
-                                                 .clamp(0.0, 1.0).item())
-                    logs_ca["ca_hent_onset_lr"] = onset_lr
-        # DDP: broadcast freshly trained weights from rank 0 to all ranks.
-        # dist.broadcast is a collective - must be called on every rank, so it
-        # lives outside the is_main guard.  Unconditional broadcast is harmless
-        # (idempotent when ca_steps=0) and avoids cross-rank ca_steps sync.
-        if ddp and credit_assigner is not None and getattr(args, 'enable_credit_assigner', False):
+            # Apply episode-boundary mask: memories[] stores pre-mask h (same
+            # convention as exps.memory), so mask it here as ppo.py does with
+            # h = memory * sb.mask to get the actual LSTM input state.
+            masks_cur = algo.masks[:-1].unsqueeze(-1)                       # (T-1, P, 1)
+            masks_nxt = algo.masks[1:].unsqueeze(-1)                        # (T-1, P, 1)
+            h_cur  = (algo.memories[:-1, :, :hs] * masks_cur).detach()     # (T-1, P, hs)
+            h_nxt  = (algo.memories[1:,  :, :hs] * masks_nxt).detach()     # (T-1, P, hs)
+            nd     = algo.masks[1:].detach()                                # (T-1, P) 1=not-done
+            acts   = algo.actions[:-1].detach()             # (T-1, P, L)
+            acts_n = algo.actions[1:].detach()              # (T-1, P, L)
+            rews   = algo.rewards[:-1].detach()             # (T-1, P, L)
+
+            B = (T - 1) * P
+            h_cur  = h_cur.reshape(B, hs).to(local_device)
+            h_nxt  = h_nxt.reshape(B, hs).to(local_device)
+            nd     = nd.reshape(B, 1).to(local_device)
+
+            total_loss = 0.0
+            # Diagnostic accumulators: only need last epoch (most up-to-date Q).
+            diag_q_mean = diag_td_err = diag_q_spread = 0.0
+            idx = torch.arange(B, device=local_device)
+            for epoch in range(args.q_critic_epochs):
+                level_loss = 0
+                last_epoch = (epoch == args.q_critic_epochs - 1)
+                for l in range(algo.num_hierarchy_levels):
+                    a_cur = acts[:, :, l].reshape(B).to(local_device)
+                    a_nxt = acts_n[:, :, l].reshape(B).to(local_device)
+                    r     = rews[:, :, l].reshape(B, 1).to(local_device)
+
+                    q_pred = q_critic.forward_level(h_cur, l)       # (B, A_l, N)
+                    with torch.no_grad():
+                        q_nxt = q_critic.forward_level(h_nxt, l)    # (B, A_l, N)
+
+                    q_taken     = q_pred[idx, a_cur]                # (B, N)
+                    q_nxt_taken = q_nxt[idx, a_nxt]                 # (B, N)
+
+                    target = (r + args.discount * q_nxt_taken * nd).detach()
+                    level_loss = level_loss + qr_loss(q_taken, target, q_critic.tau)
+
+                    if last_epoch:
+                        with torch.no_grad():
+                            diag_q_mean   += q_taken.mean().item()
+                            diag_td_err   += (target - q_taken).abs().mean().item()
+                            diag_q_spread += q_pred.std(-1).mean().item()
+
+                qc_optimizer.zero_grad()
+                level_loss.backward()
+                qc_optimizer.step()
+                total_loss += level_loss.item()
+
+            L = algo.num_hierarchy_levels
+            logs_qc["qc_loss"]   = total_loss / (args.q_critic_epochs * L)
+            logs_qc["qc_q_mean"] = diag_q_mean   / L
+            logs_qc["qc_td_err"] = diag_td_err   / L
+            logs_qc["qc_q_std"]  = diag_q_spread / L
+
+        # DDP: broadcast freshly trained Q-critic weights from rank 0 to all ranks.
+        # dist.broadcast is a collective - must be called on every rank.
+        if ddp and q_critic is not None:
             import torch.distributed as dist
-            for param in credit_assigner.parameters():
+            for param in q_critic.parameters():
                 dist.broadcast(param.data, src=0)
 
         # Phase 1: skip PPO update (main model frozen).
-        warmup = getattr(args, 'warmup_credit_assigner', False)
+        warmup = getattr(args, 'warmup_q_critic', False)
         logs2 = algo.update_parameters(exps, apply_update=not args.dry_run and not warmup)
-        logs = {**logs1, **logs2, **logs_ca}
+        logs = {**logs1, **logs2, **logs_qc}
 
         if _ae is not None:
             _h_cur = float(np.mean(logs2["entropy"]))
@@ -2842,21 +2767,11 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             header += ["grad_norm"]
             data += [logs["grad_norm"]]
 
-            # Credit assigner metrics (present only when a batch was trained this update)
-            for ca_key in ("ca_loss", "ca_mse", "ca_entropy", "ca_pos",
-                           "ca_sum_err", "ca_blame_pos",
-                           "ca_hent_s", "ca_hent_f", "ca_hent_peak",
-                           "ca_h_s_mean", "ca_h_s_std", "ca_h_s_min", "ca_h_s_max",
-                           "ca_h_f_mean", "ca_h_f_std", "ca_h_f_min", "ca_h_f_max",
-                           *(f"ca_hf{i}_{g}_{m}"
-                             for i in range(6)
-                             for g in ("s", "f")
-                             for m in ("std", "ent")),
-                           "ca_hent_onset",
-                           "ca_hent_onset_lr"):
-                if ca_key in logs:
-                    header += [ca_key]
-                    data   += [logs[ca_key]]
+            # Q-critic metrics (present only when Q-critic is active)
+            for qc_key in ("qc_loss", "qc_q_mean", "qc_td_err", "qc_q_std"):
+                if qc_key in logs:
+                    header += [qc_key]
+                    data   += [logs[qc_key]]
 
             grad = logs["grad_norm"]
             grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
@@ -2893,28 +2808,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" | {mv}"
                     f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
 
-            if credit_assigner is not None and "ca_loss" in logs:
+            if q_critic is not None and "qc_loss" in logs:
                 txt_logger.info(
-                    f"  CA | loss {logs['ca_loss']:.4f}"
-                    f" | mse {logs['ca_mse']:.4f}"
-                    f" | ent {logs['ca_entropy']:.4f}"
-                    f" | pos {logs['ca_pos']:.4f}"
-                    f" | sum_err {logs['ca_sum_err']:.4f}"
-                    f" | blame_pos {logs['ca_blame_pos']:.3f}"
-                    f" | hent s:{logs.get('ca_hent_s', 0):.2f}"
-                    f" f:{logs.get('ca_hent_f', 0):.2f}"
-                    f" peak:{logs.get('ca_hent_peak', 0):.2f}"
-                    f" | hstd s:{logs.get('ca_h_s_std', 0):.3f}"
-                    f" f:{logs.get('ca_h_f_std', 0):.3f}"
-                    f" | buf s:{ca_buffer.success_count} f:{ca_buffer.failure_count}")
-                if "ca_hf_gap6" in logs:
-                    g6  = logs["ca_hf_gap6"]
-                    pct = ["0%", "20%", "40%", "60%", "80%", "100%"]
-                    gap_str = " ".join(f"{p}:{v:+.2f}" for p, v in zip(pct, g6))
-                    txt_logger.info(
-                        f"  CA gap | {gap_str}"
-                        f" | onset:{logs.get('ca_hent_onset', 0):.2f}"
-                        f" lr:{logs.get('ca_hent_onset_lr', 0):.2f}")
+                    f"  QC:lμσe {logs['qc_loss']:.4f}"
+                    f" {logs['qc_q_mean']:.2f}"
+                    f" {logs['qc_q_std']:.4f}"
+                    f" {logs['qc_td_err']:.4f}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
@@ -2972,9 +2871,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                       "effective_batch_size": args.batch_size * world_size,
                       "optimizer_state": algo.optimizer.state_dict()}
             acmodel_raw.save_to_status(status)
-            if credit_assigner is not None:
-                status["credit_assigner_state"] = credit_assigner.state_dict()
-                status["credit_assigner_optimizer_state"] = ca_optimizer.state_dict()
+            if q_critic is not None:
+                status["q_critic_state"] = q_critic.state_dict()
+                status["q_critic_optimizer_state"] = qc_optimizer.state_dict()
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
