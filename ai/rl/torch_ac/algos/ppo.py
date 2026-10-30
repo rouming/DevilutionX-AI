@@ -114,9 +114,25 @@ class PPOAlgo(BaseAlgo):
                                                dim=1)
                     ratio = torch.exp(new_log_prob - sb.log_prob)
 
+                    # Advantage: Q-based when q_critic is set, else GAE.
+                    if self.q_critic is not None and self.recurrent:
+                        h_state = h[:, :self.semi_memory_size].detach()
+                        with torch.no_grad():
+                            q_out = self.q_critic(h_state)   # list of (S, A_l, N)
+                        adv_list = []
+                        for j in range(self.num_hierarchy_levels):
+                            q_mean = q_out[j].mean(-1)                              # (S, A_l)
+                            pi_prob = dist[j].probs.detach()                        # (S, A_l)
+                            v_s = (pi_prob * q_mean).sum(-1)                        # (S,)
+                            a_q = q_mean[range(num_seqs), sb.action[:, j]]         # (S,)
+                            adv_list.append(a_q - v_s)
+                        advantage = torch.stack(adv_list, dim=1)                    # (S, L)
+                    else:
+                        advantage = sb.advantage
+
                     # Surrogate objectives (S, L)
-                    surr1 = ratio * sb.advantage
-                    surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * sb.advantage
+                    surr1 = ratio * advantage
+                    surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantage
 
                     # Mean over batch dimension, so (S, L) -> (L,)
                     policy_loss = -torch.min(surr1, surr2).mean(axis=0)
