@@ -76,6 +76,40 @@ class QCritic(nn.Module):
         return x.view(h.shape[0], self.num_actions[level], self.num_quantiles)
 
 
+class DuelingQHead(nn.Module):
+    """Dueling distributional Q-head (QR-DQN).
+
+    Flat head trains only Q(s, a_taken) each visit.
+    V stream updates ALL actions from one death: unvisited actions default
+    to V(s), not zero - avoids cold-start pessimism in sparse rewards.
+    Zero-init on output layers for a stable cold start (Q starts at 0).
+    """
+    def __init__(self, hidden_dim, num_actions, num_quantiles=32):
+        super().__init__()
+        self.num_actions   = num_actions
+        self.num_quantiles = num_quantiles
+
+        self.shared = nn.Sequential(nn.Linear(hidden_dim, 256), nn.ReLU())
+        self.v_head = nn.Linear(256, num_quantiles)
+        self.a_head = nn.Linear(256, num_actions * num_quantiles)
+
+        nn.init.zeros_(self.v_head.weight)
+        nn.init.zeros_(self.v_head.bias)
+        nn.init.zeros_(self.a_head.weight)
+        nn.init.zeros_(self.a_head.bias)
+
+        N = num_quantiles
+        tau = torch.arange(1, 2 * N, 2, dtype=torch.float32) / (2 * N)
+        self.register_buffer("tau", tau)  # (N,)
+
+    def forward(self, h):
+        """h : (B, hidden_dim) -> (B, num_actions, N)"""
+        x = self.shared(h)
+        v = self.v_head(x).unsqueeze(1)                                       # (B, 1, N)
+        a = self.a_head(x).view(h.shape[0], self.num_actions, self.num_quantiles)  # (B, A, N)
+        return v + (a - a.mean(dim=1, keepdim=True))
+
+
 def qr_loss(pred, target, tau):
     """
     QR-DQN quantile regression loss.

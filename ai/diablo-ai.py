@@ -812,6 +812,31 @@ def make_diablo_parser():
         help="Distributional GAE target: backward-accumulate rewards to rollout/episode "
              "end, bootstrap with Q-distribution at rollout boundary. "
              "Preserves sigma while converging as fast as GAE target.")
+    train_ai_parser.add_argument(
+        "--q-learning", action="store_true",
+        help="Pure Q-learning: QR-DQN + Dueling + Double Q + Watkins Q(lambda). "
+             "Replaces PPO actor-critic entirely. Fresh start experiment.")
+    train_ai_parser.add_argument(
+        "--q-epochs", type=int, default=3, metavar="E",
+        help="Gradient steps per rollout for Q-learning (default: 3)")
+    train_ai_parser.add_argument(
+        "--q-ucb-beta-max", type=float, default=2.0, metavar="B",
+        help="UCB exploration beta max over runner spectrum (default: 2.0)")
+    train_ai_parser.add_argument(
+        "--q-eps-base", type=float, default=0.02, metavar="E",
+        help="Base epsilon for Q-learning action selection (default: 0.02)")
+    train_ai_parser.add_argument(
+        "--q-warmup-frames", type=int, default=500_000, metavar="F",
+        help="Frames over which warmup epsilon decays from 0.5 to eps-base (default: 500000)")
+    train_ai_parser.add_argument(
+        "--q-target-tau", type=float, default=0.05, metavar="T",
+        help="EMA tau for target network Polyak update (default: 0.05)")
+    train_ai_parser.add_argument(
+        "--q-watkins-lambda", type=float, default=0.95, metavar="L",
+        help="Lambda for Watkins Q(lambda) trace (default: 0.95)")
+    train_ai_parser.add_argument(
+        "--q-num-quantiles", type=int, default=32, metavar="N",
+        help="Number of quantiles for QR-DQN (default: 32)")
 
     #
     # demos-il
@@ -2465,9 +2490,15 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
 
     # Load model
     if num_hierarchy_levels == 1:
-        acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
-                              embedding_dim=args.embedding_dim,
-                              use_memory=True, use_text=False)
+        if getattr(args, 'q_learning', False):
+            from rl.q_model import FlatQModel
+            acmodel = FlatQModel(obs_space, envs[0].action_space, args.cnn_arch,
+                                 embedding_dim=args.embedding_dim,
+                                 num_quantiles=getattr(args, 'q_num_quantiles', 32))
+        else:
+            acmodel = FlatACModel(obs_space, envs[0].action_space, args.cnn_arch,
+                                  embedding_dim=args.embedding_dim,
+                                  use_memory=True, use_text=False)
     else:
         acmodel = HRLACModel(obs_space, envs[0].action_space, args.cnn_arch,
                              embedding_dim=args.embedding_dim,
@@ -2492,8 +2523,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     # Q-critic (optional, main rank only in non-DDP; all ranks if DDP)
     q_critic = None
     qc_optimizer = None
-    use_qc = getattr(args, 'warmup_q_critic', False) or \
-             getattr(args, 'enable_q_critic', False)
+    use_qc = (getattr(args, 'warmup_q_critic', False) or
+              getattr(args, 'enable_q_critic', False)) and \
+             not getattr(args, 'q_learning', False)
     if use_qc and acmodel_raw.recurrent:
         from rl.q_critic import QCritic
         if hasattr(acmodel_raw, 'worker_actor'):
@@ -2526,7 +2558,22 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                   args.seed_base + runner_offset + len(penv_pool.envs))
     reshape_reward = None
 
-    if args.algo == "a2c":
+    if getattr(args, 'q_learning', False):
+        from rl.torch_ac.algos.qdqn import QDQNAlgo
+        algo = QDQNAlgo(penv_pool, args.seed, seeds, acmodel,
+                        local_device, args.frames_per_env_runner,
+                        args.discount, args.lr,
+                        args.max_grad_norm, args.recurrence,
+                        args.optim_eps,
+                        epochs=getattr(args, 'q_epochs', 3),
+                        batch_size=args.batch_size,
+                        ucb_beta_max=getattr(args, 'q_ucb_beta_max', 2.0),
+                        eps_base=getattr(args, 'q_eps_base', 0.02),
+                        eps_warmup_frames=getattr(args, 'q_warmup_frames', 500_000),
+                        target_ema_tau=getattr(args, 'q_target_tau', 0.05),
+                        watkins_lambda=getattr(args, 'q_watkins_lambda', 0.95),
+                        preprocess_obss=preprocess_obss, reshape_reward=reshape_reward)
+    elif args.algo == "a2c":
         algo = torch_ac.A2CAlgo(penv_pool, args.seed, seeds, acmodel,
                                 local_device, args.frames_per_env_runner,
                                 args.discount, args.lr,
@@ -2551,6 +2598,16 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
     load_optimizer_state(algo.optimizer, status, local_device,
                          current_ebs=args.batch_size * world_size,
                          logger=txt_logger if is_main else None)
+
+    # Restore QDQNAlgo target net state when resuming a Q-learning run.
+    if hasattr(algo, 'target_model') and "target_model_state" in status:
+        algo.target_model.load_state_dict(status["target_model_state"])
+        if is_main:
+            txt_logger.info("Q-learning target net state loaded\n")
+    if hasattr(algo, 'target_memory') and "target_memory" in status:
+        algo.target_memory = status["target_memory"].to(local_device)
+    if hasattr(algo, 'total_frames'):
+        algo.total_frames = status.get("num_frames", 0)
 
     # Wire Q-critic into algo and optionally freeze main model.
     if q_critic is not None:
@@ -2627,7 +2684,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
         # On-policy distributional TD: use consecutive (t, t+1) step pairs.
         # Drop the last frame per proc (no next action stored for it).
         logs_qc = {}
-        if q_critic is not None and is_main:
+        if q_critic is not None and is_main and not getattr(args, 'q_learning', False):
             from rl.q_critic import qr_loss
             T   = algo.num_frames_per_proc
             P   = algo.num_procs
@@ -2818,6 +2875,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     header += [qc_key]
                     data   += [logs[qc_key]]
 
+            # Q-learning metrics (present only when --q-learning is active)
+            for q_key in ("q_loss", "q_mean", "q_std", "q_td_err"):
+                if q_key in logs:
+                    header += [q_key]
+                    data   += [logs[q_key]]
+
             grad = logs["grad_norm"]
             grad_bar = _scale_bar(grad, GRAD_NORM_GOOD_HI)
             bar_metrics = {"kl", "clip_frac"}
@@ -2859,6 +2922,12 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" {logs['qc_q_mean']:.2f}"
                     f" {logs['qc_q_std']:.4f}"
                     f" {logs['qc_td_err']:.4f}")
+            if "q_loss" in logs:
+                txt_logger.info(
+                    f"  Q: loss={logs['q_loss']:.4f}"
+                    f" Qmu={logs['q_mean']:.2f}"
+                    f" Qsig={logs['q_std']:.4f}"
+                    f" TD={logs['q_td_err']:.4f}")
 
             for i, rp in enumerate(return_per_episode):
                 header += [f"return{i}_" + key for key in rp.keys()]
@@ -2882,7 +2951,14 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             acmodel_raw.eval()
             eval_start_time = time.time()
             train_window_elapsed = eval_start_time - train_window_start_time
-            vlogs = batch_evaluate(acmodel_raw, preprocess_obss, eval_penv_pool,
+            # Q-learning model returns (q_all, memory), not (dist, value, memory).
+            # Wrap it to convert argmax(Q_mean) -> Categorical for batch_evaluate.
+            if getattr(args, 'q_learning', False):
+                from rl.q_model import QModelEvalWrapper
+                eval_model = QModelEvalWrapper(acmodel_raw)
+            else:
+                eval_model = acmodel_raw
+            vlogs = batch_evaluate(eval_model, preprocess_obss, eval_penv_pool,
                                    argmax=True, global_seed=args.seed,
                                    seed_base=args.eval_seed,
                                    episodes=args.eval_episodes)
@@ -2919,6 +2995,9 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
             if q_critic is not None:
                 status["q_critic_state"] = q_critic.state_dict()
                 status["q_critic_optimizer_state"] = qc_optimizer.state_dict()
+            if hasattr(algo, 'target_model'):
+                status["target_model_state"] = algo.target_model.state_dict()
+                status["target_memory"] = algo.target_memory.cpu()
             if hasattr(preprocess_obss, "vocab"):
                 status["vocab"] = preprocess_obss.vocab.vocab
             utils.save_status(status, model_dir)
