@@ -95,7 +95,7 @@ class DuelingQHead(nn.Module):
 
         nn.init.zeros_(self.v_head.weight)
         nn.init.zeros_(self.v_head.bias)
-        nn.init.zeros_(self.a_head.weight)
+        nn.init.normal_(self.a_head.weight, std=0.01)
         nn.init.zeros_(self.a_head.bias)
 
         N = num_quantiles
