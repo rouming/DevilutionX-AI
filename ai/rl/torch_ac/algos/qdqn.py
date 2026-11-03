@@ -1,4 +1,4 @@
-"""QDQNAlgo: pure Q-learning with QR-DQN + Dueling + Double Q + Watkins Q(lambda).
+"""QDQNAlgo: pure Q-learning with QR-DQN + Dueling + Double Q + Peng's Q(lambda).
 
 Replaces the full PPO actor-critic loop with a single distributional Q network.
 No actor head, value head, GAE, entropy term, or PPO clip - just Q-learning.
@@ -7,14 +7,13 @@ Key design decisions:
   - QR-DQN: distributional quantile regression avoids fixed atom range
   - Dueling: V stream updates all actions from one death (cold-start robustness)
   - Double Q: live net selects a*, target net evaluates - prevents maximization bias
-  - Watkins Q(lambda): multi-step returns without replay, trace cut at exploratory steps
+  - Peng's Q(lambda): multi-step returns, no trace cut - full lambda horizon preserved
+  - Per-runner eps spectrum: greedy runners (eps=0) for clean traces, UCB runners explore
   - Target net EMA: stabilizes bootstrap targets across rollouts
-  - UCB exploration with per-runner beta spectrum: permanent diversity without decay
-  - eps_warmup=0.5 not 1.0: eps=1.0 cuts Watkins trace ~87.5% of steps with 8 actions
 
 References:
   QR-DQN (Dabney et al. 2017), Dueling DQN (Wang et al. 2016),
-  Double DQN (van Hasselt et al. 2015), Watkins Q(lambda) (1989),
+  Double DQN (van Hasselt et al. 2015), Peng & Williams Q(lambda) (1996),
   ApeX (Horgan et al. 2018), R2D2 (Kapturowski et al. 2019)
 """
 
@@ -35,7 +34,7 @@ class QDQNAlgo(BaseAlgo):
                  epochs=3, batch_size=256,
                  ucb_beta_max=2.0, eps_base=0.02,
                  eps_warmup_start=0.5, eps_warmup_frames=500_000,
-                 target_ema_tau=0.05, watkins_lambda=0.95,
+                 target_ema_tau=0.20, watkins_lambda=0.95,
                  preprocess_obss=None, reshape_reward=None):
 
         num_frames_per_proc = num_frames_per_proc or 128
@@ -73,12 +72,18 @@ class QDQNAlgo(BaseAlgo):
                                          device=self.device)
 
         # ApeX-style per-runner UCB beta spectrum, fixed throughout training.
-        # First half: greedy (beta=0) for clean Watkins traces.
-        # Second half: UCB with increasing beta for permanent off-policy coverage.
+        # First half: greedy (beta=0, eps=0) for clean Peng Q(lambda) traces.
+        # Second half: UCB with increasing beta + epsilon for exploration coverage.
         P = self.num_procs
         self.ucb_beta = torch.cat([
             torch.zeros(P // 2),
             torch.linspace(0.5, ucb_beta_max, P - P // 2),
+        ], dim=0).to(self.device)  # (P,)
+        # eps_mask: only UCB runners receive random-action epsilon; greedy runners
+        # always follow argmax(Q_mean) to keep their Peng traces uncontaminated.
+        self.eps_mask = torch.cat([
+            torch.zeros(P // 2, dtype=torch.bool),
+            torch.ones(P - P // 2, dtype=torch.bool),
         ], dim=0).to(self.device)  # (P,)
 
         self.eps_base = eps_base
@@ -193,7 +198,7 @@ class QDQNAlgo(BaseAlgo):
             0.0, 1.0 - self.total_frames / max(self.eps_warmup_frames, 1))
         eps = max(self.eps_base, eps_warm)
 
-        rand_mask    = torch.rand(self.num_procs, device=self.device) < eps
+        rand_mask    = (torch.rand(self.num_procs, device=self.device) < eps) & self.eps_mask
         rand_actions = torch.randint(0, self.n_actions, (self.num_procs,),
                                      device=self.device)
         return torch.where(rand_mask, rand_actions, actions)
@@ -232,12 +237,11 @@ class QDQNAlgo(BaseAlgo):
         with torch.no_grad():
             target_q_all_next, new_target_memory = self._compute_target_q()
 
-        # Step 3: Watkins Q(lambda) targets - fixed for all epochs.
-        # Not TD(0): without replay, TD(0) propagates terminal reward only 1 step
-        # per rollout. Watkins propagates through full rollout for greedy steps,
-        # cuts to 1-step at exploratory steps (Watkins off-policy correction).
+        # Step 3: Peng's Q(lambda) targets - fixed for all epochs.
+        # No trace cut: lambda applies uniformly at every step, preserving the
+        # full multi-step horizon across greedy, UCB, and epsilon-random actions.
         with torch.no_grad():
-            watkins = self._compute_watkins_targets(
+            watkins = self._compute_peng_targets(
                 live_q_all, live_q_final, target_q_all_next)
             # (T, P, N) -> P-major -> (P*T, N) to match exps P-major layout
             targets_flat = watkins.transpose(0, 1).reshape(P * T, N)
@@ -382,20 +386,19 @@ class QDQNAlgo(BaseAlgo):
         return target_q_all_next, target_mem
 
     @torch.no_grad()
-    def _compute_watkins_targets(self, live_q_all, live_q_final,
-                                  target_q_all_next):
-        """Watkins Q(lambda) with Double Q bootstrap.
+    def _compute_peng_targets(self, live_q_all, live_q_final,
+                               target_q_all_next):
+        """Peng's Q(lambda) with Double Q bootstrap.
 
         Double Q: live net selects a* (decouples selection from evaluation).
-        Watkins trace cut: exploratory steps break the eligibility trace,
-        falling back to 1-step Q-learning (no lambda blending).
+        No trace cut: lambda applies uniformly at every step regardless of
+        whether the action taken was greedy, UCB, or epsilon-random.
 
-        Backward recursion (standard Watkins 1989):
+        Backward recursion (Peng & Williams 1996):
           running_q = bootstrap at s_T
           for t = T-1 downto 0:
-            eff_lambda = lambda * is_greedy_next[t]
-            future_q   = (1 - eff_lambda) * next_q_greedy[t] + eff_lambda * running_q
-            running_q  = r[t] + gamma * not_done[t] * future_q
+            future_q  = (1 - lambda) * next_q_greedy[t] + lambda * running_q
+            running_q = r[t] + gamma * not_done[t] * future_q
             targets[t] = running_q
         """
         T, P, A, N = live_q_all.shape
@@ -404,7 +407,6 @@ class QDQNAlgo(BaseAlgo):
         not_done = torch.cat([self.masks[1:], self.mask.unsqueeze(0)], dim=0)  # (T, P)
 
         rewards = self.rewards[:, :, 0]  # (T, P) - L=1
-        actions = self.actions[:, :, 0]  # (T, P) - L=1
 
         # Double Q: live net selects greedy action at s_{t+1}
         live_q_next = torch.cat([live_q_all[1:], live_q_final.unsqueeze(0)], dim=0)
@@ -414,21 +416,14 @@ class QDQNAlgo(BaseAlgo):
         idx = next_a_star.view(T, P, 1, 1).expand(T, P, 1, N)
         next_q_greedy = target_q_all_next.gather(2, idx).squeeze(2)  # (T, P, N)
 
-        # Watkins trace cut: was the action taken at t+1 the greedy action?
-        # Boundary padding: force is_greedy_next[T-1]=True so the last step
-        # always bootstraps cleanly (no spurious trace cut at rollout end).
-        next_actions   = torch.cat([actions[1:], next_a_star[-1:]], dim=0)  # (T, P)
-        is_greedy_next = (next_actions == next_a_star).float().unsqueeze(-1) # (T, P, 1)
-
-        # Bootstrap from boundary state s_T
-        running_q = next_q_greedy[-1]  # (P, N)
+        lam = self.watkins_lambda
+        running_q = next_q_greedy[-1]  # (P, N) - bootstrap from boundary s_T
         targets   = torch.empty(T, P, N, device=self.device)
 
         for t in reversed(range(T)):
-            nd       = not_done[t].unsqueeze(-1)   # (P, 1)
-            r_t      = rewards[t].unsqueeze(-1)    # (P, 1)
-            eff_lam  = self.watkins_lambda * is_greedy_next[t]
-            future_q = (1.0 - eff_lam) * next_q_greedy[t] + eff_lam * running_q
+            nd        = not_done[t].unsqueeze(-1)   # (P, 1)
+            r_t       = rewards[t].unsqueeze(-1)    # (P, 1)
+            future_q  = (1.0 - lam) * next_q_greedy[t] + lam * running_q
             running_q = r_t + self.discount * nd * future_q
             targets[t] = running_q
 

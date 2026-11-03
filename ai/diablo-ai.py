@@ -829,7 +829,7 @@ def make_diablo_parser():
         "--q-warmup-frames", type=int, default=500_000, metavar="F",
         help="Frames over which warmup epsilon decays from 0.5 to eps-base (default: 500000)")
     train_ai_parser.add_argument(
-        "--q-target-tau", type=float, default=0.05, metavar="T",
+        "--q-target-tau", type=float, default=0.20, metavar="T",
         help="EMA tau for target network Polyak update (default: 0.05)")
     train_ai_parser.add_argument(
         "--q-watkins-lambda", type=float, default=0.95, metavar="L",
@@ -2570,7 +2570,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                         ucb_beta_max=getattr(args, 'q_ucb_beta_max', 2.0),
                         eps_base=getattr(args, 'q_eps_base', 0.02),
                         eps_warmup_frames=getattr(args, 'q_warmup_frames', 500_000),
-                        target_ema_tau=getattr(args, 'q_target_tau', 0.05),
+                        target_ema_tau=getattr(args, 'q_target_tau', 0.20),
                         watkins_lambda=getattr(args, 'q_watkins_lambda', 0.95),
                         preprocess_obss=preprocess_obss, reshape_reward=reshape_reward)
     elif args.algo == "a2c":
