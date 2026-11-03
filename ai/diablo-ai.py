@@ -2911,10 +2911,19 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                 else:
                     lp = "e:0% v:0% p:0%"
                 prefix = f"  L{i} | " if L > 1 else "  "
-                txt_logger.info(
-                    f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
-                    f" | {mv}"
-                    f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
+                if getattr(args, 'q_learning', False):
+                    q_part = (f" | Q:lμσe {logs['q_loss']:.4f}"
+                              f" {logs['q_mean']:.2f}"
+                              f" {logs['q_std']:.4f}"
+                              f" {logs['q_td_err']:.4f}") if "q_loss" in logs else ""
+                    txt_logger.info(
+                        f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                        f"{q_part}")
+                else:
+                    txt_logger.info(
+                        f"{prefix}rR:μσmM {rr[0]:.2f} {rr[1]:.2f} {rr[2]:.2f} {rr[3]:.2f}"
+                        f" | {mv}"
+                        f" | L {lp} | KL {kl:.3f}{kl_bar} | cF {cf:.3f}{cf_bar}")
 
             if q_critic is not None and "qc_loss" in logs:
                 txt_logger.info(
@@ -2922,7 +2931,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                     f" {logs['qc_q_mean']:.2f}"
                     f" {logs['qc_q_std']:.4f}"
                     f" {logs['qc_td_err']:.4f}")
-            if "q_loss" in logs:
+            if "q_loss" in logs and not getattr(args, 'q_learning', False):
                 txt_logger.info(
                     f"  Q: loss={logs['q_loss']:.4f}"
                     f" Qmu={logs['q_mean']:.2f}"
