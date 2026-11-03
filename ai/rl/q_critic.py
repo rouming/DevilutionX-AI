@@ -107,7 +107,11 @@ class DuelingQHead(nn.Module):
         x = self.shared(h)
         v = self.v_head(x).unsqueeze(1)                                       # (B, 1, N)
         a = self.a_head(x).view(h.shape[0], self.num_actions, self.num_quantiles)  # (B, A, N)
-        return v + (a - a.mean(dim=1, keepdim=True))
+        a_centered = a - a.mean(dim=1, keepdim=True)
+        # Damp a_head gradient so V absorbs state-value shifts (0 -> negative)
+        # rather than thrashing action rankings during initial Q descent.
+        a_scaled = 0.2 * a_centered + 0.8 * a_centered.detach()
+        return v + a_scaled
 
 
 def qr_loss(pred, target, tau):

@@ -823,7 +823,7 @@ def make_diablo_parser():
         "--q-temp-min", type=float, default=0.05, metavar="T",
         help="Boltzmann temperature for sharpest runner (default: 0.05)")
     train_ai_parser.add_argument(
-        "--q-temp-max", type=float, default=1.0, metavar="T",
+        "--q-temp-max", type=float, default=0.5, metavar="T",
         help="Boltzmann temperature for most exploratory runner (default: 1.0)")
     train_ai_parser.add_argument(
         "--q-target-tau", type=float, default=0.20, metavar="T",
@@ -2565,7 +2565,7 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                         epochs=getattr(args, 'q_epochs', 3),
                         batch_size=args.batch_size,
                         temp_min=getattr(args, 'q_temp_min', 0.05),
-                        temp_max=getattr(args, 'q_temp_max', 1.0),
+                        temp_max=getattr(args, 'q_temp_max', 0.5),
                         target_ema_tau=getattr(args, 'q_target_tau', 0.20),
                         watkins_lambda=getattr(args, 'q_watkins_lambda', 0.95),
                         preprocess_obss=preprocess_obss, reshape_reward=reshape_reward)

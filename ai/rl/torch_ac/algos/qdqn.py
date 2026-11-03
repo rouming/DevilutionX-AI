@@ -7,7 +7,8 @@ Key design decisions:
   - QR-DQN: distributional quantile regression avoids fixed atom range
   - Dueling: V stream updates all actions from one death (cold-start robustness)
   - Double Q: live net selects a*, target net evaluates - prevents maximization bias
-  - Peng's Q(lambda): multi-step returns, no trace cut - full lambda horizon preserved
+  - Soft Watkins Q(lambda): multi-step returns with tolerance-based trace cut -
+    keeps full horizon for near-greedy actions, cuts on bad exploratory draws
   - Boltzmann temperature spectrum: per-runner logspace temps replace argmax+UCB+eps;
     avoids wall self-loops (argmax re-selects same action when state doesn't change),
     scale-invariant normalization keeps sampling meaningful across all Q magnitudes
@@ -73,14 +74,15 @@ class QDQNAlgo(BaseAlgo):
         self.target_memory = torch.zeros(self.num_procs, self.memory_size,
                                          device=self.device)
 
-        # Boltzmann temperature spectrum: logspace from temp_min (sharp/greedy)
-        # to temp_max (broad/exploratory) across all runners.
+        # Boltzmann temperature spectrum: first half at temp_min (sharp/greedy),
+        # second half logspace from temp_min to temp_max (exploratory).
         # Replaces argmax+UCB+eps: avoids wall self-loops where argmax re-selects
         # the same action when state doesn't change (hitting a wall).
         P = self.num_procs
-        self.runner_temps = torch.logspace(
-            math.log10(temp_min), math.log10(temp_max), P,
-        ).to(self.device)  # (P,) logspace [temp_min, temp_max]
+        self.runner_temps = torch.cat([
+            torch.full((P // 2,), temp_min),
+            torch.logspace(math.log10(temp_min), math.log10(temp_max), P - P // 2),
+        ], dim=0).to(self.device)  # (P,) first half sharp, second half exploratory
 
         self.total_frames = 0
 
@@ -185,7 +187,7 @@ class QDQNAlgo(BaseAlgo):
         per-runner keeps the effective temperature constant across training.
         """
         q_mean = q_all.mean(dim=-1)                              # (P, A)
-        q_std_across = q_mean.std(dim=-1, keepdim=True).clamp(min=0.1)
+        q_std_across = q_mean.std(dim=-1, keepdim=True).clamp(min=1e-3)
         norm_q  = (q_mean - q_mean.mean(dim=-1, keepdim=True)) / q_std_across
         logits  = norm_q / self.runner_temps.unsqueeze(1)        # (P, A)
         return torch.distributions.Categorical(logits=logits).sample()  # (P,)
@@ -397,11 +399,23 @@ class QDQNAlgo(BaseAlgo):
 
         # Double Q: live net selects greedy action at s_{t+1}
         live_q_next = torch.cat([live_q_all[1:], live_q_final.unsqueeze(0)], dim=0)
-        next_a_star = live_q_next.mean(dim=-1).argmax(dim=-1)  # (T, P)
+        live_q_next_mean = live_q_next.mean(dim=-1)          # (T, P, A)
+        next_a_star = live_q_next_mean.argmax(dim=-1)        # (T, P)
 
         # Double Q: target net evaluates Q at a* (prevents maximization bias)
         idx = next_a_star.view(T, P, 1, 1).expand(T, P, 1, N)
         next_q_greedy = target_q_all_next.gather(2, idx).squeeze(2)  # (T, P, N)
+
+        # Soft Watkins cut: keep full lambda trace when the action taken at s_{t+1}
+        # was within 0.5 sigma of a*; cut the trace (lambda=0) for bad exploratory draws.
+        # Preserves long horizon for near-greedy and wall-slide actions (Boltzmann
+        # near-ties) while correcting for high-temperature random actions.
+        actions_tp   = self.actions[:, :, 0]  # (T, P)
+        next_actions = torch.cat([actions_tp[1:], next_a_star[-1:]], dim=0)  # (T, P)
+        q_star_m  = live_q_next_mean.gather(2, next_a_star.unsqueeze(-1)).squeeze(-1)   # (T,P)
+        q_taken_m = live_q_next_mean.gather(2, next_actions.unsqueeze(-1)).squeeze(-1)  # (T,P)
+        q_std_s   = live_q_next_mean.std(dim=-1).clamp(min=1e-3)                        # (T,P)
+        is_near_greedy = (q_taken_m >= q_star_m - 0.5 * q_std_s).float().unsqueeze(-1) # (T,P,1)
 
         lam = self.watkins_lambda
         running_q = next_q_greedy[-1]  # (P, N) - bootstrap from boundary s_T
@@ -410,7 +424,8 @@ class QDQNAlgo(BaseAlgo):
         for t in reversed(range(T)):
             nd        = not_done[t].unsqueeze(-1)   # (P, 1)
             r_t       = rewards[t].unsqueeze(-1)    # (P, 1)
-            future_q  = (1.0 - lam) * next_q_greedy[t] + lam * running_q
+            g         = is_near_greedy[t]           # (P, 1): 1=keep trace, 0=cut
+            future_q  = (1.0 - lam * g) * next_q_greedy[t] + lam * g * running_q
             running_q = r_t + self.discount * nd * future_q
             targets[t] = running_q
 
