@@ -820,14 +820,11 @@ def make_diablo_parser():
         "--q-epochs", type=int, default=3, metavar="E",
         help="Gradient steps per rollout for Q-learning (default: 3)")
     train_ai_parser.add_argument(
-        "--q-ucb-beta-max", type=float, default=2.0, metavar="B",
-        help="UCB exploration beta max over runner spectrum (default: 2.0)")
+        "--q-temp-min", type=float, default=0.05, metavar="T",
+        help="Boltzmann temperature for sharpest runner (default: 0.05)")
     train_ai_parser.add_argument(
-        "--q-eps-base", type=float, default=0.02, metavar="E",
-        help="Base epsilon for Q-learning action selection (default: 0.02)")
-    train_ai_parser.add_argument(
-        "--q-warmup-frames", type=int, default=500_000, metavar="F",
-        help="Frames over which warmup epsilon decays from 0.5 to eps-base (default: 500000)")
+        "--q-temp-max", type=float, default=1.0, metavar="T",
+        help="Boltzmann temperature for most exploratory runner (default: 1.0)")
     train_ai_parser.add_argument(
         "--q-target-tau", type=float, default=0.20, metavar="T",
         help="EMA tau for target network Polyak update (default: 0.05)")
@@ -2567,9 +2564,8 @@ def _train_ai_loop(args, gameconfig, model_dir, run_id, status,
                         args.optim_eps,
                         epochs=getattr(args, 'q_epochs', 3),
                         batch_size=args.batch_size,
-                        ucb_beta_max=getattr(args, 'q_ucb_beta_max', 2.0),
-                        eps_base=getattr(args, 'q_eps_base', 0.02),
-                        eps_warmup_frames=getattr(args, 'q_warmup_frames', 500_000),
+                        temp_min=getattr(args, 'q_temp_min', 0.05),
+                        temp_max=getattr(args, 'q_temp_max', 1.0),
                         target_ema_tau=getattr(args, 'q_target_tau', 0.20),
                         watkins_lambda=getattr(args, 'q_watkins_lambda', 0.95),
                         preprocess_obss=preprocess_obss, reshape_reward=reshape_reward)

@@ -8,7 +8,9 @@ Key design decisions:
   - Dueling: V stream updates all actions from one death (cold-start robustness)
   - Double Q: live net selects a*, target net evaluates - prevents maximization bias
   - Peng's Q(lambda): multi-step returns, no trace cut - full lambda horizon preserved
-  - Per-runner eps spectrum: greedy runners (eps=0) for clean traces, UCB runners explore
+  - Boltzmann temperature spectrum: per-runner logspace temps replace argmax+UCB+eps;
+    avoids wall self-loops (argmax re-selects same action when state doesn't change),
+    scale-invariant normalization keeps sampling meaningful across all Q magnitudes
   - Target net EMA: stabilizes bootstrap targets across rollouts
 
 References:
@@ -18,6 +20,7 @@ References:
 """
 
 import copy
+import math
 import numpy
 import torch
 
@@ -32,8 +35,7 @@ class QDQNAlgo(BaseAlgo):
                  num_frames_per_proc=None, discount=0.99, lr=0.0001,
                  max_grad_norm=0.5, recurrence=4, adam_eps=1e-8,
                  epochs=3, batch_size=256,
-                 ucb_beta_max=2.0, eps_base=0.02,
-                 eps_warmup_start=0.5, eps_warmup_frames=500_000,
+                 temp_min=0.05, temp_max=1.0,
                  target_ema_tau=0.20, watkins_lambda=0.95,
                  preprocess_obss=None, reshape_reward=None):
 
@@ -71,25 +73,16 @@ class QDQNAlgo(BaseAlgo):
         self.target_memory = torch.zeros(self.num_procs, self.memory_size,
                                          device=self.device)
 
-        # ApeX-style per-runner UCB beta spectrum, fixed throughout training.
-        # First half: greedy (beta=0, eps=0) for clean Peng Q(lambda) traces.
-        # Second half: UCB with increasing beta + epsilon for exploration coverage.
+        # Boltzmann temperature spectrum: logspace from temp_min (sharp/greedy)
+        # to temp_max (broad/exploratory) across all runners.
+        # Replaces argmax+UCB+eps: avoids wall self-loops where argmax re-selects
+        # the same action when state doesn't change (hitting a wall).
         P = self.num_procs
-        self.ucb_beta = torch.cat([
-            torch.zeros(P // 2),
-            torch.linspace(0.5, ucb_beta_max, P - P // 2),
-        ], dim=0).to(self.device)  # (P,)
-        # eps_mask: only UCB runners receive random-action epsilon; greedy runners
-        # always follow argmax(Q_mean) to keep their Peng traces uncontaminated.
-        self.eps_mask = torch.cat([
-            torch.zeros(P // 2, dtype=torch.bool),
-            torch.ones(P - P // 2, dtype=torch.bool),
-        ], dim=0).to(self.device)  # (P,)
+        self.runner_temps = torch.logspace(
+            math.log10(temp_min), math.log10(temp_max), P,
+        ).to(self.device)  # (P,) logspace [temp_min, temp_max]
 
-        self.eps_base = eps_base
-        self.eps_warmup_start  = eps_warmup_start
-        self.eps_warmup_frames = eps_warmup_frames
-        self.total_frames      = 0
+        self.total_frames = 0
 
         self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
         self.batch_num = 0
@@ -107,7 +100,7 @@ class QDQNAlgo(BaseAlgo):
                     preprocessed_obs, self.memory * self.mask.unsqueeze(1))
             # q_all: (P, A, N)
 
-            actions = self._ucb_actions(q_all)  # (P,)
+            actions = self._select_actions(q_all)  # (P,)
 
             obs, _, terminated, truncated, info = self.env.step(actions.unsqueeze(1).cpu().numpy())
             done   = numpy.logical_or(terminated, truncated)
@@ -179,29 +172,23 @@ class QDQNAlgo(BaseAlgo):
 
         return exps, logs
 
-    def _ucb_actions(self, q_all):
-        """UCB action selection with warmup epsilon.
+    def _select_actions(self, q_all):
+        """Boltzmann action selection with per-runner temperature spectrum.
 
-        UCB not Thompson Sampling: QR-DQN quantiles model aleatoric uncertainty.
-        The distribution stays wide at convergence, so Thompson permanently gambles
-        on rare jackpot tails. UCB uses Q_std as a bonus without lottery bias.
+        Replaces argmax+UCB+eps. argmax causes wall self-loops: when the agent
+        hits a wall the state doesn't change, so argmax re-selects the same
+        action indefinitely. Boltzmann sampling avoids this by always assigning
+        non-zero probability to all actions (like PPO's Categorical).
+
+        Scale-invariant normalization: Q values grow during training, so raw
+        logits would collapse toward greedy at all temperatures. Normalizing
+        per-runner keeps the effective temperature constant across training.
         """
-        q_mean = q_all.mean(dim=-1)                               # (P, A)
-        q_std  = q_all.std(dim=-1)                                # (P, A)
-        ucb    = q_mean + self.ucb_beta.unsqueeze(1) * q_std     # (P, A)
-        actions = ucb.argmax(dim=-1)                               # (P,)
-
-        # Warmup: max(eps_base, eps_warmup * linear_decay).
-        # Start at 0.5 not 1.0: eps=1.0 cuts Watkins trace ~87.5% of steps
-        # with 8 actions, making Watkins effectively TD(0) for entire warmup.
-        eps_warm = self.eps_warmup_start * max(
-            0.0, 1.0 - self.total_frames / max(self.eps_warmup_frames, 1))
-        eps = max(self.eps_base, eps_warm)
-
-        rand_mask    = (torch.rand(self.num_procs, device=self.device) < eps) & self.eps_mask
-        rand_actions = torch.randint(0, self.n_actions, (self.num_procs,),
-                                     device=self.device)
-        return torch.where(rand_mask, rand_actions, actions)
+        q_mean = q_all.mean(dim=-1)                              # (P, A)
+        q_std_across = q_mean.std(dim=-1, keepdim=True).clamp(min=0.1)
+        norm_q  = (q_mean - q_mean.mean(dim=-1, keepdim=True)) / q_std_across
+        logits  = norm_q / self.runner_temps.unsqueeze(1)        # (P, A)
+        return torch.distributions.Categorical(logits=logits).sample()  # (P,)
 
     # ------------------------------------------------------------------
     # Parameter update
