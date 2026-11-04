@@ -1,5 +1,9 @@
 include(functions/FetchContent_ExcludeFromAll_backport)
 
+# CMake 4.x requires cmake_minimum_required VERSION >= 3.5; set policy minimum
+# for fetched lua which declares VERSION 3.1.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 set(LUA_ENABLE_TESTING OFF)
 set(LUA_BUILD_COMPILER OFF)
 if(DEVILUTIONX_STATIC_LUA)

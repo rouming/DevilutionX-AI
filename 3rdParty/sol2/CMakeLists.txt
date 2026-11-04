@@ -11,3 +11,5 @@ FetchContent_MakeAvailable_ExcludeFromAll(sol2)
 
 target_include_directories(sol2 SYSTEM BEFORE INTERFACE ${CMAKE_CURRENT_LIST_DIR}/sol_config)
 target_compile_definitions(sol2 INTERFACE SOL_NO_EXCEPTIONS=1)
+# GCC 15 added -Wtemplate-body which fires on a bug in sol2's optional<T&>::emplace.
+target_compile_options(sol2 INTERFACE $<$<CXX_COMPILER_ID:GNU>:-Wno-template-body>)
