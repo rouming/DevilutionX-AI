@@ -1550,7 +1550,7 @@ class DiabloEnv_ClearAllLevels_v0(DiabloEnvV2Mixin, DiabloEnv_ClearTheLevel_v0):
 
     def evaluate_step(self, d, env, action):
         R                = self.REWARDS
-        action           = int(action)
+        action           = int(np.asarray(action).flat[0])
         monsters_cnt     = diablo_state.count_active_monsters(d)
         monsters_hit     = diablo_state.count_monsters_hit(d, self.prev_mon_hp)
         obj_cnt          = diablo_state.count_active_objects(d)

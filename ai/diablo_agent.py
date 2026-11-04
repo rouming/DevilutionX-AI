@@ -845,6 +845,8 @@ def run_agent_loop(seeds, env, make_supervisor, load_state=None):
                 while w is not None:
                     if hasattr(w, '_has_reset'):
                         w._has_reset = True
+                    if hasattr(w, '_previous_data') and w._previous_data is None:
+                        w._previous_data = (supervisor._obs, {})
                     w = getattr(w, 'env', None)
             # To be aligned with restored engine ticks we need to do dummy saves
             supervisor._dummy_saves = True

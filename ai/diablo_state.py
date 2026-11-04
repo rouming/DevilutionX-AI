@@ -1855,7 +1855,7 @@ def map_devilutionx_state_by_pid(pid, mshared_path):
                 continue
             # Open the file and map it to memory
             return map_devilutionx_state(mshared_path, offset)
-        except FileNotFoundError:
+        except (FileNotFoundError, AssertionError, ValueError):
             time.sleep(0.1)
     else:
         raise FileNotFoundError(mshared_path)
