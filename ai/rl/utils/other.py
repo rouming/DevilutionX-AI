@@ -9,6 +9,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def set_device(dev):
     global device
     device = torch.device(dev) if isinstance(dev, str) else dev
+    import rl.utils
+    rl.utils.device = device
 
 
 def seed(seed):
